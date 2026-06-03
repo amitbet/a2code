@@ -1,6 +1,9 @@
 import type { DesktopDiscoveredSshHost } from "@t3tools/contracts";
 
-import { Effect, FileSystem, Path, PlatformError } from "effect";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 
 import { SshHostDiscoveryError } from "./errors.ts";
 
@@ -12,12 +15,17 @@ function stripInlineComment(line: string): string {
 }
 
 function splitDirectiveArgs(value: string): ReadonlyArray<string> {
-  return value
+  const args: Array<string> = [];
+  for (const rawEntry of value
     .replace(/=(?!=)/gu, " ")
     .trim()
-    .split(/\s+/u)
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
+    .split(/\s+/u)) {
+    const entry = rawEntry.trim();
+    if (entry.length > 0) {
+      args.push(entry);
+    }
+  }
+  return args;
 }
 
 function expandHomePath(input: string, homeDir: string): string {

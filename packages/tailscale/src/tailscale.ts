@@ -1,4 +1,8 @@
-import { Data, Effect, Option, Schema, Stream } from "effect";
+import * as Data from "effect/Data";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import { HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
@@ -108,11 +112,14 @@ export const parseTailscaleStatus = (
     Effect.mapError((cause) => new TailscaleStatusParseError({ cause })),
     Effect.map((parsed) => {
       const rawIps = parsed.Self?.TailscaleIPs;
-      const tailnetIpv4Addresses = Array.isArray(rawIps)
-        ? rawIps
-            .filter((address): address is string => typeof address === "string")
-            .filter(isTailscaleIpv4Address)
-        : [];
+      const tailnetIpv4Addresses: Array<string> = [];
+      if (Array.isArray(rawIps)) {
+        for (const address of rawIps) {
+          if (typeof address === "string" && isTailscaleIpv4Address(address)) {
+            tailnetIpv4Addresses.push(address);
+          }
+        }
+      }
 
       return {
         magicDnsName: normalizeMagicDnsName(parsed),
