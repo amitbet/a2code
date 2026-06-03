@@ -492,6 +492,7 @@ export function deriveWorkLogEntries(
     if (activity.kind === "tool.started") continue;
     if (activity.kind === "task.started") continue;
     if (activity.kind === "context-window.updated") continue;
+    if (activity.kind === "account.rate-limits.updated") continue;
     if (activity.summary === "Checkpoint captured") continue;
     if (isPlanBoundaryToolActivity(activity)) continue;
     entries.push(toDerivedWorkLogEntry(activity));
@@ -522,8 +523,9 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   const changedFiles = extractChangedFiles(payload);
   const title = extractToolTitle(payload);
   const isTaskActivity = activity.kind === "task.progress" || activity.kind === "task.completed";
-  const isRuntimeNotice =
-    activity.kind === "runtime.warning" || activity.kind === "runtime.error";
+  const isRuntimeNotice = activity.kind === "runtime.warning" || activity.kind === "runtime.error";
+  const isUserInput =
+    activity.kind === "user-input.requested" || activity.kind === "user-input.resolved";
   const taskSummary =
     isTaskActivity && typeof payload?.summary === "string" && payload.summary.length > 0
       ? payload.summary
@@ -545,7 +547,9 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       : null
     : isRuntimeNotice
       ? asTrimmedString(payload?.message)
-      : extractToolDetail(payload, title ?? activity.summary);
+      : isUserInput
+        ? extractUserInputDetail(activity.kind, payload)
+        : extractToolDetail(payload, title ?? activity.summary);
   const toolCallId = isTaskActivity ? null : extractToolCallId(payload);
   const entry: DerivedWorkLogEntry = {
     id: activity.id,
@@ -1008,6 +1012,51 @@ function isCommandToolDetail(payload: Record<string, unknown> | null, heading: s
     title === "terminal" ||
     title === "ran command"
   );
+}
+
+function formatUserInputAnswerValue(value: unknown): string | null {
+  if (typeof value === "string") {
+    return asTrimmedString(value);
+  }
+  if (Array.isArray(value)) {
+    const items = value
+      .map((entry) => (typeof entry === "string" ? entry.trim() : null))
+      .filter((entry): entry is string => !!entry && entry.length > 0);
+    return items.length > 0 ? items.join(", ") : null;
+  }
+  return null;
+}
+
+function extractUserInputDetail(
+  kind: OrchestrationThreadActivity["kind"],
+  payload: Record<string, unknown> | null,
+): string | null {
+  if (!payload) {
+    return null;
+  }
+  if (kind === "user-input.requested") {
+    const questions = Array.isArray(payload.questions) ? payload.questions : [];
+    const texts = questions
+      .map((question) => {
+        if (!question || typeof question !== "object") {
+          return null;
+        }
+        return asTrimmedString((question as Record<string, unknown>).question);
+      })
+      .filter((text): text is string => !!text && text.length > 0);
+    return texts.length > 0 ? texts.join(" · ") : null;
+  }
+  const answers =
+    payload.answers && typeof payload.answers === "object"
+      ? (payload.answers as Record<string, unknown>)
+      : null;
+  if (!answers) {
+    return null;
+  }
+  const parts = Object.values(answers)
+    .map(formatUserInputAnswerValue)
+    .filter((text): text is string => !!text && text.length > 0);
+  return parts.length > 0 ? parts.join(" · ") : null;
 }
 
 function extractToolDetail(

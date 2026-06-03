@@ -26,12 +26,15 @@ import {
   type CanonicalRequestType,
   type ClaudeSettings,
   EventId,
+  type ModelSelection,
   type ProviderApprovalDecision,
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderItemId,
   type ProviderRuntimeEvent,
   type ProviderRuntimeTurnStatus,
+  type ProviderRateLimitSnapshot,
+  type ProviderRateLimitWindow,
   type ProviderSendTurnInput,
   type ProviderSession,
   type ThreadTokenUsageSnapshot,
@@ -178,6 +181,7 @@ interface ClaudeSessionContext {
   turnState: ClaudeTurnState | undefined;
   lastKnownContextWindow: number | undefined;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
+  lastKnownRateLimits: ProviderRateLimitSnapshot | undefined;
   lastAssistantUuid: string | undefined;
   lastThreadStartedId: string | undefined;
   stopped: boolean;
@@ -335,6 +339,112 @@ function maxClaudeContextWindowFromModelUsage(
   }
 
   return maxContextWindow;
+}
+
+function claudeContextWindowFromSelection(
+  modelSelection: ModelSelection | undefined,
+): number | undefined {
+  if (!modelSelection?.model) {
+    return undefined;
+  }
+  const caps = getClaudeModelCapabilities(modelSelection.model);
+  const contextWindowDescriptor = caps.optionDescriptors?.find(
+    (descriptor) => descriptor.type === "select" && descriptor.id === "contextWindow",
+  );
+  if (!contextWindowDescriptor || contextWindowDescriptor.type !== "select") {
+    return undefined;
+  }
+
+  const rawValue =
+    getModelSelectionStringOptionValue(modelSelection, "contextWindow") ??
+    contextWindowDescriptor.currentValue ??
+    contextWindowDescriptor.options.find((option) => option.isDefault)?.id;
+  switch (rawValue) {
+    case "1m":
+      return 1_000_000;
+    case "200k":
+      return 200_000;
+    default:
+      return undefined;
+  }
+}
+
+function claudeRateLimitWindowMeta(
+  rateLimitType: string,
+): { kind: ProviderRateLimitWindow["kind"]; label: string } | undefined {
+  switch (rateLimitType) {
+    case "five_hour":
+      return { kind: "five_hour", label: "5-hour" };
+    case "seven_day":
+      return { kind: "weekly", label: "Weekly" };
+    case "seven_day_opus":
+      return { kind: "weekly", label: "Weekly · Opus" };
+    case "seven_day_sonnet":
+      return { kind: "weekly", label: "Weekly · Sonnet" };
+    case "overage":
+      return { kind: "overage", label: "Overage" };
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Merge a single Claude `rate_limit_event` into the running snapshot. Each
+ * event carries one window type (e.g. five_hour / seven_day* / overage) and a
+ * 0-1 `utilization` — but Claude only includes `utilization` once you approach
+ * the limit (status "allowed_warning"/"rejected"); below that there is no
+ * percentage to show. We upsert each reported window (keyed by label) so the
+ * snapshot accumulates whatever Claude exposes.
+ */
+function mergeClaudeRateLimitEvent(
+  previous: ProviderRateLimitSnapshot | undefined,
+  info: unknown,
+): ProviderRateLimitSnapshot | undefined {
+  if (!info || typeof info !== "object") {
+    return previous;
+  }
+  const record = info as Record<string, unknown>;
+  const utilization =
+    typeof record.utilization === "number" && Number.isFinite(record.utilization)
+      ? record.utilization
+      : undefined;
+  const rateLimitType = typeof record.rateLimitType === "string" ? record.rateLimitType : undefined;
+  const status =
+    record.status === "allowed" ||
+    record.status === "allowed_warning" ||
+    record.status === "rejected"
+      ? record.status
+      : previous?.status;
+
+  const windows = [...(previous?.windows ?? [])];
+
+  if (utilization !== undefined && rateLimitType !== undefined) {
+    const meta = claudeRateLimitWindowMeta(rateLimitType);
+    if (meta) {
+      const window: ProviderRateLimitWindow = {
+        kind: meta.kind,
+        label: meta.label,
+        usedPercent: Math.max(0, Math.min(100, utilization * 100)),
+        ...(typeof record.resetsAt === "number" ? { resetsAt: record.resetsAt } : {}),
+      };
+      const existingIndex = windows.findIndex((entry) => entry.label === meta.label);
+      if (existingIndex >= 0) {
+        windows[existingIndex] = window;
+      } else {
+        windows.push(window);
+      }
+    }
+  }
+
+  if (windows.length === 0 && !status) {
+    return previous;
+  }
+
+  return {
+    windows,
+    ...(status ? { status } : {}),
+    ...(previous?.planType ? { planType: previous.planType } : {}),
+  };
 }
 
 function normalizeClaudeTokenUsage(
@@ -2287,6 +2397,23 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           },
         });
         return;
+      case "thinking_tokens":
+        // Live, approximate thinking-token estimate streamed during the
+        // redacted-thinking phase (estimated_tokens is a running total, not the
+        // authoritative billed output_tokens). The context meter already counts
+        // thinking via output_tokens on the result/task usage, so we consume
+        // this silently rather than warn or double-count.
+        return;
+      case "task_updated":
+        // Incremental task-state patch (status / description / timing). The
+        // task lifecycle is already surfaced via task_started / task_progress /
+        // task_notification, so consume this silently instead of warning.
+        return;
+      case "api_retry":
+        // Transient API retry telemetry (attempt / max_retries / delay). Retries
+        // auto-recover; a genuinely failed turn still surfaces via the result
+        // error path, so we consume this silently instead of warning.
+        return;
       default:
         yield* emitRuntimeWarning(
           context,
@@ -2361,13 +2488,22 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     if (message.type === "rate_limit_event") {
-      yield* offerRuntimeEvent({
-        ...base,
-        type: "account.rate-limits.updated",
-        payload: {
-          rateLimits: message,
-        },
-      });
+      const snapshot = mergeClaudeRateLimitEvent(
+        context.lastKnownRateLimits,
+        (message as { rate_limit_info?: unknown }).rate_limit_info,
+      );
+      if (snapshot) {
+        context.lastKnownRateLimits = snapshot;
+        if (snapshot.windows.length > 0) {
+          yield* offerRuntimeEvent({
+            ...base,
+            type: "account.rate-limits.updated",
+            payload: {
+              snapshot,
+            },
+          });
+        }
+      }
       return;
     }
   });
@@ -2919,6 +3055,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const extraArgs = parseCliArgs(claudeSettings.launchArgs).flags;
       const modelSelection =
         input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection : undefined;
+      const selectedContextWindow = claudeContextWindowFromSelection(modelSelection);
       const caps = getClaudeModelCapabilities(modelSelection?.model);
       const descriptors = getProviderOptionDescriptors({ caps });
       const apiModelId = modelSelection ? resolveClaudeApiModelId(modelSelection) : undefined;
@@ -3048,8 +3185,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         turns: [],
         inFlightTools,
         turnState: undefined,
-        lastKnownContextWindow: undefined,
+        lastKnownContextWindow: selectedContextWindow,
         lastKnownTokenUsage: undefined,
+        lastKnownRateLimits: undefined,
         lastAssistantUuid: resumeState?.resumeSessionAt,
         lastThreadStartedId: undefined,
         stopped: false,
@@ -3146,6 +3284,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
     if (modelSelection?.model) {
       const apiModelId = resolveClaudeApiModelId(modelSelection);
+      const selectedContextWindow = claudeContextWindowFromSelection(modelSelection);
+      if (selectedContextWindow !== undefined) {
+        context.lastKnownContextWindow = selectedContextWindow;
+      }
       if (context.currentApiModelId !== apiModelId) {
         yield* Effect.tryPromise({
           try: () => context.query.setModel(apiModelId),

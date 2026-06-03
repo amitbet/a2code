@@ -16,6 +16,8 @@ import {
   ProviderInstanceId,
   type ProviderRuntimeEvent,
   type ProviderRequestKind,
+  type ProviderRateLimitSnapshot,
+  type ProviderRateLimitWindow,
   type ThreadTokenUsageSnapshot,
   type ProviderUserInputAnswers,
   RuntimeItemId,
@@ -152,6 +154,52 @@ const FATAL_CODEX_STDERR_SNIPPETS = ["failed to connect to websocket"];
 function isFatalCodexProcessStderrMessage(message: string): boolean {
   const normalized = message.toLowerCase();
   return FATAL_CODEX_STDERR_SNIPPETS.some((snippet) => normalized.includes(snippet));
+}
+
+function clampPercent(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, value));
+}
+
+function normalizeCodexRateLimitWindow(
+  kind: ProviderRateLimitWindow["kind"],
+  label: string,
+  window:
+    | EffectCodexSchema.V2AccountRateLimitsUpdatedNotification__RateLimitWindow
+    | null
+    | undefined,
+): ProviderRateLimitWindow | undefined {
+  if (!window || typeof window.usedPercent !== "number") {
+    return undefined;
+  }
+  return {
+    kind,
+    label,
+    usedPercent: clampPercent(window.usedPercent),
+    ...(typeof window.resetsAt === "number" ? { resetsAt: window.resetsAt } : {}),
+    ...(typeof window.windowDurationMins === "number"
+      ? { windowMinutes: Math.max(0, Math.round(window.windowDurationMins)) }
+      : {}),
+  };
+}
+
+function normalizeCodexRateLimits(
+  snapshot: EffectCodexSchema.V2AccountRateLimitsUpdatedNotification["rateLimits"],
+): ProviderRateLimitSnapshot | undefined {
+  // Codex reports a primary 5-hour window and a secondary weekly window.
+  const windows = [
+    normalizeCodexRateLimitWindow("five_hour", "5-hour", snapshot.primary),
+    normalizeCodexRateLimitWindow("weekly", "Weekly", snapshot.secondary),
+  ].filter((window): window is ProviderRateLimitWindow => window !== undefined);
+  if (windows.length === 0) {
+    return undefined;
+  }
+  return {
+    windows,
+    ...(typeof snapshot.planType === "string" ? { planType: snapshot.planType } : {}),
+  };
 }
 
 function normalizeCodexTokenUsage(
@@ -1115,7 +1163,15 @@ function mapToRuntimeEvents(
   }
 
   if (event.method === "account/rateLimits/updated") {
-    if (!readPayload(EffectCodexSchema.V2AccountRateLimitsUpdatedNotification, event.payload)) {
+    const parsed = readPayload(
+      EffectCodexSchema.V2AccountRateLimitsUpdatedNotification,
+      event.payload,
+    );
+    if (!parsed) {
+      return [];
+    }
+    const snapshot = normalizeCodexRateLimits(parsed.rateLimits);
+    if (!snapshot) {
       return [];
     }
     return [
@@ -1123,7 +1179,7 @@ function mapToRuntimeEvents(
         type: "account.rate-limits.updated",
         ...runtimeEventBase(event, canonicalThreadId),
         payload: {
-          rateLimits: event.payload ?? {},
+          snapshot,
         },
       },
     ];

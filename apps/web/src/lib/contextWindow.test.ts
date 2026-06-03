@@ -61,6 +61,27 @@ describe("contextWindow", () => {
     });
   });
 
+  it("carries forward the latest known max tokens when the newest snapshot omits it", () => {
+    const snapshot = deriveLatestContextWindowSnapshot([
+      makeActivity("activity-1", "context-window.updated", {
+        usedTokens: 80_000,
+        maxTokens: 200_000,
+      }),
+      makeActivity("activity-2", "context-window.updated", {
+        usedTokens: 91_000,
+        totalProcessedTokens: 250_000,
+      }),
+    ]);
+
+    expect(snapshot).toMatchObject({
+      usedTokens: 91_000,
+      totalProcessedTokens: 250_000,
+      maxTokens: 200_000,
+      usedPercentage: 45.5,
+      remainingPercentage: 54.5,
+    });
+  });
+
   it("formats compact token counts", () => {
     expect(formatContextWindowTokens(999)).toBe("999");
     expect(formatContextWindowTokens(1400)).toBe("1.4k");

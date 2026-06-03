@@ -533,8 +533,41 @@ const AccountUpdatedPayload = Schema.Struct({
 });
 export type AccountUpdatedPayload = typeof AccountUpdatedPayload.Type;
 
+export const ProviderRateLimitWindowKind = Schema.Literals([
+  "five_hour",
+  "weekly",
+  "overage",
+  "other",
+]);
+export type ProviderRateLimitWindowKind = typeof ProviderRateLimitWindowKind.Type;
+
+/**
+ * A single rate-limit window normalized across providers. `usedPercent` is
+ * 0-100; `resetsAt` is an epoch-seconds timestamp for when the window resets.
+ * `label` is a provider-supplied human label (e.g. "5-hour", "Weekly",
+ * "Overage"). Providers report whichever windows they expose — Codex gives a
+ * primary (5h) and secondary (weekly) window; Claude reports a single window
+ * (often "overage") and only includes a utilization once you approach the
+ * limit.
+ */
+export const ProviderRateLimitWindow = Schema.Struct({
+  kind: ProviderRateLimitWindowKind,
+  label: TrimmedNonEmptyStringSchema,
+  usedPercent: Schema.Number,
+  resetsAt: Schema.optional(Schema.Number),
+  windowMinutes: Schema.optional(NonNegativeInt),
+});
+export type ProviderRateLimitWindow = typeof ProviderRateLimitWindow.Type;
+
+export const ProviderRateLimitSnapshot = Schema.Struct({
+  windows: Schema.Array(ProviderRateLimitWindow),
+  status: Schema.optional(Schema.Literals(["allowed", "allowed_warning", "rejected"])),
+  planType: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type ProviderRateLimitSnapshot = typeof ProviderRateLimitSnapshot.Type;
+
 const AccountRateLimitsUpdatedPayload = Schema.Struct({
-  rateLimits: Schema.Unknown,
+  snapshot: ProviderRateLimitSnapshot,
 });
 export type AccountRateLimitsUpdatedPayload = typeof AccountRateLimitsUpdatedPayload.Type;
 
