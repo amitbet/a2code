@@ -25,6 +25,7 @@ import {
   type LucideIcon,
   SquarePenIcon,
   TerminalIcon,
+  TriangleAlertIcon,
   Undo2Icon,
   WrenchIcon,
   ZapIcon,
@@ -930,6 +931,8 @@ function workEntryRawCommand(
 }
 
 function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
+  if (workEntry.runtimeNotice?.kind === "warning") return TriangleAlertIcon;
+  if (workEntry.runtimeNotice?.kind === "error") return CircleAlertIcon;
   if (workEntry.requestKind === "command") return TerminalIcon;
   if (workEntry.requestKind === "file-read") return EyeIcon;
   if (workEntry.requestKind === "file-change") return SquarePenIcon;
@@ -974,9 +977,21 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   workspaceRoot: string | undefined;
 }) {
   const { workEntry, workspaceRoot } = props;
-  const iconConfig = workToneIcon(workEntry.tone);
+  const baseIconConfig = workToneIcon(workEntry.tone);
+  const noticeKind = workEntry.runtimeNotice?.kind;
+  const iconConfig = noticeKind
+    ? {
+        ...baseIconConfig,
+        className:
+          noticeKind === "warning"
+            ? "text-amber-500/80 dark:text-amber-400/80"
+            : "text-rose-400/80 dark:text-rose-300/80",
+      }
+    : baseIconConfig;
   const EntryIcon = workEntryIcon(workEntry);
-  const heading = toolWorkEntryHeading(workEntry);
+  const noticeCount = workEntry.runtimeNotice?.messages.length ?? 0;
+  const baseHeading = toolWorkEntryHeading(workEntry);
+  const heading = noticeCount > 1 ? `${baseHeading} (${noticeCount})` : baseHeading;
   const rawPreview = workEntryPreview(workEntry, workspaceRoot);
   const preview =
     rawPreview &&
@@ -985,7 +1000,9 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
       ? null
       : rawPreview;
   const rawCommand = workEntryRawCommand(workEntry);
+  const noticeTooltipText = workEntry.runtimeNotice?.messages.join("\n\n") ?? null;
   const displayText = preview ? `${heading} - ${preview}` : heading;
+  const tooltipText = noticeTooltipText ?? displayText;
   const hasChangedFiles = (workEntry.changedFiles?.length ?? 0) > 0;
   const previewIsChangedFiles = hasChangedFiles && !workEntry.command && !workEntry.detail;
 
@@ -1040,8 +1057,8 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
             <Tooltip>
               <TooltipTrigger
                 className="block min-w-0 w-full text-left"
-                title={displayText}
-                aria-label={displayText}
+                title={tooltipText}
+                aria-label={tooltipText}
               >
                 <p
                   className={cn(
@@ -1058,7 +1075,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
               </TooltipTrigger>
               <TooltipPopup className="max-w-[min(720px,calc(100vw-2rem))]">
                 <p className="whitespace-pre-wrap wrap-break-word text-xs leading-5">
-                  {displayText}
+                  {tooltipText}
                 </p>
               </TooltipPopup>
             </Tooltip>

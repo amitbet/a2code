@@ -59,6 +59,10 @@ export interface WorkLogEntry {
   toolTitle?: string;
   itemType?: ToolLifecycleItemType;
   requestKind?: PendingApproval["requestKind"];
+  runtimeNotice?: {
+    kind: "warning" | "error";
+    messages: ReadonlyArray<string>;
+  };
 }
 
 interface DerivedWorkLogEntry extends WorkLogEntry {
@@ -519,6 +523,8 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   const changedFiles = extractChangedFiles(payload);
   const title = extractToolTitle(payload);
   const isTaskActivity = activity.kind === "task.progress" || activity.kind === "task.completed";
+  const isRuntimeNotice =
+    activity.kind === "runtime.warning" || activity.kind === "runtime.error";
   const taskSummary =
     isTaskActivity && typeof payload?.summary === "string" && payload.summary.length > 0
       ? payload.summary
@@ -538,7 +544,9 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       payload.detail.length > 0
       ? stripTrailingExitCode(payload.detail).output
       : null
-    : extractToolDetail(payload, title ?? activity.summary);
+    : isRuntimeNotice
+      ? asTrimmedString(payload?.message)
+      : extractToolDetail(payload, title ?? activity.summary);
   const toolCallId = isTaskActivity ? null : extractToolCallId(payload);
   const entry: DerivedWorkLogEntry = {
     id: activity.id,
@@ -578,6 +586,15 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (toolCallId) {
     entry.toolCallId = toolCallId;
   }
+  if (isRuntimeNotice) {
+    const message = asTrimmedString(payload?.message);
+    if (message) {
+      entry.runtimeNotice = {
+        kind: activity.kind === "runtime.error" ? "error" : "warning",
+        messages: [message],
+      };
+    }
+  }
   const collapseKey = deriveToolLifecycleCollapseKey(entry);
   if (collapseKey) {
     entry.collapseKey = collapseKey;
@@ -593,6 +610,21 @@ function collapseDerivedWorkLogEntries(
     const previous = collapsed.at(-1);
     if (previous && shouldCollapseToolLifecycleEntries(previous, entry)) {
       collapsed[collapsed.length - 1] = mergeDerivedWorkLogEntries(previous, entry);
+      continue;
+    }
+    if (
+      previous &&
+      previous.runtimeNotice &&
+      entry.runtimeNotice &&
+      previous.runtimeNotice.kind === entry.runtimeNotice.kind
+    ) {
+      collapsed[collapsed.length - 1] = {
+        ...previous,
+        runtimeNotice: {
+          kind: previous.runtimeNotice.kind,
+          messages: [...previous.runtimeNotice.messages, ...entry.runtimeNotice.messages],
+        },
+      };
       continue;
     }
     collapsed.push(entry);
