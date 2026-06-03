@@ -25,6 +25,7 @@ import {
   type LucideIcon,
   SquarePenIcon,
   TerminalIcon,
+  TriangleAlertIcon,
   Undo2Icon,
   WrenchIcon,
   ZapIcon,
@@ -234,7 +235,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   // from TimelineRowCtx, which propagates through LegendList's memo.
   const renderItem = useCallback(
     ({ item }: { item: MessagesTimelineRow }) => (
-      <div className="mx-auto w-full min-w-0 max-w-3xl overflow-x-hidden" data-timeline-root="true">
+      <div className="mx-auto w-full min-w-0 max-w-3xl overflow-x-clip" data-timeline-root="true">
         <TimelineRowContent row={item} />
       </div>
     ),
@@ -663,7 +664,7 @@ function AssistantChangedFilesSectionInner({
 
   return (
     <div className="mt-2 rounded-lg border border-border/80 bg-card/45 p-2.5">
-      <div className="mb-1.5 flex items-center justify-between gap-2">
+      <div className="sticky top-2 z-10 mb-1.5 flex items-center justify-between gap-2 bg-background before:absolute before:inset-x-0 before:-top-2 before:h-2 before:bg-background before:content-['']">
         <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/65">
           <span>Changed files ({changedFileCountLabel})</span>
           {hasNonZeroStat(summaryStat) && (
@@ -930,6 +931,8 @@ function workEntryRawCommand(
 }
 
 function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
+  if (workEntry.runtimeNotice?.kind === "warning") return TriangleAlertIcon;
+  if (workEntry.runtimeNotice?.kind === "error") return CircleAlertIcon;
   if (workEntry.requestKind === "command") return TerminalIcon;
   if (workEntry.requestKind === "file-read") return EyeIcon;
   if (workEntry.requestKind === "file-change") return SquarePenIcon;
@@ -974,9 +977,21 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   workspaceRoot: string | undefined;
 }) {
   const { workEntry, workspaceRoot } = props;
-  const iconConfig = workToneIcon(workEntry.tone);
+  const baseIconConfig = workToneIcon(workEntry.tone);
+  const noticeKind = workEntry.runtimeNotice?.kind;
+  const iconConfig = noticeKind
+    ? {
+        ...baseIconConfig,
+        className:
+          noticeKind === "warning"
+            ? "text-amber-500/80 dark:text-amber-400/80"
+            : "text-rose-400/80 dark:text-rose-300/80",
+      }
+    : baseIconConfig;
   const EntryIcon = workEntryIcon(workEntry);
-  const heading = toolWorkEntryHeading(workEntry);
+  const noticeCount = workEntry.runtimeNotice?.messages.length ?? 0;
+  const baseHeading = toolWorkEntryHeading(workEntry);
+  const heading = noticeCount > 1 ? `${baseHeading} (${noticeCount})` : baseHeading;
   const rawPreview = workEntryPreview(workEntry, workspaceRoot);
   const preview =
     rawPreview &&
@@ -985,7 +1000,9 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
       ? null
       : rawPreview;
   const rawCommand = workEntryRawCommand(workEntry);
+  const noticeTooltipText = workEntry.runtimeNotice?.messages.join("\n\n") ?? null;
   const displayText = preview ? `${heading} - ${preview}` : heading;
+  const tooltipText = noticeTooltipText ?? displayText;
   const hasChangedFiles = (workEntry.changedFiles?.length ?? 0) > 0;
   const previewIsChangedFiles = hasChangedFiles && !workEntry.command && !workEntry.detail;
 
@@ -1040,8 +1057,8 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
             <Tooltip>
               <TooltipTrigger
                 className="block min-w-0 w-full text-left"
-                title={displayText}
-                aria-label={displayText}
+                title={tooltipText}
+                aria-label={tooltipText}
               >
                 <p
                   className={cn(
@@ -1058,7 +1075,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
               </TooltipTrigger>
               <TooltipPopup className="max-w-[min(720px,calc(100vw-2rem))]">
                 <p className="whitespace-pre-wrap wrap-break-word text-xs leading-5">
-                  {displayText}
+                  {tooltipText}
                 </p>
               </TooltipPopup>
             </Tooltip>
