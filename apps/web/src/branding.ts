@@ -16,6 +16,8 @@ export const HOSTED_APP_CHANNEL =
 export const HOSTED_APP_CHANNEL_LABEL =
   HOSTED_APP_CHANNEL === "nightly" ? "Nightly" : HOSTED_APP_CHANNEL === "latest" ? "Latest" : null;
 export const APP_BASE_NAME = injectedDesktopAppBranding?.baseName ?? "A2 Code";
+export const APP_MONOGRAM = APP_BASE_NAME.split(/\s+/u)[0] ?? APP_BASE_NAME;
+export const APP_NAME_SUFFIX = APP_BASE_NAME.slice(APP_MONOGRAM.length).trim();
 export const APP_STAGE_LABEL =
   injectedDesktopAppBranding?.stageLabel ??
   HOSTED_APP_CHANNEL_LABEL ??
