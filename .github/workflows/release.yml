@@ -30,7 +30,7 @@ jobs:
   check_changes:
     name: Check for changes since last nightly
     if: github.event_name == 'schedule'
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     outputs:
       has_changes: ${{ steps.check.outputs.has_changes }}
     steps:
@@ -66,7 +66,7 @@ jobs:
     if: |
       !failure() && !cancelled() &&
       (github.event_name != 'schedule' || needs.check_changes.outputs.has_changes == 'true')
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       release_channel: ${{ steps.release_meta.outputs.release_channel }}
@@ -170,7 +170,7 @@ jobs:
     name: Resolve T3 Cloud public config
     needs: preflight
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     environment:
       name: production
@@ -209,8 +209,12 @@ jobs:
             fi
           done
           if (( ${#missing[@]} > 0 )); then
-            printf 'Missing required relay deployment configuration: %s\n' "${missing[*]}" >&2
-            exit 1
+            printf 'Missing relay configuration for release build: %s\n' "${missing[*]}" >&2
+            echo "clerk_publishable_key=" >> "$GITHUB_OUTPUT"
+            echo "clerk_jwt_template=" >> "$GITHUB_OUTPUT"
+            echo "clerk_cli_oauth_client_id=" >> "$GITHUB_OUTPUT"
+            echo "relay_url=" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
           echo "clerk_publishable_key=$CLERK_PUBLISHABLE_KEY" >> "$GITHUB_OUTPUT"
@@ -234,22 +238,22 @@ jobs:
       matrix:
         include:
           - label: macOS arm64
-            runner: blacksmith-12vcpu-macos-26
+            runner: macos-15
             platform: mac
             target: dmg
             arch: arm64
           - label: macOS x64
-            runner: blacksmith-12vcpu-macos-26
+            runner: macos-15-intel
             platform: mac
             target: dmg
             arch: x64
           - label: Linux x64
-            runner: blacksmith-32vcpu-ubuntu-2404
+            runner: ubuntu-24.04
             platform: linux
             target: AppImage
             arch: x64
           - label: Windows x64
-            runner: blacksmith-32vcpu-windows-2025
+            runner: windows-2025
             platform: win
             target: nsis
             arch: x64
@@ -481,23 +485,37 @@ jobs:
     name: Publish CLI to npm
     needs: [preflight, relay_public_config, build]
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' && needs.build.result == 'success' }}
-    runs-on: ubuntu-24.04 # blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
       id-token: write
     env:
+      RELEASE_ENABLE_CLI_PUBLISH: ${{ vars.RELEASE_ENABLE_CLI_PUBLISH }}
       T3CODE_CLERK_PUBLISHABLE_KEY: ${{ needs.relay_public_config.outputs.clerk_publishable_key }}
       T3CODE_CLERK_JWT_TEMPLATE: ${{ needs.relay_public_config.outputs.clerk_jwt_template }}
       T3CODE_CLERK_CLI_OAUTH_CLIENT_ID: ${{ needs.relay_public_config.outputs.clerk_cli_oauth_client_id }}
       T3CODE_RELAY_URL: ${{ needs.relay_public_config.outputs.relay_url }}
     steps:
+      - id: publish_mode
+        name: Resolve CLI publish mode
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REPOSITORY}" == "pingdotgg/t3code" || "${RELEASE_ENABLE_CLI_PUBLISH:-}" == "true" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping npm publish on this fork. Set RELEASE_ENABLE_CLI_PUBLISH=true to enable it."
+          fi
+
       - name: Checkout
+        if: steps.publish_mode.outputs.enabled == 'true'
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.ref }}
 
       - name: Setup Vite+
+        if: steps.publish_mode.outputs.enabled == 'true'
         uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json
@@ -509,32 +527,30 @@ jobs:
               - --filter=@t3tools/scripts...
 
       - name: Align package versions to release version
+        if: steps.publish_mode.outputs.enabled == 'true'
         run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
 
       - name: Build web package
+        if: steps.publish_mode.outputs.enabled == 'true'
         run: vp run --filter @t3tools/web build
 
       - name: Build CLI package
+        if: steps.publish_mode.outputs.enabled == 'true'
         run: vp run --filter t3 build
 
       - name: Publish CLI package
+        if: steps.publish_mode.outputs.enabled == 'true'
         run: node apps/server/scripts/cli.ts publish --tag "${{ needs.preflight.outputs.cli_dist_tag }}" --app-version "${{ needs.preflight.outputs.version }}" --verbose
 
   release:
     name: Publish GitHub Release
     needs: [preflight, build, publish_cli]
-    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.build.result == 'success' && needs.publish_cli.result == 'success' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.build.result == 'success' && (needs.publish_cli.result == 'success' || needs.publish_cli.result == 'skipped') }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
-      - id: app_token
-        name: Mint release app token
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ secrets.RELEASE_APP_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-
       - name: Checkout
         uses: actions/checkout@v6
         with:
@@ -615,7 +631,7 @@ jobs:
             release-assets/*.blockmap
             release-assets/*.yml
           fail_on_unmatched_files: true
-          token: ${{ steps.app_token.outputs.token }}
+          token: ${{ github.token }}
 
       - name: Publish first release
         if: needs.preflight.outputs.previous_tag == ''
@@ -635,15 +651,16 @@ jobs:
             release-assets/*.blockmap
             release-assets/*.yml
           fail_on_unmatched_files: true
-          token: ${{ steps.app_token.outputs.token }}
+          token: ${{ github.token }}
 
   deploy_web:
     name: Deploy hosted web app
     needs: [preflight, relay_public_config, release]
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.relay_public_config.result == 'success' && needs.release.result == 'success' }}
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
+      RELEASE_ENABLE_WEB_DEPLOY: ${{ vars.RELEASE_ENABLE_WEB_DEPLOY }}
       T3CODE_CLERK_PUBLISHABLE_KEY: ${{ needs.relay_public_config.outputs.clerk_publishable_key }}
       T3CODE_CLERK_JWT_TEMPLATE: ${{ needs.relay_public_config.outputs.clerk_jwt_template }}
       T3CODE_RELAY_URL: ${{ needs.relay_public_config.outputs.relay_url }}
@@ -655,12 +672,32 @@ jobs:
       T3CODE_WEB_NIGHTLY_DOMAIN: ${{ vars.T3CODE_WEB_NIGHTLY_DOMAIN }}
       VERCEL_TEAM_SLUG: ${{ vars.VERCEL_TEAM_SLUG }}
     steps:
+      - id: deploy_mode
+        name: Resolve hosted web deploy mode
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REPOSITORY}" != "pingdotgg/t3code" && "${RELEASE_ENABLE_WEB_DEPLOY:-}" != "true" ]]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping hosted web deploy on this fork. Set RELEASE_ENABLE_WEB_DEPLOY=true to enable it."
+            exit 0
+          fi
+
+          if [[ -z "${VERCEL_TOKEN:-}" || -z "${VERCEL_ORG_ID:-}" || -z "${VERCEL_PROJECT_ID:-}" ]]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping hosted web deploy because Vercel secrets are missing."
+            exit 0
+          fi
+
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+
       - name: Checkout
+        if: steps.deploy_mode.outputs.enabled == 'true'
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.ref }}
 
       - name: Setup Vite+
+        if: steps.deploy_mode.outputs.enabled == 'true'
         uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json
@@ -671,12 +708,15 @@ jobs:
               - --filter=@t3tools/web...
 
       - name: Align package versions to release version
+        if: steps.deploy_mode.outputs.enabled == 'true'
         run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
 
       - name: Refresh release lockfile
+        if: steps.deploy_mode.outputs.enabled == 'true'
         run: vp install --lockfile-only --ignore-scripts
 
       - name: Deploy and alias channel
+        if: steps.deploy_mode.outputs.enabled == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -736,36 +776,37 @@ jobs:
     name: Finalize release
     if: ${{ !failure() && !cancelled() && needs.preflight.result == 'success' && needs.release.result == 'success' && needs.preflight.outputs.release_channel == 'stable' }}
     needs: [preflight, release]
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      RELEASE_ENABLE_VERSION_BUMP: ${{ vars.RELEASE_ENABLE_VERSION_BUMP }}
     steps:
-      - id: app_token
-        name: Mint release app token
-        uses: actions/create-github-app-token@v2
-        with:
-          app-id: ${{ secrets.RELEASE_APP_ID }}
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
+      - id: finalize_mode
+        name: Resolve finalize mode
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REPOSITORY}" == "pingdotgg/t3code" || "${RELEASE_ENABLE_VERSION_BUMP:-}" == "true" ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping post-release version bump on this fork. Set RELEASE_ENABLE_VERSION_BUMP=true to enable it."
+          fi
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
 
       - name: Checkout
+        if: steps.finalize_mode.outputs.enabled == 'true'
         uses: actions/checkout@v6
         with:
           ref: main
           fetch-depth: 0
-          token: ${{ steps.app_token.outputs.token }}
+          token: ${{ github.token }}
           persist-credentials: true
 
-      - id: app_bot
-        name: Resolve GitHub App bot identity
-        env:
-          GH_TOKEN: ${{ steps.app_token.outputs.token }}
-          APP_SLUG: ${{ steps.app_token.outputs.app-slug }}
-        run: |
-          user_id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
-          echo "name=${APP_SLUG}[bot]" >> "$GITHUB_OUTPUT"
-          echo "email=${user_id}+${APP_SLUG}[bot]@users.noreply.github.com" >> "$GITHUB_OUTPUT"
-
       - name: Setup Vite+
+        if: steps.finalize_mode.outputs.enabled == 'true'
         uses: voidzero-dev/setup-vp@v1
         with:
           node-version-file: package.json
@@ -777,20 +818,21 @@ jobs:
 
       - id: update_versions
         name: Update version strings
+        if: steps.finalize_mode.outputs.enabled == 'true'
         env:
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
         run: node scripts/update-release-package-versions.ts "$RELEASE_VERSION" --github-output
 
       - name: Format package.json files
-        if: steps.update_versions.outputs.changed == 'true'
+        if: steps.finalize_mode.outputs.enabled == 'true' && steps.update_versions.outputs.changed == 'true'
         run: vp fmt apps/server/package.json apps/desktop/package.json apps/web/package.json packages/contracts/package.json
 
       - name: Refresh lockfile
-        if: steps.update_versions.outputs.changed == 'true'
+        if: steps.finalize_mode.outputs.enabled == 'true' && steps.update_versions.outputs.changed == 'true'
         run: vp install --lockfile-only --ignore-scripts
 
       - name: Commit and push version bump
-        if: steps.update_versions.outputs.changed == 'true'
+        if: steps.finalize_mode.outputs.enabled == 'true' && steps.update_versions.outputs.changed == 'true'
         shell: bash
         env:
           RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
@@ -800,8 +842,8 @@ jobs:
             exit 0
           fi
 
-          git config user.name "${{ steps.app_bot.outputs.name }}"
-          git config user.email "${{ steps.app_bot.outputs.email }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           git add apps/server/package.json apps/desktop/package.json apps/web/package.json packages/contracts/package.json pnpm-lock.yaml
           git commit -m "chore(release): prepare $RELEASE_TAG"
@@ -817,7 +859,7 @@ jobs:
       needs.deploy_web.result == 'success' &&
       (needs.finalize.result == 'success' || needs.finalize.result == 'skipped')
     needs: [preflight, relay_public_config, release, deploy_web, finalize]
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout
