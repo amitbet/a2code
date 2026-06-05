@@ -83,7 +83,7 @@ function ensureRelayClientAvailable(
     if (status.status === "available") return;
     if (status.status === "unsupported") {
       return yield* new CloudEnvironmentLinkError({
-        message: `T3 Code cannot install the relay client automatically on ${status.platform}-${status.arch}.`,
+        message: `A2 Code cannot install the relay client automatically on ${status.platform}-${status.arch}.`,
       });
     }
 
@@ -105,7 +105,7 @@ function ensureRelayClientAvailable(
       return yield* new CloudEnvironmentLinkError({
         message:
           installed.status === "unsupported"
-            ? `T3 Code cannot install the relay client automatically on ${installed.platform}-${installed.arch}.`
+            ? `A2 Code cannot install the relay client automatically on ${installed.platform}-${installed.arch}.`
             : "The relay client is still unavailable after installation.",
       });
     }

@@ -32,7 +32,7 @@ describe("Desktop cloud auth IPC", () => {
   });
 
   it.effect("preserves Clerk's URL-encoded OAuth form content type", () => {
-    const body = "strategy=oauth_google&redirect_url=t3code%3A%2F%2Fauth%2Fcallback";
+    const body = "strategy=oauth_google&redirect_url=a2code%3A%2F%2Fauth%2Fcallback";
     let forwardedRequest: HttpClientRequest.HttpClientRequest | null = null;
     const layer = makeHttpClientLayer((request) =>
       Effect.sync(() => {

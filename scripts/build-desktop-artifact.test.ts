@@ -24,8 +24,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   });
 
   it("switches desktop packaging product names to nightly for nightly builds", () => {
-    assert.equal(resolveDesktopProductName("0.0.17"), "T3 Code (Alpha)");
-    assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42"), "T3 Code (Nightly)");
+    assert.equal(resolveDesktopProductName("0.0.17"), "A2 Code");
+    assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42"), "A2 Code (Nightly)");
   });
 
   it("switches desktop packaging icons to the nightly artwork for nightly versions", () => {
@@ -42,7 +42,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     });
   });
 
-  it("defaults desktop updater metadata to the fork release repository", () => {
+  it("defaults desktop updater metadata to the A2 Code release repository", () => {
     const previousRepository = process.env.T3CODE_DESKTOP_UPDATE_REPOSITORY;
     const previousGitHubRepository = process.env.GITHUB_REPOSITORY;
     delete process.env.T3CODE_DESKTOP_UPDATE_REPOSITORY;
@@ -52,13 +52,13 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.deepStrictEqual(resolveGitHubPublishConfig("latest"), {
         provider: "github",
         owner: "amitbet",
-        repo: "t3code",
+        repo: "a2code",
         releaseType: "release",
       });
       assert.deepStrictEqual(resolveGitHubPublishConfig("nightly"), {
         provider: "github",
         owner: "amitbet",
-        repo: "t3code",
+        repo: "a2code",
         releaseType: "prerelease",
         channel: "nightly",
       });

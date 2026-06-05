@@ -65,7 +65,7 @@ function cleanupStaleDevApps() {
     return;
   }
 
-  spawnSync("pkill", ["-f", "--", `--t3code-dev-root=${desktopDir}`], { stdio: "ignore" });
+  spawnSync("pkill", ["-f", "--", `--a2code-dev-root=${desktopDir}`], { stdio: "ignore" });
 }
 
 function startApp() {
@@ -78,7 +78,7 @@ function startApp() {
     : [];
   const launchArgs = devProtocolClient
     ? electronArgs
-    : [...electronArgs, `--t3code-dev-root=${desktopDir}`, "dist-electron/main.cjs"];
+    : [...electronArgs, `--a2code-dev-root=${desktopDir}`, "dist-electron/main.cjs"];
   const app = spawn(resolveElectronPath(), launchArgs, {
     cwd: desktopDir,
     env: childEnv,

@@ -459,7 +459,7 @@ const createDesktopBridgeStub = (overrides?: {
     setTheme: vi.fn().mockResolvedValue(undefined),
     showContextMenu: vi.fn().mockResolvedValue(null),
     openExternal: vi.fn().mockResolvedValue(true),
-    createCloudAuthRequest: vi.fn().mockResolvedValue("t3code-dev://auth/callback?t3_state=test"),
+    createCloudAuthRequest: vi.fn().mockResolvedValue("a2code-dev://auth/callback?t3_state=test"),
     getCloudAuthToken: vi.fn().mockResolvedValue(null),
     setCloudAuthToken: vi.fn().mockResolvedValue(true),
     clearCloudAuthToken: vi.fn().mockResolvedValue(undefined),
@@ -1015,7 +1015,7 @@ describe("GeneralSettingsPanel observability", () => {
     await networkAccessToggle.click();
     await expect.element(page.getByText("Enable network access?")).toBeInTheDocument();
     await expect
-      .element(page.getByText("T3 Code will restart to expose this environment over the network."))
+      .element(page.getByText("A2 Code will restart to expose this environment over the network."))
       .toBeInTheDocument();
     await page.getByRole("button", { name: "Restart and enable", exact: true }).click();
     await vi.waitFor(() => {
