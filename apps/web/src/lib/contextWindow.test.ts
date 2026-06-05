@@ -61,7 +61,7 @@ describe("contextWindow", () => {
     });
   });
 
-  it("carries forward the latest known max tokens when the newest snapshot omits it", () => {
+  it("does not carry forward stale max tokens when the newest snapshot omits it", () => {
     const snapshot = deriveLatestContextWindowSnapshot([
       makeActivity("activity-1", "context-window.updated", {
         usedTokens: 80_000,
@@ -76,9 +76,9 @@ describe("contextWindow", () => {
     expect(snapshot).toMatchObject({
       usedTokens: 91_000,
       totalProcessedTokens: 250_000,
-      maxTokens: 200_000,
-      usedPercentage: 45.5,
-      remainingPercentage: 54.5,
+      maxTokens: null,
+      usedPercentage: null,
+      remainingPercentage: null,
     });
   });
 

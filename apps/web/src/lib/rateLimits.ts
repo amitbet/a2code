@@ -20,7 +20,9 @@ function parseWindow(value: unknown): ProviderRateLimitWindow | null {
     return null;
   }
   const usedPercent = asFiniteNumber(record.usedPercent);
-  if (usedPercent === null) {
+  const resetsAt = asFiniteNumber(record.resetsAt);
+  // Keep a window if it has either a usage figure or a reset time to show.
+  if (usedPercent === null && resetsAt === null) {
     return null;
   }
   const kind =
@@ -29,14 +31,18 @@ function parseWindow(value: unknown): ProviderRateLimitWindow | null {
       : "other";
   const label =
     typeof record.label === "string" && record.label.trim().length > 0 ? record.label : "Limit";
-  const resetsAt = asFiniteNumber(record.resetsAt);
   const windowMinutes = asFiniteNumber(record.windowMinutes);
+  const detail =
+    typeof record.detail === "string" && record.detail.trim().length > 0
+      ? record.detail
+      : undefined;
   return {
     kind,
     label,
-    usedPercent: Math.max(0, Math.min(100, usedPercent)),
+    ...(usedPercent !== null ? { usedPercent: Math.max(0, Math.min(100, usedPercent)) } : {}),
     ...(resetsAt !== null ? { resetsAt } : {}),
     ...(windowMinutes !== null ? { windowMinutes } : {}),
+    ...(detail !== undefined ? { detail } : {}),
   };
 }
 
@@ -108,4 +114,28 @@ export function formatRateLimitReset(resetsAt: number | undefined, nowMs: number
   const days = Math.floor(hours / 24);
   const remHours = hours % 24;
   return remHours > 0 ? `resets in ${days}d ${remHours}h` : `resets in ${days}d`;
+}
+
+/** Compact reset label for inline display, e.g. "5d" / "2h" / "30m". */
+export function formatRateLimitResetShort(
+  resetsAt: number | undefined,
+  nowMs: number,
+): string | null {
+  if (resetsAt === undefined || !Number.isFinite(resetsAt)) {
+    return null;
+  }
+  const resetMs = resetsAt > 1e12 ? resetsAt : resetsAt * 1000;
+  const diffMs = resetMs - nowMs;
+  if (diffMs <= 0) {
+    return "now";
+  }
+  const minutes = Math.round(diffMs / 60_000);
+  if (minutes < 60) {
+    return `${Math.max(1, minutes)}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h`;
+  }
+  return `${Math.floor(hours / 24)}d`;
 }

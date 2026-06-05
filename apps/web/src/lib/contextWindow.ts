@@ -63,12 +63,6 @@ function buildSnapshot(
 export function deriveLatestContextWindowSnapshot(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): ContextWindowSnapshot | null {
-  let latestWithoutMax: {
-    readonly payload: Record<string, unknown>;
-    readonly usedTokens: number;
-    readonly updatedAt: string;
-  } | null = null;
-
   for (let index = activities.length - 1; index >= 0; index -= 1) {
     const activity = activities[index];
     if (!activity || activity.kind !== "context-window.updated") {
@@ -85,32 +79,15 @@ export function deriveLatestContextWindowSnapshot(
     }
 
     const maxTokens = asFiniteNumber(payload?.maxTokens);
-    if (maxTokens !== null && maxTokens > 0) {
-      return latestWithoutMax
-        ? buildSnapshot(
-            latestWithoutMax.payload,
-            latestWithoutMax.usedTokens,
-            maxTokens,
-            latestWithoutMax.updatedAt,
-          )
-        : buildSnapshot(payload, usedTokens, maxTokens, activity.createdAt);
-    }
-
-    latestWithoutMax ??= {
+    return buildSnapshot(
       payload,
       usedTokens,
-      updatedAt: activity.createdAt,
-    };
+      maxTokens !== null && maxTokens > 0 ? maxTokens : null,
+      activity.createdAt,
+    );
   }
 
-  return latestWithoutMax
-    ? buildSnapshot(
-        latestWithoutMax.payload,
-        latestWithoutMax.usedTokens,
-        null,
-        latestWithoutMax.updatedAt,
-      )
-    : null;
+  return null;
 }
 
 export function formatContextWindowTokens(value: number | null): string {

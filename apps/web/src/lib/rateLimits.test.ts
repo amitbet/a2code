@@ -66,6 +66,22 @@ describe("deriveLatestRateLimitSnapshot", () => {
     expect(snapshot?.windows[0]?.usedPercent).toBe(84);
   });
 
+  it("keeps a reset-only window when Claude omits the percentage", () => {
+    const snapshot = deriveLatestRateLimitSnapshot([
+      activity({
+        payload: {
+          snapshot: {
+            windows: [{ kind: "overage", label: "Overage", resetsAt: 1_900_000_000 }],
+            status: "allowed",
+          },
+        },
+      }),
+    ]);
+    expect(snapshot?.windows).toHaveLength(1);
+    expect(snapshot?.windows[0]?.usedPercent).toBeUndefined();
+    expect(snapshot?.windows[0]?.resetsAt).toBe(1_900_000_000);
+  });
+
   it("prefers the most recent activity and clamps out-of-range percentages", () => {
     const snapshot = deriveLatestRateLimitSnapshot([
       activity({

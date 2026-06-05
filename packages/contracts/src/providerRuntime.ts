@@ -537,6 +537,7 @@ export const ProviderRateLimitWindowKind = Schema.Literals([
   "five_hour",
   "weekly",
   "overage",
+  "spend",
   "other",
 ]);
 export type ProviderRateLimitWindowKind = typeof ProviderRateLimitWindowKind.Type;
@@ -553,9 +554,13 @@ export type ProviderRateLimitWindowKind = typeof ProviderRateLimitWindowKind.Typ
 export const ProviderRateLimitWindow = Schema.Struct({
   kind: ProviderRateLimitWindowKind,
   label: TrimmedNonEmptyStringSchema,
-  usedPercent: Schema.Number,
+  // Absent when the provider reports a window (and its reset) but no usage
+  // figure yet — e.g. Claude omits utilization until you approach the limit.
+  usedPercent: Schema.optional(Schema.Number),
   resetsAt: Schema.optional(Schema.Number),
   windowMinutes: Schema.optional(NonNegativeInt),
+  // Optional human-readable extra (e.g. a spend window's "$169.27 / $1,000.00").
+  detail: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type ProviderRateLimitWindow = typeof ProviderRateLimitWindow.Type;
 

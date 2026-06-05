@@ -71,6 +71,7 @@ import * as Stream from "effect/Stream";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
+import { fetchClaudeUsageSnapshot } from "./ClaudeUsageApi.ts";
 import {
   getClaudeModelCapabilities,
   isClaudeUltracodeEffort,
@@ -182,6 +183,7 @@ interface ClaudeSessionContext {
   lastKnownContextWindow: number | undefined;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
   lastKnownRateLimits: ProviderRateLimitSnapshot | undefined;
+  usageFromEndpoint: boolean;
   lastAssistantUuid: string | undefined;
   lastThreadStartedId: string | undefined;
   stopped: boolean;
@@ -418,14 +420,20 @@ function mergeClaudeRateLimitEvent(
 
   const windows = [...(previous?.windows ?? [])];
 
-  if (utilization !== undefined && rateLimitType !== undefined) {
+  if (rateLimitType !== undefined) {
     const meta = claudeRateLimitWindowMeta(rateLimitType);
-    if (meta) {
+    const resetsAt = typeof record.resetsAt === "number" ? record.resetsAt : undefined;
+    // Emit a window once Claude reports a known type with either a usage figure
+    // or a reset time. Below the warning threshold Claude omits utilization, so
+    // we still surface the reset (and fill in the percentage once it arrives).
+    if (meta && (utilization !== undefined || resetsAt !== undefined)) {
       const window: ProviderRateLimitWindow = {
         kind: meta.kind,
         label: meta.label,
-        usedPercent: Math.max(0, Math.min(100, utilization * 100)),
-        ...(typeof record.resetsAt === "number" ? { resetsAt: record.resetsAt } : {}),
+        ...(utilization !== undefined
+          ? { usedPercent: Math.max(0, Math.min(100, utilization * 100)) }
+          : {}),
+        ...(resetsAt !== undefined ? { resetsAt } : {}),
       };
       const existingIndex = windows.findIndex((entry) => entry.label === meta.label);
       if (existingIndex >= 0) {
@@ -1525,6 +1533,34 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     });
   });
 
+  // Pull live subscription quota from Claude's /api/oauth/usage endpoint (the
+  // same data Claude Code shows) and emit it. This is richer and continuous,
+  // unlike the SDK `rate_limit_event` (coarse, only near the limit). Best-effort:
+  // any failure (no token / expired / non-subscriber / network) yields nothing.
+  const refreshClaudeUsage = Effect.fn("refreshClaudeUsage")(function* (
+    context: ClaudeSessionContext,
+  ) {
+    const snapshot = yield* fetchClaudeUsageSnapshot(claudeSettings.homePath).pipe(
+      Effect.catch(() => Effect.succeed(null)),
+    );
+    if (!snapshot || snapshot.windows.length === 0) {
+      return;
+    }
+    context.lastKnownRateLimits = snapshot;
+    context.usageFromEndpoint = true;
+    const stamp = yield* makeEventStamp();
+    yield* offerRuntimeEvent({
+      type: "account.rate-limits.updated",
+      eventId: stamp.eventId,
+      provider: PROVIDER,
+      createdAt: stamp.createdAt,
+      threadId: context.session.threadId,
+      ...(context.turnState ? { turnId: asCanonicalTurnId(context.turnState.turnId) } : {}),
+      payload: { snapshot },
+      providerRefs: nativeProviderRefs(context),
+    });
+  });
+
   const emitProposedPlanCompleted = Effect.fn("emitProposedPlanCompleted")(function* (
     context: ClaudeSessionContext,
     input: {
@@ -2207,6 +2243,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     yield* completeTurn(context, status, errorMessage, message);
+
+    // Refresh live quota after each turn (detached so it never blocks the turn).
+    yield* Effect.forkDetach(refreshClaudeUsage(context));
   });
 
   const handleSystemMessage = Effect.fn("handleSystemMessage")(function* (
@@ -2488,6 +2527,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     if (message.type === "rate_limit_event") {
+      // The /api/oauth/usage endpoint provides richer, continuous data; once it
+      // has reported, ignore the coarse SDK event to avoid flip-flopping.
+      if (context.usageFromEndpoint) {
+        return;
+      }
       const snapshot = mergeClaudeRateLimitEvent(
         context.lastKnownRateLimits,
         (message as { rate_limit_info?: unknown }).rate_limit_info,
@@ -3188,6 +3232,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         lastKnownContextWindow: selectedContextWindow,
         lastKnownTokenUsage: undefined,
         lastKnownRateLimits: undefined,
+        usageFromEndpoint: false,
         lastAssistantUuid: resumeState?.resumeSessionAt,
         lastThreadStartedId: undefined,
         stopped: false,
@@ -3262,6 +3307,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           context.streamFiber = undefined;
         }
       });
+
+      // Fetch live subscription quota on session start (best-effort, detached).
+      runFork(refreshClaudeUsage(context));
 
       return {
         ...session,

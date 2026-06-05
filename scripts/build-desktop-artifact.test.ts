@@ -11,6 +11,7 @@ import {
   resolveDesktopBuildIconAssets,
   resolveDesktopProductName,
   resolveDesktopUpdateChannel,
+  resolveGitHubPublishConfig,
   resolveMockUpdateServerPort,
   resolveMockUpdateServerUrl,
 } from "./build-desktop-artifact.ts";
@@ -39,6 +40,67 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       linuxIconPng: BRAND_ASSET_PATHS.nightlyLinuxIconPng,
       windowsIconIco: BRAND_ASSET_PATHS.nightlyWindowsIconIco,
     });
+  });
+
+  it("defaults desktop updater metadata to the fork release repository", () => {
+    const previousRepository = process.env.T3CODE_DESKTOP_UPDATE_REPOSITORY;
+    const previousGitHubRepository = process.env.GITHUB_REPOSITORY;
+    delete process.env.T3CODE_DESKTOP_UPDATE_REPOSITORY;
+    delete process.env.GITHUB_REPOSITORY;
+
+    try {
+      assert.deepStrictEqual(resolveGitHubPublishConfig("latest"), {
+        provider: "github",
+        owner: "amitbet",
+        repo: "t3code",
+        releaseType: "release",
+      });
+      assert.deepStrictEqual(resolveGitHubPublishConfig("nightly"), {
+        provider: "github",
+        owner: "amitbet",
+        repo: "t3code",
+        releaseType: "prerelease",
+        channel: "nightly",
+      });
+    } finally {
+      if (previousRepository === undefined) {
+        delete process.env.T3CODE_DESKTOP_UPDATE_REPOSITORY;
+      } else {
+        process.env.T3CODE_DESKTOP_UPDATE_REPOSITORY = previousRepository;
+      }
+      if (previousGitHubRepository === undefined) {
+        delete process.env.GITHUB_REPOSITORY;
+      } else {
+        process.env.GITHUB_REPOSITORY = previousGitHubRepository;
+      }
+    }
+  });
+
+  it("lets explicit desktop updater metadata override the fork default", () => {
+    const previousRepository = process.env.T3CODE_DESKTOP_UPDATE_REPOSITORY;
+    const previousGitHubRepository = process.env.GITHUB_REPOSITORY;
+    process.env.T3CODE_DESKTOP_UPDATE_REPOSITORY = "custom-owner/custom-repo";
+    process.env.GITHUB_REPOSITORY = "ignored-owner/ignored-repo";
+
+    try {
+      assert.deepStrictEqual(resolveGitHubPublishConfig("latest"), {
+        provider: "github",
+        owner: "custom-owner",
+        repo: "custom-repo",
+        releaseType: "release",
+      });
+    } finally {
+      if (previousRepository === undefined) {
+        delete process.env.T3CODE_DESKTOP_UPDATE_REPOSITORY;
+      } else {
+        process.env.T3CODE_DESKTOP_UPDATE_REPOSITORY = previousRepository;
+      }
+      if (previousGitHubRepository === undefined) {
+        delete process.env.GITHUB_REPOSITORY;
+      } else {
+        process.env.GITHUB_REPOSITORY = previousGitHubRepository;
+      }
+    }
   });
 
   it("omits bundled workspace packages from staged desktop dependencies", () => {

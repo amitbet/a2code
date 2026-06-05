@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { cn } from "~/lib/utils";
-import { type RateLimitSnapshot, formatRateLimitReset } from "~/lib/rateLimits";
+import {
+  type RateLimitSnapshot,
+  formatRateLimitReset,
+  formatRateLimitResetShort,
+} from "~/lib/rateLimits";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 
 function formatPercent(value: number): string {
@@ -12,8 +16,8 @@ function formatPercent(value: number): string {
 
 function shortLabel(label: string): string {
   if (label === "5-hour") return "5h";
-  if (label === "Weekly") return "Wk";
   if (label.startsWith("Weekly")) return "Wk";
+  if (label === "Overage") return "Quota";
   return label;
 }
 
@@ -56,7 +60,10 @@ export function RateLimitMeter(props: { snapshot: RateLimitSnapshot }) {
     return null;
   }
 
-  const peak = Math.max(...rows.map((row) => row.usedPercent));
+  const percents = rows
+    .map((row) => row.usedPercent)
+    .filter((value): value is number => typeof value === "number");
+  const peak = percents.length > 0 ? Math.max(...percents) : null;
 
   return (
     <Popover>
@@ -67,15 +74,21 @@ export function RateLimitMeter(props: { snapshot: RateLimitSnapshot }) {
         render={
           <button
             type="button"
-            className="group inline-flex items-center gap-1 rounded-full px-1 transition-opacity hover:opacity-85"
-            aria-label={`Quota usage, peak ${formatPercent(peak)}`}
+            className="group inline-flex items-center gap-1.5 rounded-full px-1 transition-opacity hover:opacity-85"
+            aria-label={peak !== null ? `Quota usage, peak ${formatPercent(peak)}` : "Quota usage"}
           >
             {rows.map((row) => (
               <span key={row.label} className="inline-flex items-center gap-1">
                 <span className="text-[9px] font-medium uppercase tracking-[0.06em] text-muted-foreground/70">
                   {shortLabel(row.label)}
                 </span>
-                <MiniBar usedPercent={row.usedPercent} />
+                {typeof row.usedPercent === "number" ? (
+                  <MiniBar usedPercent={row.usedPercent} />
+                ) : (
+                  <span className="text-[9px] tabular-nums text-muted-foreground/55">
+                    {formatRateLimitResetShort(row.resetsAt, nowMs) ?? "ok"}
+                  </span>
+                )}
               </span>
             ))}
           </button>
@@ -95,18 +108,32 @@ export function RateLimitMeter(props: { snapshot: RateLimitSnapshot }) {
           </div>
           {rows.map((row) => {
             const reset = formatRateLimitReset(row.resetsAt, nowMs);
+            const hasPercent = typeof row.usedPercent === "number";
             return (
               <div key={row.label} className="space-y-1">
                 <div className="flex items-center justify-between gap-6 text-xs">
-                  <span className="font-medium text-foreground">{row.label}</span>
-                  <span className="text-foreground">{formatPercent(row.usedPercent)}</span>
+                  <span className="font-medium text-foreground">
+                    {row.label}
+                    {row.detail ? (
+                      <span className="ml-1.5 font-normal text-muted-foreground/70">
+                        {row.detail}
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="text-foreground">
+                    {hasPercent ? formatPercent(row.usedPercent as number) : "under limit"}
+                  </span>
                 </div>
-                <div className="h-1.5 w-44 overflow-hidden rounded-full bg-muted/70">
-                  <div
-                    className={cn("h-full rounded-full", barToneClass(row.usedPercent))}
-                    style={{ width: `${Math.max(0, Math.min(100, row.usedPercent))}%` }}
-                  />
-                </div>
+                {hasPercent ? (
+                  <div className="h-1.5 w-44 overflow-hidden rounded-full bg-muted/70">
+                    <div
+                      className={cn("h-full rounded-full", barToneClass(row.usedPercent as number))}
+                      style={{
+                        width: `${Math.max(0, Math.min(100, row.usedPercent as number))}%`,
+                      }}
+                    />
+                  </div>
+                ) : null}
                 {reset ? <div className="text-[11px] text-muted-foreground/70">{reset}</div> : null}
               </div>
             );

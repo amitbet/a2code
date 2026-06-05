@@ -15,10 +15,12 @@ function formatPercentage(value: number | null): string | null {
 export function ContextWindowMeter(props: { usage: ContextWindowSnapshot }) {
   const { usage } = props;
   const usedPercentage = formatPercentage(usage.usedPercentage);
+  const hasKnownContextLimit = usage.maxTokens !== null && usedPercentage !== null;
   const normalizedPercentage = Math.max(0, Math.min(100, usage.usedPercentage ?? 0));
   const radius = 9.75;
   const circumference = 2 * Math.PI * radius;
   const dashOffset = circumference - (normalizedPercentage / 100) * circumference;
+  const formattedUsedTokens = formatContextWindowTokens(usage.usedTokens);
 
   return (
     <Popover>
@@ -31,69 +33,71 @@ export function ContextWindowMeter(props: { usage: ContextWindowSnapshot }) {
             type="button"
             className="group inline-flex items-center justify-center rounded-full transition-opacity hover:opacity-85"
             aria-label={
-              usage.maxTokens !== null && usedPercentage
+              hasKnownContextLimit
                 ? `Context window ${usedPercentage} used`
-                : `Context window ${formatContextWindowTokens(usage.usedTokens)} tokens used`
+                : `${formattedUsedTokens} tokens used so far`
             }
           >
-            <span className="relative flex h-6 w-6 items-center justify-center">
-              <svg
-                viewBox="0 0 24 24"
-                className="-rotate-90 absolute inset-0 h-full w-full transform-gpu"
-                aria-hidden="true"
-              >
-                <circle
-                  cx="12"
-                  cy="12"
-                  r={radius}
-                  fill="none"
-                  stroke="color-mix(in oklab, var(--color-muted) 70%, transparent)"
-                  strokeWidth="3"
-                />
-                <circle
-                  cx="12"
-                  cy="12"
-                  r={radius}
-                  fill="none"
-                  stroke="var(--color-muted-foreground)"
-                  strokeWidth="3"
-                  strokeLinecap="round"
-                  strokeDasharray={circumference}
-                  strokeDashoffset={dashOffset}
-                  className="transition-[stroke-dashoffset] duration-500 ease-out motion-reduce:transition-none"
-                />
-              </svg>
-              <span
-                className={cn(
-                  "relative flex h-[15px] w-[15px] items-center justify-center rounded-full bg-background text-[8px] font-medium",
-                  "text-muted-foreground",
-                )}
-              >
-                {usage.usedPercentage !== null
-                  ? Math.round(usage.usedPercentage)
-                  : formatContextWindowTokens(usage.usedTokens)}
+            {hasKnownContextLimit ? (
+              <span className="relative flex h-6 w-6 items-center justify-center">
+                <svg
+                  viewBox="0 0 24 24"
+                  className="-rotate-90 absolute inset-0 h-full w-full transform-gpu"
+                  aria-hidden="true"
+                >
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r={radius}
+                    fill="none"
+                    stroke="color-mix(in oklab, var(--color-muted) 70%, transparent)"
+                    strokeWidth="3"
+                  />
+                  <circle
+                    cx="12"
+                    cy="12"
+                    r={radius}
+                    fill="none"
+                    stroke="var(--color-muted-foreground)"
+                    strokeWidth="3"
+                    strokeLinecap="round"
+                    strokeDasharray={circumference}
+                    strokeDashoffset={dashOffset}
+                    className="transition-[stroke-dashoffset] duration-500 ease-out motion-reduce:transition-none"
+                  />
+                </svg>
+                <span
+                  className={cn(
+                    "relative flex h-[15px] w-[15px] items-center justify-center rounded-full bg-background text-[8px] font-medium",
+                    "text-muted-foreground",
+                  )}
+                >
+                  {Math.round(usage.usedPercentage ?? 0)}
+                </span>
               </span>
-            </span>
+            ) : (
+              <span className="inline-flex h-6 min-w-9 items-center justify-center rounded-full bg-muted/50 px-1.5 text-[10px] font-medium text-muted-foreground tabular-nums">
+                {formattedUsedTokens}
+              </span>
+            )}
           </button>
         }
       />
       <PopoverPopup tooltipStyle side="top" align="end" className="w-max max-w-none px-3 py-2">
         <div className="space-y-1.5 leading-tight">
           <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-            Context window
+            {hasKnownContextLimit ? "Context window" : "Token usage"}
           </div>
-          {usage.maxTokens !== null && usedPercentage ? (
+          {hasKnownContextLimit ? (
             <div className="whitespace-nowrap text-xs font-medium text-foreground">
               <span>{usedPercentage}</span>
               <span className="mx-1">⋅</span>
-              <span>{formatContextWindowTokens(usage.usedTokens)}</span>
+              <span>{formattedUsedTokens}</span>
               <span>/</span>
               <span>{formatContextWindowTokens(usage.maxTokens ?? null)} context used</span>
             </div>
           ) : (
-            <div className="text-sm text-foreground">
-              {formatContextWindowTokens(usage.usedTokens)} tokens used so far
-            </div>
+            <div className="text-sm text-foreground">{formattedUsedTokens} tokens used so far</div>
           )}
           {(usage.totalProcessedTokens ?? null) !== null &&
           (usage.totalProcessedTokens ?? 0) > usage.usedTokens ? (
