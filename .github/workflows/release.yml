@@ -2,19 +2,22 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*.*.*"
-      - "!v*-nightly.*"
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       version:
         description: "Release version (for example 1.2.3 or v1.2.3)"
-        required: true
+        required: false
         type: string
 
 permissions:
   contents: write
   id-token: none
+
+concurrency:
+  group: release-main
+  cancel-in-progress: true
 
 jobs:
   preflight:
@@ -40,10 +43,32 @@ jobs:
         env:
           DISPATCH_VERSION: ${{ github.event.inputs.version }}
         run: |
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" && -n "${DISPATCH_VERSION:-}" ]]; then
             raw="${DISPATCH_VERSION}"
           else
-            raw="${GITHUB_REF_NAME}"
+            latest_tag="$(
+              git tag --list 'v*.*.*' \
+                | grep -Ev -- '-nightly\.' \
+                | sort -V \
+                | tail -n 1
+            )"
+
+            if [[ -z "$latest_tag" ]]; then
+              version="0.0.1"
+            else
+              current="${latest_tag#v}"
+              if [[ ! "$current" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+                echo "Latest stable tag has unexpected format: $latest_tag" >&2
+                exit 1
+              fi
+
+              major="${BASH_REMATCH[1]}"
+              minor="${BASH_REMATCH[2]}"
+              patch="${BASH_REMATCH[3]}"
+              version="${major}.${minor}.$((patch + 1))"
+            fi
+
+            raw="v$version"
           fi
 
           version="${raw#v}"
