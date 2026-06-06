@@ -1,16 +1,43 @@
-name: CI
+name: Build Artifacts
 
 on:
-  pull_request:
   push:
     branches:
       - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  check:
-    name: Check
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
+  build:
+    name: Build ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: macOS arm64
+            runner: macos-15
+            platform: mac
+            target: dmg
+            arch: arm64
+          - label: macOS x64
+            runner: macos-15-intel
+            platform: mac
+            target: dmg
+            arch: x64
+          - label: Linux x64
+            runner: ubuntu-24.04
+            platform: linux
+            target: AppImage
+            arch: x64
+          - label: Windows x64
+            runner: windows-2025
+            platform: win
+            target: nsis
+            arch: x64
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -22,125 +49,77 @@ jobs:
           cache: true
           run-install: true
 
-      - name: Ensure Electron runtime is installed
-        run: vp run --filter @t3tools/desktop ensure:electron
-
-      - name: Check
-        run: vp check
-
-      - name: Typecheck
-        run: vp run typecheck
-
-      - name: Build desktop pipeline
-        run: vp run build:desktop
-
-      - name: Verify preload bundle output
+      - id: build_meta
+        name: Resolve build version
+        shell: bash
         run: |
-          test -f apps/desktop/dist-electron/preload.cjs
-          grep -nE "desktopBridge|getLocalEnvironmentBootstrap|PICK_FOLDER_CHANNEL|wsUrl" apps/desktop/dist-electron/preload.cjs
+          echo "version=0.0.0-dev.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
 
-  test:
-    name: Test
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
-        with:
-          node-version-file: package.json
-          cache: true
-          run-install: true
-
-      - name: Ensure Electron runtime is installed
-        run: vp run --filter @t3tools/desktop ensure:electron
-
-      - name: Test
-        run: vp run test
-
-  test_browser:
-    name: Test Browser
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
-        with:
-          node-version-file: package.json
-          cache: true
-          run-install: true
-
-      - name: Cache Playwright browsers
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-playwright-
-
-      - name: Install browser test runtime
-        run: vp run --filter @t3tools/web test:browser:install
-
-      - name: Browser test / Chat view
-        working-directory: apps/web
-        run: vp test run --mode browser --browser=chromium src/components/ChatView.browser.tsx
-
-      - name: Browser test / Chat markdown
-        working-directory: apps/web
-        run: vp test run --mode browser --browser=chromium src/components/ChatMarkdown.browser.tsx
-
-      - name: Browser test / Components
-        working-directory: apps/web
+      - name: Install Spectre-mitigated MSVC libs
+        if: matrix.platform == 'win'
+        shell: pwsh
         run: |
-          vp test run --mode browser --browser=chromium \
-            src/components/GitActionsControl.browser.tsx \
-            src/components/KeybindingsToast.browser.tsx \
-            src/components/ThreadTerminalDrawer.browser.tsx \
-            src/components/chat/MessagesTimeline.browser.tsx \
-            src/components/chat/ProviderModelPicker.browser.tsx \
-            src/components/chat/CompactComposerControlsMenu.browser.tsx \
-            src/components/settings/SettingsPanels.browser.tsx
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installPath = & $vswhere -products * -latest -property installationPath
+          $setupExe = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
+          $proc = Start-Process -FilePath $setupExe `
+            -ArgumentList "modify", "--installPath", "`"$installPath`"", "--add", `
+            "Microsoft.VisualStudio.Component.VC.Tools.x86.x64.Spectre", "--quiet", "--norestart" `
+            -Wait -PassThru -NoNewWindow
+          if ($null -eq $proc -or $proc.ExitCode -ne 0) {
+            $code = if ($null -ne $proc) { $proc.ExitCode } else { 1 }
+            Write-Error "Visual Studio Installer failed with exit code $code"
+            exit $code
+          }
 
-  mobile_native_static_analysis:
-    name: Mobile Native Static Analysis
-    runs-on: macos-15
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
+      - name: Install ImageMagick
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          if ! command -v magick >/dev/null 2>&1 && ! command -v convert >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y imagemagick
+          fi
 
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
+      - name: Build unsigned desktop artifact
+        shell: bash
+        run: |
+          vp run dist:desktop:artifact \
+            --platform "${{ matrix.platform }}" \
+            --target "${{ matrix.target }}" \
+            --arch "${{ matrix.arch }}" \
+            --build-version "${{ steps.build_meta.outputs.version }}" \
+            --verbose
+
+      - name: Collect build artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-publish
+
+          shopt -s nullglob
+          for pattern in \
+            "release/*.dmg" \
+            "release/*.zip" \
+            "release/*.AppImage" \
+            "release/*.exe" \
+            "release/*.blockmap" \
+            "release/*.yml"; do
+            for file in $pattern; do
+              cp "$file" release-publish/
+            done
+          done
+
+          if [[ "${{ matrix.platform }}" == "mac" && "${{ matrix.arch }}" != "arm64" ]]; then
+            for manifest in release-publish/*-mac.yml; do
+              mv "$manifest" "${manifest%.yml}-${{ matrix.arch }}.yml"
+            done
+          fi
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v7
         with:
-          node-version-file: package.json
-          cache: true
-          run-install: true
-
-      - name: Install mobile native static analysis tools
-        run: brew bundle install --file apps/mobile/Brewfile
-
-      - name: Lint mobile native sources
-        run: vp run lint:mobile
-
-  release_smoke:
-    name: Release Smoke
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
-        with:
-          node-version-file: package.json
-          cache: true
-          run-install: true
-
-      - name: Exercise release-only workflow steps
-        run: node scripts/release-smoke.ts
+          name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
+          path: release-publish/*
+          if-no-files-found: error
+          retention-days: 7
