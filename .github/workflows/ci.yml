@@ -28,43 +28,179 @@ permissions:
   contents: read
 
 jobs:
-  build:
-    if: |
-      (matrix.build_key == 'macos_arm64' && inputs.build_macos_arm64) ||
-      (matrix.build_key == 'macos_x64' && inputs.build_macos_x64) ||
-      (matrix.build_key == 'linux_x64' && inputs.build_linux_x64) ||
-      (matrix.build_key == 'windows_x64' && inputs.build_windows_x64)
-    name: Build ${{ matrix.label }}
-    runs-on: ${{ matrix.runner }}
+  build_macos_arm64:
+    if: ${{ inputs.build_macos_arm64 }}
+    name: Build macOS arm64
+    runs-on: macos-15
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - label: macOS arm64
-            build_key: macos_arm64
-            runner: macos-15
-            platform: mac
-            target: dmg
-            arch: arm64
-          - label: macOS x64
-            build_key: macos_x64
-            runner: macos-15-intel
-            platform: mac
-            target: dmg
-            arch: x64
-          - label: Linux x64
-            build_key: linux_x64
-            runner: ubuntu-24.04
-            platform: linux
-            target: AppImage
-            arch: x64
-          - label: Windows x64
-            build_key: windows_x64
-            runner: windows-2025
-            platform: win
-            target: nsis
-            arch: x64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - id: build_meta
+        name: Resolve build version
+        shell: bash
+        run: |
+          echo "version=0.0.0-dev.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Build unsigned desktop artifact
+        shell: bash
+        run: |
+          vp run dist:desktop:artifact \
+            --platform mac \
+            --target dmg \
+            --arch arm64 \
+            --build-version "${{ steps.build_meta.outputs.version }}" \
+            --verbose
+
+      - name: Collect build artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-publish
+          shopt -s nullglob
+          for pattern in "release/*.dmg" "release/*.zip" "release/*.blockmap" "release/*.yml"; do
+            for file in $pattern; do
+              cp "$file" release-publish/
+            done
+          done
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-mac-arm64
+          path: release-publish/*
+          if-no-files-found: error
+          retention-days: 7
+
+  build_macos_x64:
+    if: ${{ inputs.build_macos_x64 }}
+    name: Build macOS x64
+    runs-on: macos-15-intel
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - id: build_meta
+        name: Resolve build version
+        shell: bash
+        run: |
+          echo "version=0.0.0-dev.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Build unsigned desktop artifact
+        shell: bash
+        run: |
+          vp run dist:desktop:artifact \
+            --platform mac \
+            --target dmg \
+            --arch x64 \
+            --build-version "${{ steps.build_meta.outputs.version }}" \
+            --verbose
+
+      - name: Collect build artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-publish
+          shopt -s nullglob
+          for pattern in "release/*.dmg" "release/*.zip" "release/*.blockmap" "release/*.yml"; do
+            for file in $pattern; do
+              cp "$file" release-publish/
+            done
+          done
+
+          for manifest in release-publish/*-mac.yml; do
+            mv "$manifest" "${manifest%.yml}-x64.yml"
+          done
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-mac-x64
+          path: release-publish/*
+          if-no-files-found: error
+          retention-days: 7
+
+  build_linux_x64:
+    if: ${{ inputs.build_linux_x64 }}
+    name: Build Linux x64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - id: build_meta
+        name: Resolve build version
+        shell: bash
+        run: |
+          echo "version=0.0.0-dev.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Install ImageMagick
+        shell: bash
+        run: |
+          if ! command -v magick >/dev/null 2>&1 && ! command -v convert >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y imagemagick
+          fi
+
+      - name: Build unsigned desktop artifact
+        shell: bash
+        run: |
+          vp run dist:desktop:artifact \
+            --platform linux \
+            --target AppImage \
+            --arch x64 \
+            --build-version "${{ steps.build_meta.outputs.version }}" \
+            --verbose
+
+      - name: Collect build artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-publish
+          shopt -s nullglob
+          for pattern in "release/*.AppImage" "release/*.blockmap" "release/*.yml"; do
+            for file in $pattern; do
+              cp "$file" release-publish/
+            done
+          done
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-linux-x64
+          path: release-publish/*
+          if-no-files-found: error
+          retention-days: 7
+
+  build_windows_x64:
+    if: ${{ inputs.build_windows_x64 }}
+    name: Build Windows x64
+    runs-on: windows-2025
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -83,7 +219,6 @@ jobs:
           echo "version=0.0.0-dev.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
 
       - name: Install Spectre-mitigated MSVC libs
-        if: matrix.platform == 'win'
         shell: pwsh
         run: |
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -99,22 +234,13 @@ jobs:
             exit $code
           }
 
-      - name: Install ImageMagick
-        if: matrix.platform == 'linux'
-        shell: bash
-        run: |
-          if ! command -v magick >/dev/null 2>&1 && ! command -v convert >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y imagemagick
-          fi
-
       - name: Build unsigned desktop artifact
         shell: bash
         run: |
           vp run dist:desktop:artifact \
-            --platform "${{ matrix.platform }}" \
-            --target "${{ matrix.target }}" \
-            --arch "${{ matrix.arch }}" \
+            --platform win \
+            --target nsis \
+            --arch x64 \
             --build-version "${{ steps.build_meta.outputs.version }}" \
             --verbose
 
@@ -123,30 +249,17 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release-publish
-
           shopt -s nullglob
-          for pattern in \
-            "release/*.dmg" \
-            "release/*.zip" \
-            "release/*.AppImage" \
-            "release/*.exe" \
-            "release/*.blockmap" \
-            "release/*.yml"; do
+          for pattern in "release/*.exe" "release/*.blockmap" "release/*.yml"; do
             for file in $pattern; do
               cp "$file" release-publish/
             done
           done
 
-          if [[ "${{ matrix.platform }}" == "mac" && "${{ matrix.arch }}" != "arm64" ]]; then
-            for manifest in release-publish/*-mac.yml; do
-              mv "$manifest" "${manifest%.yml}-${{ matrix.arch }}.yml"
-            done
-          fi
-
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
         with:
-          name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
+          name: desktop-win-x64
           path: release-publish/*
           if-no-files-found: error
           retention-days: 7
