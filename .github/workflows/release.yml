@@ -10,6 +10,26 @@ on:
         description: "Release version (for example 1.2.3 or v1.2.3)"
         required: false
         type: string
+      build_macos_arm64:
+        description: "Build macOS arm64"
+        required: false
+        default: true
+        type: boolean
+      build_macos_x64:
+        description: "Build macOS x64"
+        required: false
+        default: false
+        type: boolean
+      build_linux_x64:
+        description: "Build Linux x64"
+        required: false
+        default: false
+        type: boolean
+      build_windows_x64:
+        description: "Build Windows x64"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -102,6 +122,14 @@ jobs:
           echo "previous_tag=$previous_tag" >> "$GITHUB_OUTPUT"
 
   build:
+    if: |
+      (github.event_name == 'push' && matrix.build_key == 'macos_arm64') ||
+      (github.event_name == 'workflow_dispatch' && (
+        (matrix.build_key == 'macos_arm64' && inputs.build_macos_arm64) ||
+        (matrix.build_key == 'macos_x64' && inputs.build_macos_x64) ||
+        (matrix.build_key == 'linux_x64' && inputs.build_linux_x64) ||
+        (matrix.build_key == 'windows_x64' && inputs.build_windows_x64)
+      ))
     name: Build ${{ matrix.label }}
     needs: preflight
     runs-on: ${{ matrix.runner }}
@@ -111,21 +139,25 @@ jobs:
       matrix:
         include:
           - label: macOS arm64
+            build_key: macos_arm64
             runner: macos-15
             platform: mac
             target: dmg
             arch: arm64
           - label: macOS x64
+            build_key: macos_x64
             runner: macos-15-intel
             platform: mac
             target: dmg
             arch: x64
           - label: Linux x64
+            build_key: linux_x64
             runner: ubuntu-24.04
             platform: linux
             target: AppImage
             arch: x64
           - label: Windows x64
+            build_key: windows_x64
             runner: windows-2025
             platform: win
             target: nsis
@@ -272,7 +304,7 @@ jobs:
             release-assets/*.exe
             release-assets/*.blockmap
             release-assets/*.yml
-          fail_on_unmatched_files: true
+          fail_on_unmatched_files: false
 
       - name: Publish first release
         if: needs.preflight.outputs.previous_tag == ''
@@ -291,4 +323,4 @@ jobs:
             release-assets/*.exe
             release-assets/*.blockmap
             release-assets/*.yml
-          fail_on_unmatched_files: true
+          fail_on_unmatched_files: false
