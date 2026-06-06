@@ -90,11 +90,16 @@ jobs:
 
       - id: previous_tag
         name: Resolve previous release tag
+        shell: bash
         run: |
-          node scripts/resolve-previous-release-tag.ts \
-            --channel stable \
-            --current-tag "${{ steps.release_meta.outputs.tag }}" \
-            --github-output
+          previous_tag="$(
+            git tag --list 'v*.*.*' \
+              | grep -Ev -- '-nightly\.' \
+              | grep -Fxv "${{ steps.release_meta.outputs.tag }}" \
+              | sort -V \
+              | tail -n 1
+          )"
+          echo "previous_tag=$previous_tag" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build ${{ matrix.label }}
@@ -220,6 +225,15 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.preflight.outputs.ref }}
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: |
+            args:
+              - --filter=@t3tools/scripts...
 
       - name: Download all desktop artifacts
         uses: actions/download-artifact@v8
