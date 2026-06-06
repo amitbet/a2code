@@ -38,6 +38,8 @@ describe("Desktop cloud auth IPC", () => {
   });
 
   it.effect("preserves Clerk's URL-encoded OAuth form content type", () => {
+    // The fork uses a custom protocol callback instead of the upstream web
+    // callback URL, so this literal is one of the regular upstream merge seams.
     const body = "strategy=oauth_google&redirect_url=a2code%3A%2F%2Fauth%2Fcallback";
     const fetch = recordedFetch(Response.json({ response: { object: "sign_in_attempt" } }));
     globalThis.fetch = fetch.fetchFn;
