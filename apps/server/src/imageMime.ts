@@ -1,4 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off
 import Mime from "@effect/platform-node/Mime";
+import path from "node:path";
 
 export const IMAGE_EXTENSION_BY_MIME_TYPE: Record<string, string> = {
   "image/avif": ".avif",
@@ -27,6 +29,26 @@ export const SAFE_IMAGE_FILE_EXTENSIONS = new Set([
   ".svg",
   ".tiff",
   ".webp",
+]);
+
+const SAFE_ATTACHMENT_FILE_EXTENSIONS = new Set([
+  ...SAFE_IMAGE_FILE_EXTENSIONS,
+  ".csv",
+  ".gz",
+  ".html",
+  ".htm",
+  ".json",
+  ".log",
+  ".md",
+  ".pdf",
+  ".svg",
+  ".tar",
+  ".tgz",
+  ".txt",
+  ".xml",
+  ".yaml",
+  ".yml",
+  ".zip",
 ]);
 
 export function parseBase64DataUrl(
@@ -75,6 +97,24 @@ export function inferImageExtension(input: { mimeType: string; fileName?: string
   const extensionMatch = /\.([a-z0-9]{1,8})$/i.exec(fileName);
   const fileNameExtension = extensionMatch ? `.${extensionMatch[1]!.toLowerCase()}` : "";
   if (SAFE_IMAGE_FILE_EXTENSIONS.has(fileNameExtension)) {
+    return fileNameExtension;
+  }
+
+  return ".bin";
+}
+
+export function inferAttachmentExtension(input: { mimeType: string; fileName?: string }): string {
+  if (input.mimeType.toLowerCase().startsWith("image/")) {
+    return inferImageExtension(input);
+  }
+
+  const fromMimeExtension = Mime.getExtension(input.mimeType);
+  if (fromMimeExtension && SAFE_ATTACHMENT_FILE_EXTENSIONS.has(fromMimeExtension)) {
+    return fromMimeExtension;
+  }
+
+  const fileNameExtension = path.extname(input.fileName?.trim() ?? "").toLowerCase();
+  if (fileNameExtension && SAFE_ATTACHMENT_FILE_EXTENSIONS.has(fileNameExtension)) {
     return fileNameExtension;
   }
 

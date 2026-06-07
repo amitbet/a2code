@@ -83,7 +83,7 @@ function makeImage(input: {
   mimeType?: string;
   sizeBytes?: number;
   lastModified?: number;
-}): ComposerImageAttachment {
+}): Extract<ComposerImageAttachment, { type: "image" }> {
   const name = input.name ?? "image.png";
   const mimeType = input.mimeType ?? "image/png";
   const sizeBytes = input.sizeBytes ?? 4;

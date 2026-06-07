@@ -9,7 +9,10 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 import { type ChatMessage, type SessionPhase, type Thread, type ThreadSession } from "../types";
-import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
+import {
+  type ComposerImageAttachment,
+  type DraftThreadState,
+} from "../composerDraftStore";
 import * as Schema from "effect/Schema";
 import { selectThreadByRef, useStore } from "../store";
 import {
@@ -148,10 +151,10 @@ export function readFileAsDataUrl(file: File): Promise<string> {
         resolve(reader.result);
         return;
       }
-      reject(new Error("Could not read image data."));
+      reject(new Error("Could not read attachment data."));
     });
     reader.addEventListener("error", () => {
-      reject(reader.error ?? new Error("Failed to read image."));
+      reject(reader.error ?? new Error("Failed to read attachment."));
     });
     reader.readAsDataURL(file);
   });
@@ -167,7 +170,11 @@ export function resolveSendEnvMode(input: {
 export function cloneComposerImageForRetry(
   image: ComposerImageAttachment,
 ): ComposerImageAttachment {
-  if (typeof URL === "undefined" || !image.previewUrl.startsWith("blob:")) {
+  if (
+    image.type !== "image" ||
+    typeof URL === "undefined" ||
+    !image.previewUrl.startsWith("blob:")
+  ) {
     return image;
   }
   try {
@@ -182,7 +189,7 @@ export function cloneComposerImageForRetry(
 
 export function deriveComposerSendState(options: {
   prompt: string;
-  imageCount: number;
+  attachmentCount: number;
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
 }): {
   trimmedPrompt: string;
@@ -199,7 +206,7 @@ export function deriveComposerSendState(options: {
     sendableTerminalContexts,
     expiredTerminalContextCount,
     hasSendableContent:
-      trimmedPrompt.length > 0 || options.imageCount > 0 || sendableTerminalContexts.length > 0,
+      trimmedPrompt.length > 0 || options.attachmentCount > 0 || sendableTerminalContexts.length > 0,
   };
 }
 

@@ -336,7 +336,11 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
 
 function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
-  const userImages = row.message.attachments ?? [];
+  const userAttachments = row.message.attachments ?? [];
+  const userImages = userAttachments.filter(
+    (attachment): attachment is Extract<(typeof userAttachments)[number], { type: "image" }> =>
+      attachment.type === "image",
+  );
   const displayedUserMessage = deriveDisplayedUserMessageState(row.message.text);
   const terminalContexts = displayedUserMessage.contexts;
   const canRevertAgentWork = typeof row.revertTurnCount === "number";
@@ -344,37 +348,56 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   return (
     <div className="flex justify-end">
       <div className="group relative max-w-[80%] rounded-2xl rounded-br-sm border border-border bg-secondary px-4 py-3">
-        {userImages.length > 0 && (
-          <div className="mb-2 grid max-w-[420px] grid-cols-2 gap-2">
-            {userImages.map((image: NonNullable<TimelineMessage["attachments"]>[number]) => (
-              <div
-                key={image.id}
-                className="overflow-hidden rounded-lg border border-border/80 bg-background/70"
-              >
-                {image.previewUrl ? (
-                  <button
-                    type="button"
-                    className="h-full w-full cursor-zoom-in"
-                    aria-label={`Preview ${image.name}`}
-                    onClick={() => {
-                      const preview = buildExpandedImagePreview(userImages, image.id);
-                      if (!preview) return;
-                      ctx.onImageExpand(preview);
-                    }}
+        {userAttachments.length > 0 && (
+          <div className="mb-2 space-y-2">
+            {userImages.length > 0 ? (
+              <div className="grid max-w-[420px] grid-cols-2 gap-2">
+                {userImages.map((image) => (
+                  <div
+                    key={image.id}
+                    className="overflow-hidden rounded-lg border border-border/80 bg-background/70"
                   >
-                    <img
-                      src={image.previewUrl}
-                      alt={image.name}
-                      className="block h-auto max-h-[220px] w-full object-cover"
-                    />
-                  </button>
-                ) : (
-                  <div className="flex min-h-[72px] items-center justify-center px-2 py-3 text-center text-[11px] text-muted-foreground/70">
-                    {image.name}
+                    {image.previewUrl ? (
+                      <button
+                        type="button"
+                        className="h-full w-full cursor-zoom-in"
+                        aria-label={`Preview ${image.name}`}
+                        onClick={() => {
+                          const preview = buildExpandedImagePreview(userImages, image.id);
+                          if (!preview) return;
+                          ctx.onImageExpand(preview);
+                        }}
+                      >
+                        <img
+                          src={image.previewUrl}
+                          alt={image.name}
+                          className="block h-auto max-h-[220px] w-full object-cover"
+                        />
+                      </button>
+                    ) : (
+                      <div className="flex min-h-[72px] items-center justify-center px-2 py-3 text-center text-[11px] text-muted-foreground/70">
+                        {image.name}
+                      </div>
+                    )}
                   </div>
-                )}
+                ))}
               </div>
-            ))}
+            ) : null}
+            {userAttachments.some((attachment) => attachment.type === "file") ? (
+              <div className="flex max-w-[420px] flex-col gap-1">
+                {userAttachments
+                  .filter((attachment) => attachment.type === "file")
+                  .map((attachment) => (
+                    <div
+                      key={attachment.id}
+                      className="rounded-lg border border-border/80 bg-background/70 px-3 py-2 text-xs"
+                    >
+                      <div className="truncate font-medium text-foreground/90">{attachment.name}</div>
+                      <div className="truncate text-muted-foreground/70">{attachment.mimeType}</div>
+                    </div>
+                  ))}
+              </div>
+            ) : null}
           </div>
         )}
         <CollapsibleUserMessageBody

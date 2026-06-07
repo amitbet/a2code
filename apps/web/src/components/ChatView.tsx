@@ -2867,7 +2867,7 @@ export default function ChatView(props: ChatViewProps) {
       hasSendableContent,
     } = deriveComposerSendState({
       prompt: promptForSend,
-      imageCount: composerImages.length,
+      attachmentCount: composerImages.length,
       terminalContexts: composerTerminalContexts,
     });
     if (showPlanFollowUpPrompt && activeProposedPlan) {
@@ -2948,21 +2948,31 @@ export default function ChatView(props: ChatViewProps) {
     });
     const turnAttachmentsPromise = Promise.all(
       composerImagesSnapshot.map(async (image) => ({
-        type: "image" as const,
+        type: image.type,
         name: image.name,
         mimeType: image.mimeType,
         sizeBytes: image.sizeBytes,
         dataUrl: await readFileAsDataUrl(image.file),
       })),
     );
-    const optimisticAttachments = composerImagesSnapshot.map((image) => ({
-      type: "image" as const,
-      id: image.id,
-      name: image.name,
-      mimeType: image.mimeType,
-      sizeBytes: image.sizeBytes,
-      previewUrl: image.previewUrl,
-    }));
+    const optimisticAttachments = composerImagesSnapshot.map((image) =>
+      image.type === "image"
+        ? {
+            type: "image" as const,
+            id: image.id,
+            name: image.name,
+            mimeType: image.mimeType,
+            sizeBytes: image.sizeBytes,
+            previewUrl: image.previewUrl,
+          }
+        : {
+            type: "file" as const,
+            id: image.id,
+            name: image.name,
+            mimeType: image.mimeType,
+            sizeBytes: image.sizeBytes,
+          },
+    );
     // Scroll to the current end *before* adding the optimistic message.
     // This sets LegendList's internal isAtEnd=true so maintainScrollAtEnd
     // automatically pins to the new item when the data changes.
