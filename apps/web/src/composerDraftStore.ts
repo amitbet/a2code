@@ -1888,14 +1888,14 @@ function hydrateImagesFromPersisted(
 
     if (attachment.mimeType.startsWith("image/")) {
       hydrated.push({
-          type: "image" as const,
-          id: attachment.id,
-          name: attachment.name,
-          mimeType: attachment.mimeType,
-          sizeBytes: attachment.sizeBytes,
-          previewUrl: attachment.dataUrl,
-          file,
-        });
+        type: "image" as const,
+        id: attachment.id,
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+        sizeBytes: attachment.sizeBytes,
+        previewUrl: attachment.dataUrl,
+        file,
+      });
       continue;
     }
 
