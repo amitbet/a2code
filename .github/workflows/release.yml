@@ -375,7 +375,9 @@ jobs:
           if [ ! -x "$SDKMANAGER" ]; then
             SDKMANAGER="${ANDROID_SDK_ROOT}/cmdline-tools/bin/sdkmanager"
           fi
-          yes | "$SDKMANAGER" --licenses >/dev/null
+          # `yes` gets SIGPIPE once sdkmanager stops reading; swallow its
+          # broken-pipe exit so pipefail doesn't fail an otherwise-OK step.
+          ( yes 2>/dev/null || true ) | "$SDKMANAGER" --licenses >/dev/null
 
       - name: Build Android preview debug APK
         continue-on-error: true
