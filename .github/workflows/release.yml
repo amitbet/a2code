@@ -382,7 +382,13 @@ jobs:
       - name: Build Android preview debug APK
         continue-on-error: true
         shell: bash
-        run: vp run --filter @t3tools/mobile build:android:ci
+        run: |
+          # `vp run` doesn't execute the script's `&& cd && ./gradlew` chain as
+          # a shell, so run prebuild (single command, works) via vp, then drive
+          # Gradle from bash where cd/./gradlew behave normally.
+          vp run --filter @t3tools/mobile prebuild:android:ci
+          cd apps/mobile/android
+          ./gradlew assembleDebug
 
       - id: apk_meta
         name: Detect Android APK output
@@ -395,6 +401,7 @@ jobs:
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Android APK missing::Build Android preview debug APK produced no .apk (build:android:ci likely failed); the Append Android preview APK job will be skipped."
           fi
 
       - name: Upload Android APK
