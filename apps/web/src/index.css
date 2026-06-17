@@ -129,6 +129,18 @@
   padding-right: max(env(safe-area-inset-right), 0px);
 }
 
+/* In-chat find (Cmd/Ctrl+F) highlights, painted via the CSS Custom Highlight
+   API by useChatSearchHighlight. `chat-search` marks every visible match;
+   `chat-search-active` marks the currently focused one. */
+::highlight(chat-search) {
+  background-color: color-mix(in srgb, var(--warning) 38%, transparent);
+  color: var(--foreground);
+}
+::highlight(chat-search-active) {
+  background-color: var(--warning);
+  color: var(--color-neutral-900);
+}
+
 /* Suppress all transitions during theme changes */
 .no-transitions,
 .no-transitions *,

@@ -779,7 +779,7 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       protocols: [
         {
           name: "A2 Code",
-          schemes: ["a2code"],
+          schemes: ["t3code"],
         },
       ],
     };

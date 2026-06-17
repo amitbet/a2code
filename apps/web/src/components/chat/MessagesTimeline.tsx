@@ -75,6 +75,9 @@ import {
   type TimelineLatestTurn,
 } from "./MessagesTimeline.logic";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
+import { ChatSearchBar } from "./ChatSearchBar";
+import { clampActiveIndex, computeChatSearchOccurrences } from "./chatSearch";
+import { useChatSearchHighlight } from "./useChatSearchHighlight";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   deriveDisplayedUserMessageState,
@@ -285,6 +288,98 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   );
   const rows = useStableRows(rawRows);
 
+  // --- In-chat find (Cmd/Ctrl+F) ---------------------------------------------
+  // The list is virtualized, so the browser's native find only sees mounted
+  // rows. We search the row data model, scroll each match into view, and paint
+  // highlights over whatever is currently rendered.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeMatchIndex, setActiveMatchIndex] = useState(0);
+  const [searchFocusNonce, setSearchFocusNonce] = useState(0);
+
+  const searchResult = useMemo(
+    () => computeChatSearchOccurrences(rows, searchQuery),
+    [rows, searchQuery],
+  );
+  const matchCount = searchResult.occurrences.length;
+  const clampedActiveIndex = clampActiveIndex(matchCount, activeMatchIndex);
+  const activeOccurrence =
+    clampedActiveIndex >= 0 ? (searchResult.occurrences[clampedActiveIndex] ?? null) : null;
+
+  // Reset to the first match whenever the query changes.
+  useEffect(() => {
+    setActiveMatchIndex(0);
+  }, [searchQuery]);
+
+  // Keep the stored index inside the (possibly shrunken) match range.
+  useEffect(() => {
+    if (clampedActiveIndex >= 0 && clampedActiveIndex !== activeMatchIndex) {
+      setActiveMatchIndex(clampedActiveIndex);
+    }
+  }, [clampedActiveIndex, activeMatchIndex]);
+
+  const goToNextMatch = useCallback(() => {
+    if (matchCount === 0) return;
+    setActiveMatchIndex((current) => (clampActiveIndex(matchCount, current) + 1) % matchCount);
+  }, [matchCount]);
+  const goToPreviousMatch = useCallback(() => {
+    if (matchCount === 0) return;
+    setActiveMatchIndex(
+      (current) => (clampActiveIndex(matchCount, current) - 1 + matchCount) % matchCount,
+    );
+  }, [matchCount]);
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+  }, []);
+
+  useEffect(() => {
+    const handler = (event: globalThis.KeyboardEvent) => {
+      const isFind =
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        (event.key === "f" || event.key === "F");
+      if (!isFind) return;
+      event.preventDefault();
+      event.stopPropagation();
+      setSearchOpen(true);
+      setSearchFocusNonce((nonce) => nonce + 1);
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, []);
+
+  // Scroll the row holding the active match into view. Gated on the match's
+  // identity so streaming row updates don't yank the view away mid-read.
+  const lastScrolledMatchRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!searchOpen || !activeOccurrence) {
+      lastScrolledMatchRef.current = null;
+      return;
+    }
+    const matchKey = `${activeOccurrence.rowId}#${activeOccurrence.ordinalInRow}`;
+    if (lastScrolledMatchRef.current === matchKey) return;
+    lastScrolledMatchRef.current = matchKey;
+    void listRef.current?.scrollToIndex?.({
+      index: activeOccurrence.rowIndex,
+      viewPosition: 0.35,
+      animated: true,
+    });
+  }, [searchOpen, activeOccurrence, listRef]);
+
+  const getSearchScroller = useCallback((): HTMLElement | null => {
+    const native = listRef.current?.getNativeScrollRef?.() as unknown;
+    return native instanceof HTMLElement ? native : null;
+  }, [listRef]);
+
+  useChatSearchHighlight({
+    enabled: searchOpen,
+    query: searchQuery,
+    active: activeOccurrence
+      ? { rowId: activeOccurrence.rowId, ordinalInRow: activeOccurrence.ordinalInRow }
+      : null,
+    getScroller: getSearchScroller,
+  });
+
   const handleScroll = useCallback(() => {
     const state = listRef.current?.getState?.();
     if (state) {
@@ -359,36 +454,55 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     [],
   );
 
+  const searchBar = searchOpen ? (
+    <ChatSearchBar
+      query={searchQuery}
+      matchCount={matchCount}
+      activeIndex={clampedActiveIndex}
+      focusNonce={searchFocusNonce}
+      onQueryChange={setSearchQuery}
+      onNext={goToNextMatch}
+      onPrevious={goToPreviousMatch}
+      onClose={closeSearch}
+    />
+  ) : null;
+
   if (rows.length === 0 && !isWorking) {
     return (
-      <div className="flex h-full items-center justify-center">
-        <p className="text-sm text-muted-foreground/30">
-          Send a message to start the conversation.
-        </p>
-      </div>
+      <>
+        {searchBar}
+        <div className="flex h-full items-center justify-center">
+          <p className="text-sm text-muted-foreground/30">
+            Send a message to start the conversation.
+          </p>
+        </div>
+      </>
     );
   }
 
   return (
-    <TimelineRowCtx value={sharedState}>
-      <TimelineRowActivityCtx value={activityState}>
-        <LegendList<MessagesTimelineRow>
-          ref={listRef}
-          data={rows}
-          keyExtractor={keyExtractor}
-          renderItem={renderItem}
-          estimatedItemSize={90}
-          initialScrollAtEnd
-          maintainScrollAtEnd={!foldToggleSettling}
-          maintainScrollAtEndThreshold={0.1}
-          maintainVisibleContentPosition
-          onScroll={handleScroll}
-          className="scrollbar-gutter-both h-full overflow-x-hidden overscroll-y-contain px-3 sm:px-5"
-          ListHeaderComponent={TIMELINE_LIST_HEADER}
-          ListFooterComponent={TIMELINE_LIST_FOOTER}
-        />
-      </TimelineRowActivityCtx>
-    </TimelineRowCtx>
+    <>
+      {searchBar}
+      <TimelineRowCtx value={sharedState}>
+        <TimelineRowActivityCtx value={activityState}>
+          <LegendList<MessagesTimelineRow>
+            ref={listRef}
+            data={rows}
+            keyExtractor={keyExtractor}
+            renderItem={renderItem}
+            estimatedItemSize={90}
+            initialScrollAtEnd
+            maintainScrollAtEnd={!foldToggleSettling}
+            maintainScrollAtEndThreshold={0.1}
+            maintainVisibleContentPosition
+            onScroll={handleScroll}
+            className="scrollbar-gutter-both h-full overflow-x-hidden overscroll-y-contain px-3 sm:px-5"
+            ListHeaderComponent={TIMELINE_LIST_HEADER}
+            ListFooterComponent={TIMELINE_LIST_FOOTER}
+          />
+        </TimelineRowActivityCtx>
+      </TimelineRowCtx>
+    </>
   );
 });
 

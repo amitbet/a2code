@@ -30,7 +30,7 @@ export const APP_DISPLAY_NAME = isDevelopment ? "A2 Code (Dev)" : "A2 Code";
 export const APP_BUNDLE_ID = isDevelopment
   ? `com.amitbet.a2code.dev.${devBundleIdSuffix || "local"}`
   : "com.amitbet.a2code";
-const APP_PROTOCOL_SCHEMES = isDevelopment ? ["a2code-dev"] : ["a2code"];
+const APP_PROTOCOL_SCHEMES = isDevelopment ? ["t3code-dev"] : ["t3code"];
 const LAUNCHER_VERSION = 11;
 const defaultIconPath = join(desktopDir, "resources", "icon.icns");
 const developmentMacIconPngPath = join(repoRoot, "assets", "dev", "blueprint-macos-1024.png");
@@ -119,7 +119,7 @@ function writeDevelopmentLauncherScript(targetBinaryPath, electronBinaryPath) {
       ...envEntries.map(([name, value]) => `export ${name}=${shellSingleQuote(value)}`),
       'for arg in "$@"; do',
       '  case "$arg" in',
-      "    a2code-dev://auth/callback*)",
+      "    t3code-dev://auth/callback*)",
       '      if [ -n "$T3CODE_DESKTOP_PROTOCOL_CALLBACK_URL" ]; then',
       '        /usr/bin/curl -fsS --max-time 2 -X POST --data-binary "$arg" "$T3CODE_DESKTOP_PROTOCOL_CALLBACK_URL" >/dev/null 2>&1 && exit 0',
       "      fi",
