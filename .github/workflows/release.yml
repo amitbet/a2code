@@ -333,6 +333,76 @@ jobs:
           path: release-publish/*
           if-no-files-found: error
 
+  build_android_preview_apk:
+    name: Build Android preview APK
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+    outputs:
+      apk_exists: ${{ steps.apk_meta.outputs.exists }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+          fetch-depth: 0
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Align package versions to release version
+        run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
+
+      - name: Accept Android SDK licenses
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDKMANAGER="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="${ANDROID_SDK_ROOT}/cmdline-tools/bin/sdkmanager"
+          fi
+          yes | "$SDKMANAGER" --licenses >/dev/null
+
+      - name: Build Android preview debug APK
+        continue-on-error: true
+        shell: bash
+        run: vp run --filter @t3tools/mobile build:android:ci
+
+      - id: apk_meta
+        name: Detect Android APK output
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          shopt -s nullglob
+          files=(apps/mobile/android/app/build/outputs/apk/debug/*.apk)
+          if (( ${#files[@]} > 0 )); then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload Android APK
+        if: ${{ steps.apk_meta.outputs.exists == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: mobile-android-preview-debug-apk
+          path: apps/mobile/android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
   release:
     if: |
       !failure() && !cancelled() &&
@@ -496,4 +566,33 @@ jobs:
             release-assets/*.exe
             release-assets/*.blockmap
             release-assets/*.yml
+          fail_on_unmatched_files: false
+
+  append_android_preview_apk:
+    if: |
+      !failure() && !cancelled() &&
+      needs.preflight.result == 'success' &&
+      needs.release.result == 'success' &&
+      needs.build_android_preview_apk.outputs.apk_exists == 'true'
+    name: Append Android preview APK
+    needs:
+      - preflight
+      - release
+      - build_android_preview_apk
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Download Android APK
+        uses: actions/download-artifact@v8
+        with:
+          name: mobile-android-preview-debug-apk
+          path: release-assets
+
+      - name: Upload Android APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          target_commitish: ${{ needs.preflight.outputs.ref }}
+          files: |
+            release-assets/*.apk
           fail_on_unmatched_files: false
