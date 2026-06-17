@@ -146,6 +146,12 @@ const config: ExpoConfig = {
             displayName: "Agent Activity",
             description: "Shows the current state of active T3 Code agents.",
             supportedFamilies: ["systemSmall", "systemMedium", "accessoryRectangular"],
+            // iOS-only widget. expo-widgets 56.0.15+ writes Android widget string
+            // resources to res/xml/ instead of res/values/, so the generated
+            // AndroidManifest's `@string/agent_activity_display_name` fails AAPT
+            // resource linking and breaks the Android build. `android: null` opts
+            // this widget out of Android entirely (the families above are iOS).
+            android: null,
           },
         ],
       },
