@@ -32,34 +32,82 @@ merging `upstream/main`.
   the raw row text (message bodies, proposed-plan markdown, work-log
   labels/commands/details, fold labels).
 
-### Thread branching (`/branch` + context menu)
+### Thread forking (`/fork` + context menu)
 
-- Planned fork feature: create a new thread from the current thread while
-  preserving prior conversational context, without introducing worktree
-  isolation or a subthread runtime model in V1.
-- Intended entry points:
-  - a built-in composer slash command: `/branch`
-  - a sidebar thread context-menu action: `Branch thread`
-- Design choice: do not treat existing `chat.new` behavior as sufficient.
-  Reason: `chat.new` preserves branch/worktree selection, but it does not
-  preserve provider conversation context.
-- Design choice: do not make provider-native fork support the primary V1 path.
-  Reason: Codex app-server exposes `thread/fork`, but the generic provider
-  adapter contract does not. A provider-native implementation would either
-  become Codex-only or force a wider provider abstraction change.
-- Current implementation direction:
-  - extend `thread.create` so a new thread can be seeded with copied messages
-  - add a one-time provider context bootstrap string on the new thread
-  - render copied history immediately in the branched thread
-  - inject the bootstrap into the first real provider send for that new thread
-  - clear the bootstrap after first use so the thread behaves normally
-- Reason for copied messages + bootstrap:
-  Reason: copied messages preserve visible history for the user, while the
-  bootstrap ensures the provider actually receives inherited context on the
-  first turn.
-- Reason for avoiding subthreads / side-runs in V1:
-  Reason: the current architecture is thread-centric, and nested runtime
-  lifecycles would be much more invasive than the UX requires.
+- Creates a new thread that inherits the source thread's provider conversation
+  context, staying in the **same git environment** (same project, model, runtime
+  mode, branch, worktree — no new worktree, no subthread runtime model).
+- Entry points (both fork-added):
+  - sidebar thread context-menu action: **`Fork thread`**
+  - composer slash command: **`/fork`** (only offered on a started server
+    thread, not on a draft — a draft has no context to fork)
+- **Implementation approach actually taken (supersedes the earlier "copied
+  messages + bootstrap" plan that was sketched here):** the fork rides the
+  existing provider resume-cursor plumbing and calls the Codex app-server's
+  native **`thread/fork`** RPC on the new thread's first session start, instead
+  of `thread/start`. The cursor carries `{ threadId: <source conversation id>,
+  fork: true }`; the runtime forks the source conversation into a brand-new
+  backend thread, then stores a normal resume cursor so subsequent starts just
+  resume. Fork happens exactly once (only when the new thread has no cursor of
+  its own yet).
+  - Reason for choosing provider-native fork over copied-messages+bootstrap:
+    it reuses machinery that already flows end-to-end (resume cursor →
+    `ProviderService.startSession` → `CodexAdapter` → `CodexSessionRuntime`),
+    so it touches far less surface and needs no synthetic bootstrap turn.
+  - Consequence / scope limit: this is **Codex-only**. The generic provider
+    adapter contract has no cross-provider fork. For a non-Codex source the
+    fork cursor's `{ threadId }` shape won't match that adapter's resume state,
+    so it degrades to a fresh (empty-context) thread rather than erroring.
+- **Known open item (verify at runtime):** the agent's context is forked, but
+  the orchestration-level message history (the visible transcript) is a separate
+  projection and is **not** copied by this change. Whether the prior messages
+  render in the new thread depends on whether `ProviderRuntimeIngestion` replays
+  the `thread/fork` response's historical turns (same situation as
+  `thread/resume`). If a forked thread looks empty but the agent clearly retains
+  context, the fix lives in `ProviderRuntimeIngestion`.
+- Files:
+  - `packages/contracts/src/orchestration.ts` — **modified**: `ThreadForkCommand`
+    (`thread.fork`: new `threadId`, `sourceThreadId`, `title`), added to both
+    command unions; `forkedFromId` added to `OrchestrationThread` (optional) and
+    `ThreadCreatedPayload` (optional).
+  - `packages/contracts/src/provider.ts` — **modified**: `forkFromThreadId` on
+    `ProviderSessionStartInput`.
+  - `apps/server/src/orchestration/decider.ts` — **modified**: `thread.fork`
+    case validates source exists / new absent, copies source metadata, and
+    emits a `thread.created` event tagged with `forkedFromId` (no new event
+    type — reuses `thread.created`).
+  - `apps/server/src/orchestration/projector.ts` — **modified**: carries
+    `forkedFromId` into the read model (only when set).
+  - `apps/server/src/orchestration/Layers/ProjectionPipeline.ts` — **modified**:
+    `thread.created` upsert writes `forkedFromId`.
+  - `apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts` —
+    **modified**: selects `forked_from_id` in the four full-row thread queries
+    and surfaces it in the thread-detail builder (the shell builder does **not**
+    carry it).
+  - `apps/server/src/persistence/Services/ProjectionThreads.ts` +
+    `Layers/ProjectionThreads.ts` — **modified**: `forkedFromId` field +
+    `forked_from_id` column in INSERT / ON CONFLICT / SELECTs.
+  - `apps/server/src/persistence/Migrations/033_ProjectionThreadsForkedFrom.ts` —
+    fork-added migration (adds `forked_from_id` to `projection_threads`);
+    registered in `apps/server/src/persistence/Migrations.ts` as id `33`.
+  - `apps/server/src/provider/Layers/ProviderService.ts` — **modified**: on
+    `startSession`, when the thread has no cursor yet and `forkFromThreadId` is
+    set, resolves the source thread's persisted conversation id and builds the
+    `{ threadId, fork: true }` cursor (`readResumeCursorThreadId` helper).
+  - `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts` —
+    **modified**: passes `forkFromThreadId` on the first session start when the
+    thread has `forkedFromId`.
+  - `apps/server/src/provider/Layers/CodexSessionRuntime.ts` — **modified**:
+    `CodexResumeCursorSchema` gains optional `fork`; `openCodexThread` adds a
+    `thread/fork` branch; `CodexThreadOpenMethod`/`CodexThreadOpenResponse`
+    include `thread/fork`; `readForkCursorThreadId` helper.
+  - `apps/web/src/hooks/useThreadActions.ts` — **modified**: `forkThread` action
+    (dispatch `thread.fork`, wait for the new thread to project, navigate).
+  - `apps/web/src/components/Sidebar.tsx` — **modified**: `Fork thread` menu
+    item + threads `forkThread` through the sidebar prop chain.
+  - `apps/web/src/components/chat/ChatComposer.tsx` +
+    `apps/web/src/composer-logic.ts` — **modified**: `/fork` slash command
+    (`"fork"` added to `ComposerSlashCommand`) and its handler.
 
 ### Live provider quota meter (5h / weekly bars + Claude spend bar)
 
@@ -143,21 +191,33 @@ merging `upstream/main`.
   "In-chat find" feature above) when resolving, re-applying it on top of any
   upstream structural refactor.
 
-### Thread branching orchestration
+### Thread forking orchestration
 
-- Expected conflict area:
-  - `packages/contracts/src/orchestration.ts`
-  - `apps/server/src/orchestration/decider.ts`
+- Expected conflict area (see the "Thread forking" feature above for the full
+  file list and per-file detail):
+  - `packages/contracts/src/orchestration.ts` (command unions + `forkedFromId`)
+  - `apps/server/src/orchestration/decider.ts` (`thread.fork` case)
   - `apps/server/src/orchestration/projector.ts`
-  - `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts`
-  - `apps/web/src/components/Sidebar.tsx`
-  - `apps/web/src/components/chat/ChatComposer.tsx`
-  - shared thread-creation helpers in `apps/web/src`
-- Fork-specific concern: the branch flow needs both visible copied history and
-  a one-time provider bootstrap so the new thread starts with inherited context.
-- When merging upstream thread/session refactors, preserve that two-part model
-  unless the provider adapter contract gains a first-class cross-provider fork
-  API.
+  - `apps/server/src/orchestration/Layers/{ProjectionPipeline,ProjectionSnapshotQuery,ProviderCommandReactor}.ts`
+  - `apps/server/src/persistence/{Services,Layers}/ProjectionThreads.ts` +
+    `Migrations.ts` (migration registry)
+  - `apps/server/src/provider/Layers/{ProviderService,CodexSessionRuntime}.ts`
+  - `apps/web/src/components/Sidebar.tsx`,
+    `apps/web/src/components/chat/ChatComposer.tsx`,
+    `apps/web/src/composer-logic.ts`, `apps/web/src/hooks/useThreadActions.ts`
+- Fork-specific concern: the flow hangs off the provider **resume-cursor**
+  path and the Codex `thread/fork` RPC. When merging upstream session/provider
+  refactors, the cursor must keep flowing
+  `ProviderService.startSession → CodexAdapter → CodexSessionRuntime`, and
+  `openCodexThread` must keep the `fork` branch ahead of the `start`/`resume`
+  branches. The fork must remain one-shot (only when the new thread has no
+  cursor of its own).
+- Migration seam: `033_ProjectionThreadsForkedFrom` is fork-added. If upstream
+  adds its own migration `33`, renumber ours to the next free id (and update
+  `Migrations.ts`). The migration is idempotent (guards on `PRAGMA
+  table_info`), so re-running after a renumber is safe.
+- If the provider adapter contract ever gains a first-class cross-provider fork
+  API, this Codex-only cursor hack can be replaced by it.
 
 ## Merge checklist
 
