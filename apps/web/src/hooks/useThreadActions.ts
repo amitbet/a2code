@@ -9,7 +9,7 @@ import { useNewThreadHandler } from "./useHandleNewThread";
 import { ensureEnvironmentApi, readEnvironmentApi } from "../environmentApi";
 import { invalidateSourceControlState } from "../lib/sourceControlActions";
 import { refreshArchivedThreadsForEnvironment } from "../lib/archivedThreadsState";
-import { newCommandId } from "../lib/utils";
+import { newCommandId, newThreadId } from "../lib/utils";
 import { readLocalApi } from "../localApi";
 import {
   selectProjectByRef,
@@ -22,6 +22,35 @@ import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { useSettings } from "./useSettings";
+
+/**
+ * Resolve once the forked thread has been projected into the local store, so we
+ * can navigate to its route without landing on a missing-thread screen.
+ */
+async function waitForServerThread(target: ScopedThreadRef, timeoutMs = 2_000): Promise<boolean> {
+  if (selectThreadByRef(useStore.getState(), target)) {
+    return true;
+  }
+  return await new Promise<boolean>((resolve) => {
+    let settled = false;
+    const finish = (result: boolean) => {
+      if (settled) return;
+      settled = true;
+      globalThis.clearTimeout(timeoutId);
+      unsubscribe();
+      resolve(result);
+    };
+    const unsubscribe = useStore.subscribe((state) => {
+      if (selectThreadByRef(state, target)) {
+        finish(true);
+      }
+    });
+    const timeoutId = globalThis.setTimeout(() => finish(false), timeoutMs);
+    if (selectThreadByRef(useStore.getState(), target)) {
+      finish(true);
+    }
+  });
+}
 
 export function useThreadActions() {
   const sidebarThreadSortOrder = useSettings((settings) => settings.sidebarThreadSortOrder);
@@ -258,6 +287,32 @@ export function useThreadActions() {
     ],
   );
 
+  const forkThread = useCallback(
+    async (target: ScopedThreadRef) => {
+      const api = readEnvironmentApi(target.environmentId);
+      if (!api) return;
+      const resolved = resolveThreadTarget(target);
+      if (!resolved) return;
+      const { thread } = resolved;
+      const forkThreadId = newThreadId();
+      await api.orchestration.dispatchCommand({
+        type: "thread.fork",
+        commandId: newCommandId(),
+        threadId: forkThreadId,
+        sourceThreadId: thread.id,
+        title: `${thread.title} (fork)`,
+        createdAt: new Date().toISOString(),
+      });
+      const forkRef = scopeThreadRef(target.environmentId, forkThreadId);
+      await waitForServerThread(forkRef);
+      await router.navigate({
+        to: "/$environmentId/$threadId",
+        params: buildThreadRouteParams(forkRef),
+      });
+    },
+    [resolveThreadTarget, router],
+  );
+
   const confirmAndDeleteThread = useCallback(
     async (target: ScopedThreadRef) => {
       const api = readEnvironmentApi(target.environmentId);
@@ -288,5 +343,6 @@ export function useThreadActions() {
     unarchiveThread,
     deleteThread,
     confirmAndDeleteThread,
+    forkThread,
   };
 }

@@ -69,6 +69,9 @@ export function hasConfiguredMcpServer(appServerArgs: ReadonlyArray<string> | un
 
 export const CodexResumeCursorSchema = Schema.Struct({
   threadId: Schema.String,
+  // When true, `threadId` identifies a SOURCE conversation to fork from on the
+  // next start (copy its context into a fresh thread) rather than resume.
+  fork: Schema.optional(Schema.Boolean),
 });
 const CodexUserInputAnswerObject = Schema.Struct({
   answers: Schema.Array(Schema.String),
@@ -264,6 +267,16 @@ function readResumeCursorThreadId(
   return isCodexResumeCursorSchema(resumeCursor) ? resumeCursor.threadId : undefined;
 }
 
+// When the cursor carries `fork: true`, its `threadId` is a SOURCE conversation
+// to fork from rather than a thread to resume.
+function readForkCursorThreadId(
+  resumeCursor: ProviderSession["resumeCursor"],
+): string | undefined {
+  return isCodexResumeCursorSchema(resumeCursor) && resumeCursor.fork === true
+    ? resumeCursor.threadId
+    : undefined;
+}
+
 function runtimeModeToThreadConfig(input: RuntimeMode): {
   readonly approvalPolicy: EffectCodexSchema.V2ThreadStartParams__AskForApproval;
   readonly sandbox: EffectCodexSchema.V2ThreadStartParams__SandboxMode;
@@ -424,9 +437,10 @@ export function isRecoverableThreadResumeError(error: unknown): boolean {
 
 type CodexThreadOpenResponse =
   | CodexRpc.ClientRequestResponsesByMethod["thread/start"]
-  | CodexRpc.ClientRequestResponsesByMethod["thread/resume"];
+  | CodexRpc.ClientRequestResponsesByMethod["thread/resume"]
+  | CodexRpc.ClientRequestResponsesByMethod["thread/fork"];
 
-type CodexThreadOpenMethod = "thread/start" | "thread/resume";
+type CodexThreadOpenMethod = "thread/start" | "thread/resume" | "thread/fork";
 
 interface CodexThreadOpenClient {
   readonly request: <M extends CodexThreadOpenMethod>(
@@ -443,6 +457,7 @@ export const openCodexThread = (input: {
   readonly requestedModel: string | undefined;
   readonly serviceTier: CodexServiceTier | undefined;
   readonly resumeThreadId: string | undefined;
+  readonly forkFromThreadId: string | undefined;
 }): Effect.Effect<CodexThreadOpenResponse, CodexErrors.CodexAppServerError> => {
   const resumeThreadId = input.resumeThreadId;
   const startParams = buildThreadStartParams({
@@ -451,6 +466,22 @@ export const openCodexThread = (input: {
     model: input.requestedModel,
     serviceTier: input.serviceTier,
   });
+
+  // Fork the source conversation into a brand-new thread, copying its context.
+  // `threadId` here identifies the SOURCE thread to fork from. Fork params are a
+  // near-subset of start params; pick the shared fields explicitly rather than
+  // spreading (their optional fields differ, e.g. `ephemeral`).
+  if (input.forkFromThreadId !== undefined) {
+    const forkConfig = runtimeModeToThreadConfig(input.runtimeMode);
+    return input.client.request("thread/fork", {
+      threadId: input.forkFromThreadId,
+      cwd: input.cwd,
+      approvalPolicy: forkConfig.approvalPolicy,
+      sandbox: forkConfig.sandbox,
+      ...(input.requestedModel ? { model: input.requestedModel } : {}),
+      ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
+    });
+  }
 
   if (resumeThreadId === undefined) {
     return input.client.request("thread/start", startParams);
@@ -1207,6 +1238,7 @@ export const makeCodexSessionRuntime = (
 
       const requestedModel = normalizeCodexModelSlug(options.model);
 
+      const forkFromThreadId = readForkCursorThreadId(options.resumeCursor);
       const opened = yield* openCodexThread({
         client,
         threadId: options.threadId,
@@ -1214,7 +1246,11 @@ export const makeCodexSessionRuntime = (
         cwd: options.cwd,
         requestedModel,
         serviceTier: options.serviceTier,
-        resumeThreadId: readResumeCursorThreadId(options.resumeCursor),
+        resumeThreadId:
+          forkFromThreadId !== undefined
+            ? undefined
+            : readResumeCursorThreadId(options.resumeCursor),
+        forkFromThreadId,
       });
 
       const providerThreadId = opened.thread.id;

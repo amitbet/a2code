@@ -58,6 +58,9 @@ export const ProviderSessionStartInput = Schema.Struct({
   cwd: Schema.optional(TrimmedNonEmptyString),
   modelSelection: Schema.optional(ModelSelection),
   resumeCursor: Schema.optional(Schema.Unknown),
+  // When set, this session forks the source thread's conversation context
+  // instead of starting empty (resolved to a provider fork on first start).
+  forkFromThreadId: Schema.optional(ThreadId),
   approvalPolicy: Schema.optional(ProviderApprovalPolicy),
   sandboxMode: Schema.optional(ProviderSandboxMode),
   runtimeMode: RuntimeMode,

@@ -199,6 +199,19 @@ const correlateRuntimeEventWithInstance = (
   return { ...event, providerInstanceId: source.instanceId };
 };
 
+/**
+ * Read the provider conversation id from a persisted resume cursor. Provider
+ * runtimes persist cursors as `{ threadId: string }`; used when forking a
+ * thread to locate the source conversation to fork from.
+ */
+const readResumeCursorThreadId = (cursor: unknown): string | undefined => {
+  if (typeof cursor !== "object" || cursor === null || !("threadId" in cursor)) {
+    return undefined;
+  }
+  const value = (cursor as { readonly threadId?: unknown }).threadId;
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+};
+
 const makeProviderService = Effect.fn("makeProviderService")(function* (
   options?: ProviderServiceLiveOptions,
 ) {
@@ -560,11 +573,24 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           );
         }
         const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
-        const effectiveResumeCursor =
+        let effectiveResumeCursor =
           input.resumeCursor ??
           (persistedBinding?.providerInstanceId === resolvedInstanceId
             ? persistedBinding.resumeCursor
             : undefined);
+        // First start of a forked thread: seed the resume cursor from the source
+        // thread's provider conversation so the runtime forks (copies context)
+        // instead of starting empty. Only applies when this thread has no cursor
+        // of its own yet, so a fork happens exactly once.
+        if (effectiveResumeCursor === undefined && input.forkFromThreadId !== undefined) {
+          const sourceBinding = Option.getOrUndefined(
+            yield* directory.getBinding(input.forkFromThreadId),
+          );
+          const sourceConversationId = readResumeCursorThreadId(sourceBinding?.resumeCursor);
+          if (sourceConversationId !== undefined) {
+            effectiveResumeCursor = { threadId: sourceConversationId, fork: true };
+          }
+        }
         const effectiveCwd =
           input.cwd ??
           (persistedBinding?.providerInstanceId === resolvedInstanceId

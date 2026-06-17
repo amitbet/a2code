@@ -474,6 +474,7 @@ const make = Effect.gen(function* () {
     const startProviderSession = (input?: {
       readonly resumeCursor?: unknown;
       readonly provider?: ProviderDriverKind;
+      readonly forkFromThreadId?: ThreadId;
     }) =>
       providerService.startSession(threadId, {
         threadId,
@@ -482,6 +483,9 @@ const make = Effect.gen(function* () {
         ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
         modelSelection: desiredModelSelection,
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
+        ...(input?.forkFromThreadId !== undefined
+          ? { forkFromThreadId: input.forkFromThreadId }
+          : {}),
         runtimeMode: desiredRuntimeMode,
       });
 
@@ -578,7 +582,9 @@ const make = Effect.gen(function* () {
       return restartedSession.threadId;
     }
 
-    const startedSession = yield* startProviderSession(undefined);
+    const startedSession = yield* startProviderSession(
+      thread.forkedFromId ? { forkFromThreadId: thread.forkedFromId } : undefined,
+    );
     yield* bindSessionToThread(startedSession);
     return startedSession.threadId;
   });
