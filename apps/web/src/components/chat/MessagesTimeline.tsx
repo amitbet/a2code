@@ -287,6 +287,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ],
   );
   const rows = useStableRows(rawRows);
+  const timelineHostRef = useRef<HTMLDivElement>(null);
 
   // --- In-chat find (Cmd/Ctrl+F) ---------------------------------------------
   // The list is virtualized, so the browser's native find only sees mounted
@@ -368,7 +369,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
   const getSearchScroller = useCallback((): HTMLElement | null => {
     const native = listRef.current?.getNativeScrollRef?.() as unknown;
-    return native instanceof HTMLElement ? native : null;
+    if (native instanceof HTMLElement) {
+      return native;
+    }
+
+    return (
+      timelineHostRef.current?.querySelector<HTMLElement>("[data-chat-scroll-container='true']") ??
+      timelineHostRef.current?.querySelector<HTMLElement>(".scrollbar-gutter-both") ??
+      null
+    );
   }, [listRef]);
 
   useChatSearchHighlight({
@@ -481,7 +490,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   }
 
   return (
-    <>
+    <div ref={timelineHostRef} className="relative h-full min-h-0">
       {searchBar}
       <TimelineRowCtx value={sharedState}>
         <TimelineRowActivityCtx value={activityState}>
@@ -497,12 +506,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             maintainVisibleContentPosition
             onScroll={handleScroll}
             className="scrollbar-gutter-both h-full overflow-x-hidden overscroll-y-contain px-3 sm:px-5"
+            data-chat-scroll-container="true"
             ListHeaderComponent={TIMELINE_LIST_HEADER}
             ListFooterComponent={TIMELINE_LIST_FOOTER}
           />
         </TimelineRowActivityCtx>
       </TimelineRowCtx>
-    </>
+    </div>
   );
 });
 

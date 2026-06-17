@@ -12,7 +12,7 @@ function asFiniteNumber(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-const WINDOW_KINDS = new Set(["five_hour", "weekly", "overage", "other"]);
+const WINDOW_KINDS = new Set(["five_hour", "weekly", "overage", "spend", "other"]);
 
 function parseWindow(value: unknown): ProviderRateLimitWindow | null {
   const record = asRecord(value);
@@ -50,6 +50,10 @@ export type RateLimitSnapshot = ProviderRateLimitSnapshot & {
   readonly updatedAt: string;
 };
 
+function windowKey(window: ProviderRateLimitWindow): string {
+  return `${window.kind}:${window.label}`;
+}
+
 /**
  * Walk thread activities newest-first and return the most recent normalized
  * rate-limit snapshot, or null if the provider has not reported quota usage.
@@ -57,10 +61,18 @@ export type RateLimitSnapshot = ProviderRateLimitSnapshot & {
 export function deriveLatestRateLimitSnapshot(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): RateLimitSnapshot | null {
+  const windowsByKey = new Map<string, ProviderRateLimitWindow>();
+  let updatedAt: string | null = null;
+  let status: RateLimitSnapshot["status"] | undefined;
+  let planType: string | undefined;
+
   for (let index = activities.length - 1; index >= 0; index -= 1) {
     const activity = activities[index];
     if (!activity || activity.kind !== "account.rate-limits.updated") {
       continue;
+    }
+    if (updatedAt === null) {
+      updatedAt = activity.createdAt;
     }
     const payload = asRecord(activity.payload);
     const snapshot = asRecord(payload?.snapshot);
@@ -71,24 +83,48 @@ export function deriveLatestRateLimitSnapshot(
     const windows = rawWindows
       .map(parseWindow)
       .filter((window): window is ProviderRateLimitWindow => window !== null);
-    if (windows.length === 0) {
-      continue;
+    for (const window of windows) {
+      const key = windowKey(window);
+      if (!windowsByKey.has(key)) {
+        windowsByKey.set(key, window);
+      }
     }
-    const status =
-      snapshot.status === "allowed" ||
-      snapshot.status === "allowed_warning" ||
-      snapshot.status === "rejected"
-        ? snapshot.status
-        : undefined;
-    const planType = typeof snapshot.planType === "string" ? snapshot.planType : undefined;
-    return {
-      windows,
-      ...(status ? { status } : {}),
-      ...(planType ? { planType } : {}),
-      updatedAt: activity.createdAt,
-    };
+    if (
+      status === undefined &&
+      (snapshot.status === "allowed" ||
+        snapshot.status === "allowed_warning" ||
+        snapshot.status === "rejected")
+    ) {
+      status = snapshot.status;
+    }
+    if (planType === undefined && typeof snapshot.planType === "string") {
+      planType = snapshot.planType;
+    }
   }
-  return null;
+
+  const windows = [...windowsByKey.values()];
+  if (updatedAt === null || windows.length === 0) {
+    return null;
+  }
+  return {
+    windows,
+    ...(status ? { status } : {}),
+    ...(planType ? { planType } : {}),
+    updatedAt,
+  };
+}
+
+export function shouldShowRateLimitMeter(
+  snapshot: RateLimitSnapshot | null,
+  isRunning: boolean,
+): boolean {
+  if (!snapshot) {
+    return false;
+  }
+  if (isRunning) {
+    return true;
+  }
+  return snapshot.status === "allowed_warning" || snapshot.status === "rejected";
 }
 
 /** Human-readable countdown to a reset, e.g. "resets in 2h 14m" / "resets in 3d". */

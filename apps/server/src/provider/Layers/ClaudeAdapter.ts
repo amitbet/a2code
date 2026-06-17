@@ -71,6 +71,7 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
+import { fetchClaudeUsageSnapshot } from "./ClaudeUsageApi.ts";
 import {
   getClaudeModelCapabilities,
   isClaudeUltracodeEffort,
@@ -2566,6 +2567,33 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     yield* updateResumeCursor(context);
   });
 
+  // Pull live subscription quota from Claude's /api/oauth/usage endpoint (the
+  // same data Claude Code shows) and emit it as an account.rate-limits.updated
+  // event. This surfaces the 5h/weekly windows AND the spend window
+  // ($used / $limit). Best-effort: any failure (no token / expired /
+  // non-subscriber / network) yields nothing and is swallowed.
+  const refreshClaudeUsage = Effect.fn("refreshClaudeUsage")(function* (
+    context: ClaudeSessionContext,
+  ) {
+    // fetchClaudeUsageSnapshot is best-effort and never fails (returns null on
+    // no token / expired / non-subscriber / network error).
+    const snapshot = yield* fetchClaudeUsageSnapshot(claudeSettings.homePath);
+    if (!snapshot || snapshot.windows.length === 0) {
+      return;
+    }
+    const stamp = yield* makeEventStamp();
+    yield* offerRuntimeEvent({
+      type: "account.rate-limits.updated",
+      eventId: stamp.eventId,
+      provider: PROVIDER,
+      createdAt: stamp.createdAt,
+      threadId: context.session.threadId,
+      ...(context.turnState ? { turnId: asCanonicalTurnId(context.turnState.turnId) } : {}),
+      payload: { snapshot },
+      providerRefs: nativeProviderRefs(context),
+    });
+  });
+
   const handleResultMessage = Effect.fn("handleResultMessage")(function* (
     context: ClaudeSessionContext,
     message: SDKMessage,
@@ -2582,6 +2610,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     yield* completeTurn(context, status, errorMessage, message);
+
+    // Refresh live quota after each turn (detached so it never blocks the turn).
+    yield* Effect.forkDetach(refreshClaudeUsage(context));
   });
 
   const handleSystemMessage = Effect.fn("handleSystemMessage")(function* (
@@ -3631,6 +3662,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           context.streamFiber = undefined;
         }
       });
+
+      // Fetch live subscription quota on session start (best-effort, detached).
+      runFork(refreshClaudeUsage(context));
 
       return {
         ...session,

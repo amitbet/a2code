@@ -61,6 +61,47 @@ merging `upstream/main`.
   Reason: the current architecture is thread-centric, and nested runtime
   lifecycles would be much more invasive than the UX requires.
 
+### Live provider quota meter (5h / weekly bars + Claude spend bar)
+
+- Surfaces provider rate-limit / quota usage in the composer footer as a small
+  meter with progress bars: Claude session (5h), weekly (incl. Opus/Sonnet
+  splits), and a **spend bar** (`$used / $limit`, e.g. `$169.27 / $1,000.00`)
+  for accounts with a monthly extra-usage limit. Codex (GPT) 5h/weekly windows
+  flow through the same meter.
+- This feature has already been silently dropped twice by upstream merges
+  (most recently the 2026-06-17 `upstream/main` merge), because the wiring lives
+  in files upstream rewrites. **When resolving conflicts, re-apply all of the
+  pieces below — losing any one of them makes the bars disappear.**
+- Files:
+  - `apps/server/src/provider/Layers/ClaudeUsageApi.ts` — fork-added. Polls
+    Claude's `/api/oauth/usage` endpoint and normalizes it into a
+    `ProviderRateLimitSnapshot` (`five_hour`, `seven_day[_opus|_sonnet]`, and
+    `spendWindow(extra_usage)` → the `kind: "spend"` window). Resolves the OAuth
+    token like Claude Code (env → `.credentials.json` → macOS keychain).
+  - `apps/server/src/provider/Layers/ClaudeAdapter.ts` — **modified**: imports
+    `fetchClaudeUsageSnapshot`, defines `refreshClaudeUsage(context)` (fetches +
+    emits an `account.rate-limits.updated` event), and calls it in two places:
+    on **session start** (`runFork(refreshClaudeUsage(context))`) and **after
+    each turn** (`yield* Effect.forkDetach(refreshClaudeUsage(context))` right
+    after `completeTurn` in `handleResultMessage`). Without these call sites the
+    snapshot is never emitted and no Claude bars show (Codex still would).
+  - `packages/contracts/src/providerRuntime.ts` — **modified**: the
+    `ProviderRateLimitWindowKind` literal union must include `"spend"`.
+  - `apps/web/src/lib/rateLimits.ts` — **modified**: `WINDOW_KINDS` must include
+    `"spend"`; `deriveLatestRateLimitSnapshot` merges windows across activities;
+    `shouldShowRateLimitMeter` gates visibility.
+  - `apps/web/src/components/chat/RateLimitMeter.tsx` — fork-added. Renders the
+    bars + popover (including the spend `detail` dollar string).
+  - `apps/web/src/components/chat/ChatComposer.tsx` — **modified**: imports
+    `RateLimitMeter` + `deriveLatestRateLimitSnapshot`/`shouldShowRateLimitMeter`,
+    derives `activeRateLimits` via `useMemo`, passes it into
+    `ComposerFooterPrimaryActions`, and renders `<RateLimitMeter>`. This is the
+    wiring upstream merges keep clobbering — re-apply it on top of any upstream
+    composer-footer refactor.
+- Note: the Claude spend window only renders if the usage endpoint returns a
+  numeric `extra_usage.utilization` and `is_enabled !== false` (see
+  `spendWindow()` in `ClaudeUsageApi.ts`).
+
 ## Recurring merge seams
 
 ### Desktop Clerk auth callback

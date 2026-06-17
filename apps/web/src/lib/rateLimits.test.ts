@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { EventId, type OrchestrationThreadActivity } from "@t3tools/contracts";
-import { deriveLatestRateLimitSnapshot, formatRateLimitReset } from "./rateLimits";
+import {
+  deriveLatestRateLimitSnapshot,
+  formatRateLimitReset,
+  shouldShowRateLimitMeter,
+} from "./rateLimits";
 
 function activity(
   partial: Partial<OrchestrationThreadActivity> & { payload: unknown },
@@ -66,6 +70,30 @@ describe("deriveLatestRateLimitSnapshot", () => {
     expect(snapshot?.windows[0]?.usedPercent).toBe(84);
   });
 
+  it("preserves Claude spend windows and detail text", () => {
+    const snapshot = deriveLatestRateLimitSnapshot([
+      activity({
+        payload: {
+          snapshot: {
+            windows: [
+              {
+                kind: "spend",
+                label: "Spend",
+                usedPercent: 17,
+                detail: "$169.27 / $1,000.00",
+              },
+            ],
+            status: "allowed",
+          },
+        },
+      }),
+    ]);
+    expect(snapshot?.windows).toHaveLength(1);
+    expect(snapshot?.windows[0]?.kind).toBe("spend");
+    expect(snapshot?.windows[0]?.detail).toBe("$169.27 / $1,000.00");
+    expect(snapshot?.windows[0]?.usedPercent).toBe(17);
+  });
+
   it("keeps a reset-only window when Claude omits the percentage", () => {
     const snapshot = deriveLatestRateLimitSnapshot([
       activity({
@@ -98,11 +126,65 @@ describe("deriveLatestRateLimitSnapshot", () => {
     expect(snapshot?.windows[0]?.usedPercent).toBe(100);
   });
 
+  it("merges sparse rolling updates with older windows", () => {
+    const snapshot = deriveLatestRateLimitSnapshot([
+      activity({
+        createdAt: "2026-06-03T00:00:00.000Z",
+        payload: {
+          snapshot: {
+            windows: [
+              { kind: "five_hour", label: "5-hour", usedPercent: 42, resetsAt: 1_900_000_000 },
+              { kind: "weekly", label: "Weekly", usedPercent: 80, resetsAt: 1_900_500_000 },
+            ],
+            planType: "max",
+          },
+        },
+      }),
+      activity({
+        createdAt: "2026-06-03T00:05:00.000Z",
+        payload: {
+          snapshot: {
+            windows: [{ kind: "five_hour", label: "5-hour", usedPercent: 55 }],
+            status: "allowed",
+          },
+        },
+      }),
+    ]);
+    expect(snapshot?.updatedAt).toBe("2026-06-03T00:05:00.000Z");
+    expect(snapshot?.status).toBe("allowed");
+    expect(snapshot?.planType).toBe("max");
+    expect(snapshot?.windows).toHaveLength(2);
+    expect(snapshot?.windows[0]?.usedPercent).toBe(55);
+    expect(snapshot?.windows[1]?.label).toBe("Weekly");
+  });
+
   it("skips activities whose snapshot has no usable window", () => {
     const snapshot = deriveLatestRateLimitSnapshot([
       activity({ payload: { snapshot: { windows: [], status: "allowed" } } }),
     ]);
     expect(snapshot).toBeNull();
+  });
+});
+
+describe("shouldShowRateLimitMeter", () => {
+  const baseSnapshot = {
+    updatedAt: "2026-06-03T00:00:00.000Z",
+    windows: [{ kind: "five_hour", label: "5-hour", usedPercent: 42 }] as const,
+  };
+
+  it("hides an allowed snapshot when the thread is idle", () => {
+    expect(shouldShowRateLimitMeter({ ...baseSnapshot, status: "allowed" }, false)).toBe(false);
+  });
+
+  it("shows a snapshot while the thread is running", () => {
+    expect(shouldShowRateLimitMeter({ ...baseSnapshot, status: "allowed" }, true)).toBe(true);
+  });
+
+  it("keeps warning and rejected snapshots visible while idle", () => {
+    expect(shouldShowRateLimitMeter({ ...baseSnapshot, status: "allowed_warning" }, false)).toBe(
+      true,
+    );
+    expect(shouldShowRateLimitMeter({ ...baseSnapshot, status: "rejected" }, false)).toBe(true);
   });
 });
 

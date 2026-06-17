@@ -39,6 +39,53 @@ function buildHighlight(ranges: Range[]): unknown {
   return new HighlightCtor(...ranges);
 }
 
+interface TextSegment {
+  node: Text;
+  start: number;
+  end: number;
+}
+
+function collectTextSegments(root: HTMLElement): { text: string; segments: TextSegment[] } {
+  const segments: TextSegment[] = [];
+  let text = "";
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      return node.textContent && node.textContent.length > 0
+        ? NodeFilter.FILTER_ACCEPT
+        : NodeFilter.FILTER_REJECT;
+    },
+  });
+  let node = walker.nextNode();
+  while (node) {
+    const content = node.textContent ?? "";
+    if (content.length > 0) {
+      const start = text.length;
+      text += content;
+      segments.push({ node: node as Text, start, end: start + content.length });
+    }
+    node = walker.nextNode();
+  }
+  return { text, segments };
+}
+
+function resolveSegmentPosition(
+  segments: ReadonlyArray<TextSegment>,
+  absoluteOffset: number,
+): { node: Text; offset: number } | null {
+  for (const segment of segments) {
+    if (absoluteOffset < segment.end) {
+      return { node: segment.node, offset: absoluteOffset - segment.start };
+    }
+    if (absoluteOffset === segment.end) {
+      return { node: segment.node, offset: segment.node.textContent?.length ?? 0 };
+    }
+  }
+
+  const lastSegment = segments.at(-1);
+  if (!lastSegment) return null;
+  return { node: lastSegment.node, offset: lastSegment.node.textContent?.length ?? 0 };
+}
+
 /** Collects match ranges within `root`, grouped by their owning timeline row. */
 function collectRowRanges(root: HTMLElement, needle: string): Map<string, Range[]> {
   const byRow = new Map<string, Range[]>();
@@ -50,28 +97,21 @@ function collectRowRanges(root: HTMLElement, needle: string): Map<string, Range[
     const rowId = rowElement.dataset.timelineRowId;
     if (!rowId) continue;
     const ranges: Range[] = [];
-    const walker = document.createTreeWalker(rowElement, NodeFilter.SHOW_TEXT, {
-      acceptNode(node) {
-        return node.textContent && node.textContent.trim().length > 0
-          ? NodeFilter.FILTER_ACCEPT
-          : NodeFilter.FILTER_REJECT;
-      },
-    });
-    let node = walker.nextNode();
-    while (node) {
-      const text = node.textContent ?? "";
-      const lowerText = text.toLowerCase();
-      let from = 0;
-      for (;;) {
-        const index = lowerText.indexOf(lowerNeedle, from);
-        if (index === -1) break;
+    const { text, segments } = collectTextSegments(rowElement);
+    const lowerText = text.toLowerCase();
+    let from = 0;
+    for (;;) {
+      const index = lowerText.indexOf(lowerNeedle, from);
+      if (index === -1) break;
+      const start = resolveSegmentPosition(segments, index);
+      const end = resolveSegmentPosition(segments, index + needle.length);
+      if (start && end) {
         const range = document.createRange();
-        range.setStart(node, index);
-        range.setEnd(node, index + needle.length);
+        range.setStart(start.node, start.offset);
+        range.setEnd(end.node, end.offset);
         ranges.push(range);
-        from = index + needle.length;
       }
-      node = walker.nextNode();
+      from = index + needle.length;
     }
     if (ranges.length > 0) byRow.set(rowId, ranges);
   }

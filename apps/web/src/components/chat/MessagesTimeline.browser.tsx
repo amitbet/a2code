@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { render } from "vitest-browser-react";
 
 const scrollToEndSpy = vi.fn();
+const scrollToIndexSpy = vi.fn();
 const getStateSpy = vi.fn(() => ({ isAtEnd: true }));
 
 vi.mock("@legendapp/list/react", async () => {
@@ -21,17 +22,21 @@ vi.mock("@legendapp/list/react", async () => {
     ListFooterComponent?: React.ReactNode;
     ref?: React.Ref<LegendListRef>;
   }) {
+    const rootRef = React.useRef<HTMLDivElement | null>(null);
+
     React.useImperativeHandle(
       props.ref,
       () =>
         ({
           scrollToEnd: scrollToEndSpy,
+          scrollToIndex: scrollToIndexSpy,
           getState: getStateSpy,
+          getNativeScrollRef: () => rootRef.current,
         }) as unknown as LegendListRef,
     );
 
     return (
-      <div data-testid="legend-list">
+      <div ref={rootRef} data-testid="legend-list">
         {props.ListHeaderComponent}
         {props.data.map((item) => (
           <div key={props.keyExtractor(item)}>{props.renderItem({ item })}</div>
@@ -110,6 +115,7 @@ function buildAssistantTimelineEntry(text: string) {
 describe("MessagesTimeline", () => {
   afterEach(() => {
     scrollToEndSpy.mockReset();
+    scrollToIndexSpy.mockReset();
     getStateSpy.mockClear();
     vi.restoreAllMocks();
     document.body.innerHTML = "";
@@ -372,6 +378,71 @@ describe("MessagesTimeline", () => {
       expect(assistantFileLink?.textContent).toContain("package.json");
       expect(assistantFileLink?.getAttribute("href")).toBe("/repo/project/path/to/package.json");
     } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("highlights every visible search match, including matches spanning inline markdown nodes", async () => {
+    const highlightRegistry = new Map<string, { ranges: Range[] }>();
+    const previousCss = (globalThis as { CSS?: unknown }).CSS;
+    const previousHighlight = (globalThis as { Highlight?: unknown }).Highlight;
+
+    class MockHighlight {
+      ranges: Range[];
+
+      constructor(...ranges: Range[]) {
+        this.ranges = ranges;
+      }
+    }
+
+    (globalThis as { CSS?: unknown }).CSS = {
+      ...(typeof previousCss === "object" && previousCss !== null ? previousCss : {}),
+      highlights: {
+        set(name: string, highlight: unknown) {
+          highlightRegistry.set(name, highlight as { ranges: Range[] });
+        },
+        delete(name: string) {
+          highlightRegistry.delete(name);
+        },
+      },
+    };
+    (globalThis as { Highlight?: unknown }).Highlight = MockHighlight;
+
+    const screen = await render(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[buildAssistantTimelineEntry("**beta** gamma and **beta** gamma")]}
+      />,
+    );
+
+    try {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "f", metaKey: true, bubbles: true, cancelable: true }),
+      );
+
+      const searchInput = page.getByLabelText("Search chat");
+      await expect.element(searchInput).toBeVisible();
+      await searchInput.fill("beta gamma");
+
+      await expect.element(page.getByText("1/2")).toBeVisible();
+      expect(scrollToIndexSpy).toHaveBeenCalledWith({
+        index: 0,
+        viewPosition: 0.35,
+        animated: true,
+      });
+      expect(highlightRegistry.get("chat-search")?.ranges).toHaveLength(2);
+      expect(highlightRegistry.get("chat-search-active")?.ranges).toHaveLength(1);
+    } finally {
+      if (typeof previousCss !== "undefined") {
+        (globalThis as { CSS?: unknown }).CSS = previousCss;
+      } else {
+        delete (globalThis as { CSS?: unknown }).CSS;
+      }
+      if (previousHighlight) {
+        (globalThis as { Highlight?: unknown }).Highlight = previousHighlight;
+      } else {
+        delete (globalThis as { Highlight?: unknown }).Highlight;
+      }
       await screen.unmount();
     }
   });
