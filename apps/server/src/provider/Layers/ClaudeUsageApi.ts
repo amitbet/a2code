@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 import type { ProviderRateLimitSnapshot, ProviderRateLimitWindow } from "@t3tools/contracts";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -104,10 +105,11 @@ const readClaudeOAuthToken = (homePath: string | undefined): Effect.Effect<strin
       Effect.map(parseStoredOAuth),
       Effect.catch(() => Effect.succeed(null)),
     );
+    const hostPlatform = yield* HostProcessPlatform;
 
     const stored =
       fromFile ??
-      (process.platform === "darwin"
+      (hostPlatform === "darwin"
         ? yield* Effect.tryPromise(() =>
             execFileAsync("security", [
               "find-generic-password",

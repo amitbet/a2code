@@ -34,7 +34,6 @@ import {
   type ThreadTurnState,
   type TurnDiffSummary,
 } from "./types";
-import { resolveEnvironmentHttpUrl } from "./environments/runtime";
 import { sanitizeThreadErrorMessage } from "./rpc/transportError";
 import { getThreadFromEnvironmentState } from "./threadDerivation";
 const isProviderDriverKindValue = Schema.is(ProviderDriverKind);
@@ -175,10 +174,6 @@ function mapMessage(environmentId: EnvironmentId, message: OrchestrationMessage)
           name: attachment.name,
           mimeType: attachment.mimeType,
           sizeBytes: attachment.sizeBytes,
-          previewUrl: resolveEnvironmentHttpUrl({
-            environmentId,
-            pathname: attachmentPreviewRoutePath(attachment.id),
-          }),
         }
       : {
           type: "file" as const,
@@ -895,6 +890,29 @@ function buildLatestTurn(params: {
   };
 }
 
+/**
+ * Turn state to settle a still-running latest turn with when its session
+ * leaves the "running" status, or null while the session is (re)starting or
+ * running and the turn must stay unsettled.
+ */
+function settledTurnStateForSessionStatus(
+  status: OrchestrationSessionStatus,
+): "completed" | "interrupted" | "error" | null {
+  switch (status) {
+    case "idle":
+    case "ready":
+      return "completed";
+    case "error":
+      return "error";
+    case "interrupted":
+    case "stopped":
+      return "interrupted";
+    case "starting":
+    case "running":
+      return null;
+  }
+}
+
 function rebindTurnDiffSummariesForAssistantMessage(
   turnDiffSummaries: ReadonlyArray<TurnDiffSummary>,
   turnId: TurnId,
@@ -1027,10 +1045,6 @@ function toLegacyProvider(providerName: string | null): ProviderDriverKind {
     return providerName;
   }
   return ProviderDriverKind.make("codex");
-}
-
-function attachmentPreviewRoutePath(attachmentId: string): string {
-  return `/attachments/${encodeURIComponent(attachmentId)}`;
 }
 
 function updateThreadState(
@@ -1429,6 +1443,15 @@ function applyEnvironmentOrchestrationEvent(
                 event.payload.messageId,
               )
             : thread.turnDiffSummaries;
+        // A completed assistant message only settles the turn once the
+        // session is no longer running it — providers may emit several
+        // assistant messages per turn (commentary between tool calls), and
+        // the turn must stay unsettled until the provider reports turn end.
+        const turnStillRunning =
+          event.payload.turnId !== null &&
+          thread.session?.orchestrationStatus === "running" &&
+          thread.session.activeTurnId === event.payload.turnId;
+        const settlesTurn = !event.payload.streaming && !turnStillRunning;
         const latestTurn: Thread["latestTurn"] =
           event.payload.role === "assistant" &&
           event.payload.turnId !== null &&
@@ -1436,13 +1459,13 @@ function applyEnvironmentOrchestrationEvent(
             ? buildLatestTurn({
                 previous: thread.latestTurn,
                 turnId: event.payload.turnId,
-                state: event.payload.streaming
-                  ? "running"
-                  : thread.latestTurn?.state === "interrupted"
+                state: settlesTurn
+                  ? thread.latestTurn?.state === "interrupted"
                     ? "interrupted"
                     : thread.latestTurn?.state === "error"
                       ? "error"
-                      : "completed",
+                      : "completed"
+                  : "running",
                 requestedAt:
                   thread.latestTurn?.turnId === event.payload.turnId
                     ? thread.latestTurn.requestedAt
@@ -1452,11 +1475,11 @@ function applyEnvironmentOrchestrationEvent(
                     ? (thread.latestTurn.startedAt ?? event.payload.createdAt)
                     : event.payload.createdAt,
                 sourceProposedPlan: thread.pendingSourceProposedPlan,
-                completedAt: event.payload.streaming
-                  ? thread.latestTurn?.turnId === event.payload.turnId
+                completedAt: settlesTurn
+                  ? event.payload.updatedAt
+                  : thread.latestTurn?.turnId === event.payload.turnId
                     ? (thread.latestTurn.completedAt ?? null)
-                    : null
-                  : event.payload.updatedAt,
+                    : null,
                 assistantMessageId: event.payload.messageId,
               })
             : thread.latestTurn;
@@ -1470,11 +1493,12 @@ function applyEnvironmentOrchestrationEvent(
       });
 
     case "thread.session-set":
-      return updateThreadState(state, event.payload.threadId, (thread) => ({
-        ...thread,
-        session: mapSession(event.payload.session),
-        error: sanitizeThreadErrorMessage(event.payload.session.lastError),
-        latestTurn:
+      return updateThreadState(state, event.payload.threadId, (thread) => {
+        // Leaving the "running" session status is the turn-end signal:
+        // settle a still-running latest turn so its duration reflects the
+        // whole turn, not the last assistant message.
+        const settledTurnState = settledTurnStateForSessionStatus(event.payload.session.status);
+        const latestTurn: Thread["latestTurn"] =
           event.payload.session.status === "running" && event.payload.session.activeTurnId !== null
             ? buildLatestTurn({
                 previous: thread.latestTurn,
@@ -1495,9 +1519,30 @@ function applyEnvironmentOrchestrationEvent(
                     : null,
                 sourceProposedPlan: thread.pendingSourceProposedPlan,
               })
-            : thread.latestTurn,
-        updatedAt: event.occurredAt,
-      }));
+            : thread.latestTurn !== null &&
+                thread.latestTurn.state === "running" &&
+                settledTurnState !== null
+              ? buildLatestTurn({
+                  previous: thread.latestTurn,
+                  turnId: thread.latestTurn.turnId,
+                  state: settledTurnState,
+                  requestedAt: thread.latestTurn.requestedAt,
+                  startedAt: thread.latestTurn.startedAt,
+                  // A running turn's completedAt can only hold a mid-turn
+                  // placeholder checkpoint timestamp — the session leaving
+                  // "running" is the authoritative turn end.
+                  completedAt: event.payload.session.updatedAt,
+                  assistantMessageId: thread.latestTurn.assistantMessageId,
+                })
+              : thread.latestTurn;
+        return {
+          ...thread,
+          session: mapSession(event.payload.session),
+          error: sanitizeThreadErrorMessage(event.payload.session.lastError),
+          latestTurn,
+          updatedAt: event.occurredAt,
+        };
+      });
 
     case "thread.session-stop-requested":
       return updateThreadState(state, event.payload.threadId, (thread) =>
@@ -1562,8 +1607,14 @@ function applyEnvironmentOrchestrationEvent(
               (right.checkpointTurnCount ?? Number.MAX_SAFE_INTEGER),
           )
           .slice(-MAX_THREAD_CHECKPOINTS);
+        // Mid-turn diff updates produce placeholder checkpoints; record the
+        // diff summary, but don't settle a turn its session is still running.
+        const turnStillRunning =
+          thread.session?.orchestrationStatus === "running" &&
+          thread.session.activeTurnId === event.payload.turnId;
         const latestTurn =
-          thread.latestTurn === null || thread.latestTurn.turnId === event.payload.turnId
+          !turnStillRunning &&
+          (thread.latestTurn === null || thread.latestTurn.turnId === event.payload.turnId)
             ? buildLatestTurn({
                 previous: thread.latestTurn,
                 turnId: event.payload.turnId,
