@@ -2,6 +2,29 @@
 
 T3 Code is a minimal web GUI for coding agents (currently Codex, Claude, Cursor, and OpenCode, more coming soon).
 
+## About this fork
+
+This is a fork of [`pingdotgg/t3code`](https://github.com/pingdotgg/t3code) that
+adds the features below on top of upstream. Fork-specific app identity
+(`A2 Code` name + bundle/package IDs) lets it install side-by-side with the
+upstream app.
+
+- **Thread forking** — fork a thread into a new one that inherits the prior
+  conversation context, staying in the same git environment. Available from the
+  thread right-click menu (**Fork thread**) and the **`/fork`** composer command.
+  (Codex-only for now.)
+- **In-chat find (`Cmd/Ctrl+F`)** — a browser-style find toolbar over the chat
+  timeline that searches the underlying row data (the timeline is virtualized,
+  so native find-in-page can't see it), scrolls matches into view, and
+  highlights them.
+- **Live provider quota meter** — composer-footer bars for provider rate-limit /
+  quota usage: Claude session (5h), weekly (incl. Opus/Sonnet splits), a spend
+  bar (`$used / $limit`), and Codex 5h/weekly windows.
+
+For the full per-feature breakdown, the files each feature touches, and guidance
+on preserving these changes when merging `upstream/main`, see
+[FORK_NOTES.md](./FORK_NOTES.md).
+
 ## Installation
 
 > [!WARNING]

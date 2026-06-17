@@ -114,17 +114,53 @@ export function deriveLatestRateLimitSnapshot(
   };
 }
 
-export function shouldShowRateLimitMeter(
-  snapshot: RateLimitSnapshot | null,
+/** Always show the meter once the provider has reported quota usage at least once. */
+export function shouldShowRateLimitMeter(snapshot: RateLimitSnapshot | null): boolean {
+  return snapshot !== null;
+}
+
+/** A snapshot is considered stale this long after its last update while idle. */
+export const RATE_LIMIT_STALE_AFTER_MS = 5 * 60_000;
+
+/**
+ * Whether the snapshot should render in a "stale" (greyed) state. Never stale
+ * while the agent is running — usage is live then. Once idle, it goes stale
+ * after RATE_LIMIT_STALE_AFTER_MS so the numbers visibly read as out of date.
+ */
+export function isRateLimitSnapshotStale(
+  snapshot: RateLimitSnapshot,
   isRunning: boolean,
+  nowMs: number,
 ): boolean {
-  if (!snapshot) {
+  if (isRunning) {
     return false;
   }
-  if (isRunning) {
-    return true;
+  const updatedMs = Date.parse(snapshot.updatedAt);
+  if (!Number.isFinite(updatedMs)) {
+    return false;
   }
-  return snapshot.status === "allowed_warning" || snapshot.status === "rejected";
+  return nowMs - updatedMs > RATE_LIMIT_STALE_AFTER_MS;
+}
+
+/** Compact "updated Xm ago" label for the snapshot timestamp. */
+export function formatRateLimitUpdatedAgo(updatedAt: string, nowMs: number): string | null {
+  const updatedMs = Date.parse(updatedAt);
+  if (!Number.isFinite(updatedMs)) {
+    return null;
+  }
+  const diffMs = nowMs - updatedMs;
+  if (diffMs < 60_000) {
+    return "updated just now";
+  }
+  const minutes = Math.floor(diffMs / 60_000);
+  if (minutes < 60) {
+    return `updated ${minutes}m ago`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `updated ${hours}h ago`;
+  }
+  return `updated ${Math.floor(hours / 24)}d ago`;
 }
 
 /** Human-readable countdown to a reset, e.g. "resets in 2h 14m" / "resets in 3d". */

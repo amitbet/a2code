@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { EventId, type OrchestrationThreadActivity } from "@t3tools/contracts";
 import {
+  RATE_LIMIT_STALE_AFTER_MS,
   deriveLatestRateLimitSnapshot,
   formatRateLimitReset,
+  isRateLimitSnapshotStale,
   shouldShowRateLimitMeter,
 } from "./rateLimits";
 
@@ -172,19 +174,41 @@ describe("shouldShowRateLimitMeter", () => {
     windows: [{ kind: "five_hour", label: "5-hour", usedPercent: 42 }] as const,
   };
 
-  it("hides an allowed snapshot when the thread is idle", () => {
-    expect(shouldShowRateLimitMeter({ ...baseSnapshot, status: "allowed" }, false)).toBe(false);
+  it("hides when there is no snapshot", () => {
+    expect(shouldShowRateLimitMeter(null)).toBe(false);
   });
 
-  it("shows a snapshot while the thread is running", () => {
-    expect(shouldShowRateLimitMeter({ ...baseSnapshot, status: "allowed" }, true)).toBe(true);
+  it("shows whenever a snapshot exists, regardless of status", () => {
+    expect(shouldShowRateLimitMeter({ ...baseSnapshot, status: "allowed" })).toBe(true);
+    expect(shouldShowRateLimitMeter({ ...baseSnapshot, status: "allowed_warning" })).toBe(true);
+    expect(shouldShowRateLimitMeter({ ...baseSnapshot, status: "rejected" })).toBe(true);
+  });
+});
+
+describe("isRateLimitSnapshotStale", () => {
+  const baseSnapshot = {
+    status: "allowed" as const,
+    updatedAt: "2026-06-03T00:00:00.000Z",
+    windows: [{ kind: "five_hour", label: "5-hour", usedPercent: 42 }] as const,
+  };
+  const updatedMs = Date.parse(baseSnapshot.updatedAt);
+
+  it("is never stale while running", () => {
+    expect(
+      isRateLimitSnapshotStale(baseSnapshot, true, updatedMs + RATE_LIMIT_STALE_AFTER_MS + 1),
+    ).toBe(false);
   });
 
-  it("keeps warning and rejected snapshots visible while idle", () => {
-    expect(shouldShowRateLimitMeter({ ...baseSnapshot, status: "allowed_warning" }, false)).toBe(
-      true,
-    );
-    expect(shouldShowRateLimitMeter({ ...baseSnapshot, status: "rejected" }, false)).toBe(true);
+  it("is fresh when idle but recently updated", () => {
+    expect(
+      isRateLimitSnapshotStale(baseSnapshot, false, updatedMs + RATE_LIMIT_STALE_AFTER_MS - 1),
+    ).toBe(false);
+  });
+
+  it("goes stale when idle past the threshold", () => {
+    expect(
+      isRateLimitSnapshotStale(baseSnapshot, false, updatedMs + RATE_LIMIT_STALE_AFTER_MS + 1),
+    ).toBe(true);
   });
 });
 

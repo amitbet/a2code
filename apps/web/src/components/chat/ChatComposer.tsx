@@ -349,13 +349,15 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
 }) {
-  const visibleRateLimits = shouldShowRateLimitMeter(props.activeRateLimits, props.isRunning)
+  const visibleRateLimits = shouldShowRateLimitMeter(props.activeRateLimits)
     ? props.activeRateLimits
     : null;
 
   return (
     <>
-      {visibleRateLimits ? <RateLimitMeter snapshot={visibleRateLimits} /> : null}
+      {visibleRateLimits ? (
+        <RateLimitMeter snapshot={visibleRateLimits} isRunning={props.isRunning} />
+      ) : null}
       {props.activeContextWindow ? (
         <ContextWindowMeter
           usage={props.activeContextWindow}

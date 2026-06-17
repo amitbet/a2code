@@ -4,6 +4,8 @@ import {
   type RateLimitSnapshot,
   formatRateLimitReset,
   formatRateLimitResetShort,
+  formatRateLimitUpdatedAgo,
+  isRateLimitSnapshotStale,
 } from "~/lib/rateLimits";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 
@@ -46,8 +48,8 @@ function MiniBar(props: { usedPercent: number }) {
   );
 }
 
-export function RateLimitMeter(props: { snapshot: RateLimitSnapshot }) {
-  const { snapshot } = props;
+export function RateLimitMeter(props: { snapshot: RateLimitSnapshot; isRunning: boolean }) {
+  const { snapshot, isRunning } = props;
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
@@ -59,6 +61,9 @@ export function RateLimitMeter(props: { snapshot: RateLimitSnapshot }) {
   if (rows.length === 0) {
     return null;
   }
+
+  const isStale = isRateLimitSnapshotStale(snapshot, isRunning, nowMs);
+  const updatedAgo = formatRateLimitUpdatedAgo(snapshot.updatedAt, nowMs);
 
   const percents = rows
     .map((row) => row.usedPercent)
@@ -74,7 +79,10 @@ export function RateLimitMeter(props: { snapshot: RateLimitSnapshot }) {
         render={
           <button
             type="button"
-            className="group inline-flex items-center gap-1.5 rounded-full px-1 transition-opacity hover:opacity-85"
+            className={cn(
+              "group inline-flex items-center gap-1.5 rounded-full px-1 transition-opacity hover:opacity-85",
+              isStale && "opacity-45 grayscale hover:opacity-70",
+            )}
             aria-label={peak !== null ? `Quota usage, peak ${formatPercent(peak)}` : "Quota usage"}
           >
             {rows.map((row) => (
@@ -106,6 +114,9 @@ export function RateLimitMeter(props: { snapshot: RateLimitSnapshot }) {
               </span>
             ) : null}
           </div>
+          {isStale && updatedAgo ? (
+            <div className="text-[11px] text-muted-foreground/60">{updatedAgo}</div>
+          ) : null}
           {rows.map((row) => {
             const reset = formatRateLimitReset(row.resetsAt, nowMs);
             const hasPercent = typeof row.usedPercent === "number";
