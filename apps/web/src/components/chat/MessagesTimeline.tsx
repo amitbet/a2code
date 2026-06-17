@@ -1753,7 +1753,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
           <div className="min-w-0 flex-1 overflow-hidden">
             <p className="flex min-w-0 w-full items-baseline gap-1.5 text-[12px] leading-5">
               <span className={cn("min-w-0 shrink truncate", headingClass)}>{heading}</span>
-              {preview && (
+              {preview && !(expanded && canExpand) && (
                 <span className="min-w-0 flex-1 truncate text-muted-foreground/55">{preview}</span>
               )}
             </p>
