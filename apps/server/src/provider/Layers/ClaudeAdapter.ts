@@ -434,8 +434,27 @@ function claudeTotalProcessedTokens(value: unknown): number | undefined {
   return total > 0 ? total : undefined;
 }
 
+// A direct, context-window-accurate "tokens currently in context" reading, as
+// reported by task_progress/task_notification usage. Distinct from the
+// accumulated request totals (total_tokens / input+output), which sum every API
+// call in the turn and overcount the live window.
+function claudeDirectUsedTokens(usage: Record<string, unknown>): number | undefined {
+  return (
+    finiteNonNegativeInteger(usage.used_tokens) ??
+    finiteNonNegativeInteger(usage.usedTokens) ??
+    finiteNonNegativeInteger(usage.last_used_tokens) ??
+    finiteNonNegativeInteger(usage.lastUsedTokens)
+  );
+}
+
 function makeClaudeTokenUsageSnapshot(input: {
   readonly activeTokens: number;
+  // Whether `activeTokens` is a live context-window measurement (a direct
+  // `used_tokens` reading, the context-usage control response, or a post-compact
+  // total). Only context-accurate figures are clamped to the window and surface
+  // `maxTokens`; accumulated request totals (SDK result.usage) overcount the live
+  // window, so they must do neither.
+  readonly contextAccurate?: boolean;
   readonly inputTokens?: number;
   readonly outputTokens?: number;
   readonly contextWindow?: number;
@@ -448,11 +467,11 @@ function makeClaudeTokenUsageSnapshot(input: {
     return undefined;
   }
 
+  const contextAccurate = input.contextAccurate ?? false;
   const maxTokens = finitePositiveInteger(input.contextWindow);
-  const usedTokens = maxTokens !== undefined ? Math.min(activeTokens, maxTokens) : activeTokens;
-  const lastUsedTokens =
-    finiteNonNegativeInteger(input.lastUsedTokens) ??
-    (maxTokens !== undefined ? Math.min(activeTokens, maxTokens) : activeTokens);
+  const usedTokens =
+    contextAccurate && maxTokens !== undefined ? Math.min(activeTokens, maxTokens) : activeTokens;
+  const lastUsedTokens = finiteNonNegativeInteger(input.lastUsedTokens) ?? usedTokens;
   const totalProcessedTokens = finiteNonNegativeInteger(input.totalProcessedTokens);
   const inputTokens = finiteNonNegativeInteger(input.inputTokens);
   const outputTokens = finiteNonNegativeInteger(input.outputTokens);
@@ -465,7 +484,7 @@ function makeClaudeTokenUsageSnapshot(input: {
       : {}),
     ...(inputTokens !== undefined && inputTokens > 0 ? { inputTokens } : {}),
     ...(outputTokens !== undefined && outputTokens > 0 ? { outputTokens } : {}),
-    ...(maxTokens !== undefined ? { maxTokens } : {}),
+    ...(maxTokens !== undefined && contextAccurate ? { maxTokens } : {}),
     ...(input.compactsAutomatically !== undefined
       ? { compactsAutomatically: input.compactsAutomatically }
       : {}),
@@ -485,13 +504,18 @@ function normalizeClaudeActiveTokenUsage(
   const activeUsage = lastClaudeUsageIteration(usage) ?? usage;
   const inputTokens = claudeUsageInputTokens(activeUsage);
   const outputTokens = claudeUsageOutputTokens(activeUsage);
-  const activeTokens = claudeTotalProcessedTokens(activeUsage) ?? inputTokens + outputTokens;
+  const directUsedTokens = claudeDirectUsedTokens(activeUsage);
+  const contextAccurate = directUsedTokens !== undefined && directUsedTokens > 0;
+  const activeTokens = contextAccurate
+    ? directUsedTokens
+    : (claudeTotalProcessedTokens(activeUsage) ?? inputTokens + outputTokens);
   if (activeTokens <= 0) {
     return undefined;
   }
 
   return makeClaudeTokenUsageSnapshot({
     activeTokens,
+    contextAccurate,
     inputTokens,
     outputTokens,
     ...(contextWindow !== undefined ? { contextWindow } : {}),
@@ -505,6 +529,7 @@ function normalizeClaudeContextUsageApiSnapshot(
 ): ThreadTokenUsageSnapshot | undefined {
   return makeClaudeTokenUsageSnapshot({
     activeTokens: value.totalTokens,
+    contextAccurate: true,
     contextWindow: value.maxTokens,
     ...(totalProcessedTokens !== undefined ? { totalProcessedTokens } : {}),
     compactsAutomatically: value.isAutoCompactEnabled,
@@ -530,6 +555,7 @@ function compactBoundaryTokenUsageSnapshot(
   const preTokens = finiteNonNegativeInteger(compactMetadata.pre_tokens);
   return makeClaudeTokenUsageSnapshot({
     activeTokens: postTokens,
+    contextAccurate: true,
     ...(preTokens !== undefined ? { lastUsedTokens: preTokens } : {}),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(totalProcessedTokens !== undefined ? { totalProcessedTokens } : {}),
@@ -540,28 +566,44 @@ function normalizeClaudeTaskProgressTokenUsage(
   value: unknown,
   context: ClaudeSessionContext,
 ): ThreadTokenUsageSnapshot | undefined {
-  const totalTokens = claudeTotalProcessedTokens(value);
-  if (totalTokens === undefined || totalTokens <= 0) {
-    return undefined;
-  }
-
-  const lastUsedTokens = context.lastKnownTokenUsage?.usedTokens;
-  const activeTokens =
-    lastUsedTokens !== undefined ? Math.max(totalTokens, lastUsedTokens) : totalTokens;
-  if (lastUsedTokens !== undefined && activeTokens === lastUsedTokens) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
 
   const usage = value as Record<string, unknown>;
+  const directUsedTokens = claudeDirectUsedTokens(usage);
+  const contextAccurate = directUsedTokens !== undefined && directUsedTokens > 0;
+  const totalTokens = claudeTotalProcessedTokens(usage);
+  const previousUsed = context.lastKnownTokenUsage?.usedTokens;
+
+  let activeTokens: number;
+  if (contextAccurate) {
+    // A direct context-window reading is authoritative — it can legitimately
+    // shrink (e.g. after a compaction), so take it as reported.
+    activeTokens = directUsedTokens;
+  } else {
+    // Cumulative totals only grow; never regress below the last known usage, and
+    // skip re-emitting when an identical total arrives.
+    if (totalTokens === undefined || totalTokens <= 0) {
+      return undefined;
+    }
+    activeTokens = previousUsed !== undefined ? Math.max(totalTokens, previousUsed) : totalTokens;
+    if (previousUsed !== undefined && activeTokens === previousUsed) {
+      return undefined;
+    }
+  }
+
+  const totalProcessedTokens =
+    totalTokens !== undefined
+      ? Math.max(totalTokens, context.lastKnownTotalProcessedTokens ?? totalTokens)
+      : context.lastKnownTotalProcessedTokens;
   const snapshot = makeClaudeTokenUsageSnapshot({
     activeTokens,
+    contextAccurate,
     ...(context.lastKnownContextWindow !== undefined
       ? { contextWindow: context.lastKnownContextWindow }
       : {}),
-    totalProcessedTokens: Math.max(
-      totalTokens,
-      context.lastKnownTotalProcessedTokens ?? totalTokens,
-    ),
+    ...(totalProcessedTokens !== undefined ? { totalProcessedTokens } : {}),
   });
   if (!snapshot) {
     return undefined;
@@ -3725,6 +3767,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       input.modelSelection !== undefined && input.modelSelection.instanceId === boundInstanceId
         ? input.modelSelection
         : undefined;
+
+    // Keep the live context-window estimate in sync with the model this turn
+    // runs under, so context-accurate usage snapshots (task progress, compaction)
+    // clamp to the right window even when the selection only arrives at turn time.
+    const selectedContextWindow = selectedClaudeContextWindow(modelSelection);
+    if (selectedContextWindow !== undefined) {
+      context.lastKnownContextWindow = selectedContextWindow;
+    }
 
     // A sendTurn while a real turn is running is a steer: the message is
     // queued into the live SDK agent loop and the work continues as the same
