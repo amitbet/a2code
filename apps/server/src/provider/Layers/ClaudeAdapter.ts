@@ -67,6 +67,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
+import { classifyAttachment, formatTextAttachmentBlock } from "../../attachmentContent.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
@@ -959,6 +960,20 @@ function buildClaudeImageContentBlock(input: {
   };
 }
 
+function buildClaudeDocumentContentBlock(input: {
+  readonly mimeType: string;
+  readonly bytes: Uint8Array;
+}): Record<string, unknown> {
+  return {
+    type: "document",
+    source: {
+      type: "base64",
+      media_type: input.mimeType,
+      data: Buffer.from(input.bytes).toString("base64"),
+    },
+  };
+}
+
 const buildUserMessageEffect = Effect.fn("buildUserMessageEffect")(function* (
   input: ProviderSendTurnInput,
   dependencies: {
@@ -975,11 +990,12 @@ const buildUserMessageEffect = Effect.fn("buildUserMessageEffect")(function* (
   }
 
   for (const attachment of input.attachments ?? []) {
-    if (attachment.type !== "image") {
-      continue;
-    }
+    const kind =
+      attachment.type === "image"
+        ? "image"
+        : classifyAttachment({ mimeType: attachment.mimeType, fileName: attachment.name });
 
-    if (!SUPPORTED_CLAUDE_IMAGE_MIME_TYPES.has(attachment.mimeType)) {
+    if (kind === "image" && !SUPPORTED_CLAUDE_IMAGE_MIME_TYPES.has(attachment.mimeType)) {
       return yield* new ProviderAdapterRequestError({
         provider: PROVIDER,
         method: "turn/start",
@@ -1011,12 +1027,36 @@ const buildUserMessageEffect = Effect.fn("buildUserMessageEffect")(function* (
       ),
     );
 
-    sdkContent.push(
-      buildClaudeImageContentBlock({
-        mimeType: attachment.mimeType,
-        bytes,
-      }),
-    );
+    switch (kind) {
+      case "image":
+        sdkContent.push(
+          buildClaudeImageContentBlock({
+            mimeType: attachment.mimeType,
+            bytes,
+          }),
+        );
+        break;
+      case "pdf":
+        sdkContent.push(buildClaudeDocumentContentBlock({ mimeType: attachment.mimeType, bytes }));
+        break;
+      case "text":
+        sdkContent.push({
+          type: "text",
+          text: formatTextAttachmentBlock({
+            name: attachment.name,
+            mimeType: attachment.mimeType,
+            bytes,
+            absolutePath: attachmentPath,
+          }),
+        });
+        break;
+      case "binary":
+        sdkContent.push({
+          type: "text",
+          text: `Attached file: ${attachment.name} (${attachment.mimeType}, ${attachment.sizeBytes} bytes). Binary content could not be inlined; read it from ${attachmentPath} if needed.`,
+        });
+        break;
+    }
   }
 
   return buildUserMessage({ sdkContent });

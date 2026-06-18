@@ -52,6 +52,7 @@ import {
   type ProviderAdapterError,
 } from "../Errors.ts";
 import { type CodexAdapterShape } from "../Services/CodexAdapter.ts";
+import { classifyAttachment, formatTextAttachmentBlock } from "../../attachmentContent.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import {
@@ -1569,9 +1570,35 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           }),
       ),
     );
+
+    const kind =
+      attachment.type === "image"
+        ? "image"
+        : classifyAttachment({ mimeType: attachment.mimeType, fileName: attachment.name });
+
+    // Codex's turn input has no document/file item type — only `text`, `image`,
+    // and a few reference variants. So images go through as image URLs and every
+    // other file is inlined as text the model can read directly.
+    if (kind === "image") {
+      return {
+        type: "image" as const,
+        url: `data:${attachment.mimeType};base64,${Buffer.from(bytes).toString("base64")}`,
+      };
+    }
+    if (kind === "text") {
+      return {
+        type: "text" as const,
+        text: formatTextAttachmentBlock({
+          name: attachment.name,
+          mimeType: attachment.mimeType,
+          bytes,
+          absolutePath: attachmentPath,
+        }),
+      };
+    }
     return {
-      type: "image" as const,
-      url: `data:${attachment.mimeType};base64,${Buffer.from(bytes).toString("base64")}`,
+      type: "text" as const,
+      text: `Attached file: ${attachment.name} (${attachment.mimeType}, ${attachment.sizeBytes} bytes). Binary content could not be inlined; read it from ${attachmentPath} if needed.`,
     };
   });
 

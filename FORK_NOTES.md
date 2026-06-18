@@ -211,6 +211,24 @@ useAccountRateLimitSnapshot(selectedInstanceId)` (NOT a per-thread
   - `apps/server/src/orchestration/Normalizer.ts` — accepts any MIME (not just
     `image/*`), picks the byte limit by image-vs-file, and persists
     `type: "file"` for non-image MIME.
+  - `apps/server/src/attachmentContent.ts` — **fork-added**, shared by the
+    provider adapters: `classifyAttachment()` (image / pdf / text / binary) and
+    `formatTextAttachmentBlock()`, which inlines text files up to
+    `ATTACHMENT_INLINE_MAX_BYTES` and otherwise truncates to a head preview that
+    points at the on-disk path. The original file-attachment feature only
+    handled upload/persistence; the adapters still dropped non-image files until
+    this was added.
+  - `apps/server/src/provider/Layers/ClaudeAdapter.ts` — **modified**: the
+    attachment loop classifies via `attachmentContent.ts` instead of skipping
+    `type !== "image"`. Images → image block, PDFs → `document` block, text →
+    inlined text block, binary → a text note with the path. Mirrors Claude
+    Code's behaviour.
+  - `apps/server/src/provider/Layers/CodexAdapter.ts` +
+    `CodexSessionRuntime.ts` — **modified**: Codex turn input has no
+    document/file item type, so `resolveAttachment()` emits an `image` item for
+    images and a `text` item (inlined contents, via `attachmentContent.ts`) for
+    everything else. The runtime's `attachments` type was widened from
+    `{type:"image"; url}` to `V2TurnStartParams__UserInput`.
 - Web (the layer the merge reverted):
   - `apps/web/src/types.ts` — `ChatFileAttachment` interface + union.
   - `apps/web/src/composerDraftStore.ts` — `ComposerAttachment` union; the

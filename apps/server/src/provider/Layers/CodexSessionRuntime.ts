@@ -116,10 +116,7 @@ export interface CodexSessionRuntimeOptions {
 
 export interface CodexSessionRuntimeSendTurnInput {
   readonly input?: string;
-  readonly attachments?: ReadonlyArray<{
-    readonly type: "image";
-    readonly url: string;
-  }>;
+  readonly attachments?: ReadonlyArray<EffectCodexSchema.V2TurnStartParams__UserInput>;
   readonly model?: string;
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort | undefined;
@@ -269,9 +266,7 @@ function readResumeCursorThreadId(
 
 // When the cursor carries `fork: true`, its `threadId` is a SOURCE conversation
 // to fork from rather than a thread to resume.
-function readForkCursorThreadId(
-  resumeCursor: ProviderSession["resumeCursor"],
-): string | undefined {
+function readForkCursorThreadId(resumeCursor: ProviderSession["resumeCursor"]): string | undefined {
   return isCodexResumeCursorSchema(resumeCursor) && resumeCursor.fork === true
     ? resumeCursor.threadId
     : undefined;
@@ -363,10 +358,7 @@ export function buildTurnStartParams(input: {
   readonly threadId: string;
   readonly runtimeMode: RuntimeMode;
   readonly prompt?: string;
-  readonly attachments?: ReadonlyArray<{
-    readonly type: "image";
-    readonly url: string;
-  }>;
+  readonly attachments?: ReadonlyArray<EffectCodexSchema.V2TurnStartParams__UserInput>;
   readonly model?: string;
   readonly serviceTier?: CodexServiceTier;
   readonly effort?: EffectCodexSchema.V2TurnStartParams__ReasoningEffort;
