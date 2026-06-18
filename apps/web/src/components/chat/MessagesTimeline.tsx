@@ -1622,7 +1622,14 @@ function buildToolCallExpandedBody(
         .join("\n"),
     );
   }
-  return blocks.length > 0 ? blocks.join("\n\n") : null;
+  const seen = new Set<string>();
+  const dedupedBlocks = blocks.filter((block) => {
+    const key = normalizeCompactToolLabel(block).toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return dedupedBlocks.length > 0 ? dedupedBlocks.join("\n\n") : null;
 }
 
 function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {

@@ -95,7 +95,11 @@ export type ComposerAttachment =
   | (Omit<ChatImageAttachment, "previewUrl"> & { previewUrl: string; file: File })
   | (Extract<ChatAttachment, { type: "file" }> & { file: File; previewUrl?: undefined });
 
-export type ComposerImageAttachment = Extract<ComposerAttachment, { type: "image" }>;
+// NOTE (fork): the composer draft holds both image and generic file
+// attachments, so this alias intentionally widens to the full union. Code that
+// needs image-only behaviour narrows with `Extract<..., { type: "image" }>` or
+// guards on `attachment.type === "image"` / `attachment.previewUrl`.
+export type ComposerImageAttachment = ComposerAttachment;
 
 const PersistedTerminalContextDraft = Schema.Struct({
   id: Schema.String,
@@ -2079,13 +2083,24 @@ function hydrateImagesFromPersisted(
   for (const attachment of attachments) {
     const file = hydratePersistedComposerImageAttachment(attachment);
     if (!file) continue;
+    if (attachment.mimeType.startsWith("image/")) {
+      hydrated.push({
+        type: "image" as const,
+        id: attachment.id,
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+        sizeBytes: attachment.sizeBytes,
+        previewUrl: attachment.dataUrl,
+        file,
+      });
+      continue;
+    }
     hydrated.push({
-      type: "image" as const,
+      type: "file" as const,
       id: attachment.id,
       name: attachment.name,
       mimeType: attachment.mimeType,
       sizeBytes: attachment.sizeBytes,
-      previewUrl: attachment.dataUrl,
       file,
     });
   }

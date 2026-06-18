@@ -6,6 +6,13 @@
   - If changing native mobile code, `vp run lint:mobile` must also pass.
 - Use `vp test` for the built-in Vite+ test command and `vp run test` when you specifically need the `test` package script.
 
+## Merging Upstream
+
+This is a fork of `upstream` (pingdotgg/t3code). **Before merging `upstream/main` into
+`main` — and while resolving any merge conflicts — read `FORK_NOTES.md` first.** It tracks
+the fork-specific divergences (and the exact files touched) that are most likely to conflict.
+After the merge, update `FORK_NOTES.md` if the divergences changed.
+
 ## Project Snapshot
 
 T3 Code is a minimal web GUI for using coding agents like Codex and Claude.

@@ -20,6 +20,9 @@ upstream app.
 - **Live provider quota meter** — composer-footer bars for provider rate-limit /
   quota usage: Claude session (5h), weekly (incl. Opus/Sonnet splits), a spend
   bar (`$used / $limit`), and Codex 5h/weekly windows.
+- **Arbitrary file attachments** — attach any file type (PDF, JSON, CSV, logs,
+  archives, …), not just images, by pasting or dragging it into the composer.
+  Images keep their inline preview; other files show as a labelled chip.
 
 For the full per-feature breakdown, the files each feature touches, and guidance
 on preserving these changes when merging `upstream/main`, see

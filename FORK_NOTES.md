@@ -150,7 +150,70 @@ merging `upstream/main`.
   numeric `extra_usage.utilization` and `is_enabled !== false` (see
   `spendWindow()` in `ClaudeUsageApi.ts`).
 
+### Arbitrary file attachments (not just images)
+
+- Lets the composer accept **any** file type (PDF, JSON, CSV, logs, archives,
+  …) via paste and drag-and-drop, not only images. Images keep their inline
+  preview/zoom; non-image files render as a labelled chip (name + MIME type) in
+  the composer and as a file card in the message timeline.
+- This was originally landed in commit `288a124` ("Add support for file
+  attachments"). A later `upstream/main` merge **partially reverted it**: the
+  contracts, server, store, and timeline pieces survived, but the **web composer
+  was clobbered back to images-only** (it rejected non-images with
+  *"Unsupported file type … Please attach image files only."*). The notes below
+  cover the full surface so the whole thing can be re-applied if a future merge
+  reverts any layer again.
+- Contracts (`packages/contracts/src/orchestration.ts`) — **modified**: adds
+  `PROVIDER_SEND_TURN_MAX_ATTACHMENT_BYTES`, `ChatFileAttachment` /
+  `UploadChatFileAttachment` schemas, and widens the `ChatAttachment` /
+  `UploadChatAttachment` unions to include `type: "file"`.
+- Server:
+  - `apps/server/src/imageMime.ts` — `inferAttachmentExtension()` +
+    `SAFE_ATTACHMENT_FILE_EXTENSIONS` (images plus pdf/csv/json/log/md/txt/
+    xml/yaml/zip/tar/gz/…); falls back to `.bin`.
+  - `apps/server/src/attachmentStore.ts` — `attachmentRelativePath()` uses
+    `inferAttachmentExtension`; `resolveAttachmentPathById()` resolves by
+    scanning the dir for `${id}.*` instead of a fixed image-extension list.
+  - `apps/server/src/orchestration/Normalizer.ts` — accepts any MIME (not just
+    `image/*`), picks the byte limit by image-vs-file, and persists
+    `type: "file"` for non-image MIME.
+- Web (the layer the merge reverted):
+  - `apps/web/src/types.ts` — `ChatFileAttachment` interface + union.
+  - `apps/web/src/composerDraftStore.ts` — `ComposerAttachment` union; the
+    `ComposerImageAttachment` **alias is intentionally widened to the full
+    union** (the merge had narrowed it to `Extract<…,{type:"image"}>`, which is
+    what broke the composer). `previewUrl` is optional on file attachments, so
+    dedup/revoke/hydrate all guard it; `hydrateImagesFromPersisted` rebuilds
+    `image` vs `file` from the stored MIME type.
+  - `apps/web/src/components/ChatView.logic.ts` — `cloneComposerImageForRetry`
+    guards `image.type !== "image"` before touching `previewUrl`.
+  - `apps/web/src/components/chat/ChatComposer.tsx` — **modified**: `isImageFile`
+    helper + `ATTACHMENT_SIZE_LIMIT_LABEL`; `addComposerImages` no longer
+    rejects non-images (it branches image-vs-file, picking the right byte limit
+    and building a `type: "file"` attachment with no `previewUrl`);
+    `onComposerPaste` forwards **all** files; the composer chip renders a
+    name+MIME card for non-image attachments.
+  - `apps/web/src/store.ts`, `apps/web/src/historyBootstrap.ts`,
+    `apps/web/src/components/chat/MessagesTimeline.tsx` — map / summarize /
+    render `file` attachments alongside images.
+- Key smell test after a merge: if you see *"Please attach image files only"*
+  in `ChatComposer.tsx` or `ComposerImageAttachment` aliased to an
+  `Extract<…, { type: "image" }>`, the web layer has been reverted again —
+  re-apply the web pieces above.
+
 ## Recurring merge seams
+
+### File attachment support
+
+- Expected conflict area (see the "Arbitrary file attachments" feature above
+  for the full file list). The server/contracts pieces tend to survive upstream
+  merges; the **web composer is the fragile part** — upstream composer/image
+  refactors keep narrowing it back to images-only.
+- When resolving: keep upstream's composer/timeline structural changes, then
+  re-apply (1) the widened `ComposerImageAttachment` alias, (2) the
+  branch-on-`isImageFile` logic in `addComposerImages`, (3) the unfiltered
+  `onComposerPaste`, and (4) the `attachment.type === "image"` / `previewUrl`
+  guards wherever image-only behaviour is assumed.
 
 ### Desktop Clerk auth callback
 
