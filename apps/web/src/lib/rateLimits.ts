@@ -55,8 +55,16 @@ function windowKey(window: ProviderRateLimitWindow): string {
 }
 
 /**
- * Walk thread activities newest-first and return the most recent normalized
- * rate-limit snapshot, or null if the provider has not reported quota usage.
+ * Return the most recent normalized rate-limit snapshot from a set of thread
+ * activities, or null if the provider has not reported quota usage.
+ *
+ * Rate limits describe an account/subscription, not a single conversation, so
+ * callers may pass activities merged across multiple threads (see
+ * {@link selectLatestRateLimitActivitiesForInstance}). Because such input is
+ * not globally ordered, we sort the rate-limit activities newest-first by
+ * `createdAt` before merging — newest values win per window. For a single
+ * thread's already-ascending activities this yields the same result as the
+ * previous reverse walk.
  */
 export function deriveLatestRateLimitSnapshot(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
@@ -66,11 +74,21 @@ export function deriveLatestRateLimitSnapshot(
   let status: RateLimitSnapshot["status"] | undefined;
   let planType: string | undefined;
 
-  for (let index = activities.length - 1; index >= 0; index -= 1) {
-    const activity = activities[index];
-    if (!activity || activity.kind !== "account.rate-limits.updated") {
-      continue;
-    }
+  // Order newest-first by `createdAt`. On ties, a later position in the input
+  // wins — preserving the prior reverse-walk behavior for a single thread's
+  // already-ascending activities.
+  const rateLimitActivities = activities
+    .map((activity, index) => ({ activity, index }))
+    .filter((entry) => entry.activity?.kind === "account.rate-limits.updated")
+    .sort((a, b) =>
+      a.activity.createdAt < b.activity.createdAt
+        ? 1
+        : a.activity.createdAt > b.activity.createdAt
+          ? -1
+          : b.index - a.index,
+    );
+
+  for (const { activity } of rateLimitActivities) {
     if (updatedAt === null) {
       updatedAt = activity.createdAt;
     }
@@ -112,6 +130,60 @@ export function deriveLatestRateLimitSnapshot(
     ...(planType ? { planType } : {}),
     updatedAt,
   };
+}
+
+/**
+ * Validate an untrusted value (e.g. a snapshot restored from localStorage) into
+ * a `RateLimitSnapshot`, or return null if it isn't usable. Windows are
+ * re-parsed through the same normalization as live data so persisted state can
+ * never inject shapes the renderer doesn't expect.
+ */
+export function sanitizeRateLimitSnapshot(value: unknown): RateLimitSnapshot | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
+  }
+  const updatedAt = record.updatedAt;
+  if (typeof updatedAt !== "string" || !Number.isFinite(Date.parse(updatedAt))) {
+    return null;
+  }
+  const rawWindows = Array.isArray(record.windows) ? record.windows : [];
+  const windows = rawWindows
+    .map(parseWindow)
+    .filter((window): window is ProviderRateLimitWindow => window !== null);
+  if (windows.length === 0) {
+    return null;
+  }
+  const status =
+    record.status === "allowed" ||
+    record.status === "allowed_warning" ||
+    record.status === "rejected"
+      ? record.status
+      : undefined;
+  const planType =
+    typeof record.planType === "string" && record.planType.trim().length > 0
+      ? record.planType
+      : undefined;
+  return {
+    windows,
+    ...(status ? { status } : {}),
+    ...(planType ? { planType } : {}),
+    updatedAt,
+  };
+}
+
+/**
+ * Pick the most recently updated of two snapshots (by `updatedAt`), preferring
+ * the first argument on ties. Used to reconcile the live in-store snapshot with
+ * one restored from persistent browser storage.
+ */
+export function freshestRateLimitSnapshot(
+  a: RateLimitSnapshot | null,
+  b: RateLimitSnapshot | null,
+): RateLimitSnapshot | null {
+  if (!a) return b;
+  if (!b) return a;
+  return Date.parse(b.updatedAt) > Date.parse(a.updatedAt) ? b : a;
 }
 
 /** Always show the meter once the provider has reported quota usage at least once. */

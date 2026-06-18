@@ -1626,6 +1626,62 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("ignores Claude task_updated patches without surfacing a warning", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 6).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      // A task_updated patch carries no dedicated runtime event; it must not
+      // produce a runtime.warning the way an unmodeled subtype would.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_updated",
+        task_id: "task-updated-1",
+        patch: {
+          status: "paused",
+          is_backgrounded: true,
+        },
+        session_id: "sdk-session-task-updated",
+        uuid: "task-updated-event-1",
+      } as unknown as SDKMessage);
+
+      // Follow with a recognized task_progress so the bounded stream still fills.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_progress",
+        task_id: "task-updated-1",
+        description: "Still working",
+        usage: {
+          total_tokens: 42,
+          tool_uses: 1,
+          duration_ms: 100,
+        },
+        session_id: "sdk-session-task-updated",
+        uuid: "task-updated-progress-1",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      const warning = runtimeEvents.find((event) => event.type === "runtime.warning");
+      assert.equal(warning, undefined);
+      const progressEvent = runtimeEvents.find((event) => event.type === "task.progress");
+      assert.equal(progressEvent?.type, "task.progress");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("emits thread token usage updates from Claude task progress", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

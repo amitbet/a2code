@@ -46,7 +46,7 @@ merging `upstream/main`.
   existing provider resume-cursor plumbing and calls the Codex app-server's
   native **`thread/fork`** RPC on the new thread's first session start, instead
   of `thread/start`. The cursor carries `{ threadId: <source conversation id>,
-  fork: true }`; the runtime forks the source conversation into a brand-new
+fork: true }`; the runtime forks the source conversation into a brand-new
   backend thread, then stores a normal resume cursor so subsequent starts just
   resume. Fork happens exactly once (only when the new thread has no cursor of
   its own yet).
@@ -136,19 +136,53 @@ merging `upstream/main`.
   - `packages/contracts/src/providerRuntime.ts` — **modified**: the
     `ProviderRateLimitWindowKind` literal union must include `"spend"`.
   - `apps/web/src/lib/rateLimits.ts` — **modified**: `WINDOW_KINDS` must include
-    `"spend"`; `deriveLatestRateLimitSnapshot` merges windows across activities;
-    `shouldShowRateLimitMeter` gates visibility.
+    `"spend"`; `deriveLatestRateLimitSnapshot` merges windows across activities
+    and is **order-independent** (it sorts rate-limit activities newest-first by
+    `createdAt`, later input position winning ties) so it can accept activities
+    merged across multiple threads; `shouldShowRateLimitMeter` gates visibility.
+    Also adds `sanitizeRateLimitSnapshot` (validates a persisted snapshot) and
+    `freshestRateLimitSnapshot` (picks the newer of two by `updatedAt`).
+  - `apps/web/src/store.ts` — **modified**: adds
+    `selectLatestRateLimitActivitiesForInstance(instanceId)`, which returns the
+    latest `account.rate-limits.updated` activity for every thread bound to a
+    provider instance, across all environments (WeakMap-cached per thread on the
+    activity-id array). This is the account/subscription-wide source for the
+    meter — quota is an account property, not a per-conversation one.
+  - `apps/web/src/rateLimitSnapshotStore.ts` — fork-added. A `persist`-backed
+    (localStorage, key `t3code:rate-limit-snapshots:v1`) zustand store mapping
+    `instanceId → RateLimitSnapshot`, recording only strictly-newer snapshots.
+    This survives reloads and the per-thread detail subscription being evicted
+    (the only channel that carries live rate-limit activities), so the meter
+    keeps the freshest figures we've ever seen for a subscription.
+  - `apps/web/src/lib/useAccountRateLimitSnapshot.ts` — fork-added. Hook that
+    wraps the selector (`useShallow`), derives the merged live snapshot, mirrors
+    the freshest into the persistent store, and returns
+    `freshestRateLimitSnapshot(live, persisted)` — so an idle/evicted/reloaded
+    conversation no longer drops to "no data" or pins a stale "updated 14h ago"
+    while another conversation on the same subscription reports fresher usage.
   - `apps/web/src/components/chat/RateLimitMeter.tsx` — fork-added. Renders the
     bars + popover (including the spend `detail` dollar string).
   - `apps/web/src/components/chat/ChatComposer.tsx` — **modified**: imports
-    `RateLimitMeter` + `deriveLatestRateLimitSnapshot`/`shouldShowRateLimitMeter`,
-    derives `activeRateLimits` via `useMemo`, passes it into
+    `RateLimitMeter` + `shouldShowRateLimitMeter` (+ the `RateLimitSnapshot`
+    type) and `useAccountRateLimitSnapshot`; derives `activeRateLimits =
+useAccountRateLimitSnapshot(selectedInstanceId)` (NOT a per-thread
+    `useMemo(deriveLatestRateLimitSnapshot(activeThreadActivities))` — that was
+    the old per-conversation wiring), passes it into
     `ComposerFooterPrimaryActions`, and renders `<RateLimitMeter>`. This is the
     wiring upstream merges keep clobbering — re-apply it on top of any upstream
     composer-footer refactor.
 - Note: the Claude spend window only renders if the usage endpoint returns a
   numeric `extra_usage.utilization` and `is_enabled !== false` (see
   `spendWindow()` in `ClaudeUsageApi.ts`).
+- Data-availability note: live thread activities arrive over the per-thread
+  **detail** subscription (evicted when idle), so the cross-thread merge only
+  sees conversations loaded this session. The persistent snapshot store
+  (`rateLimitSnapshotStore.ts`) bridges the gap — it remembers the freshest
+  snapshot per subscription across reloads/evictions. The remaining limit:
+  figures can only be as fresh as the last time _some_ conversation on that
+  subscription streamed usage this client. A truly authoritative cross-client
+  source would require carrying the snapshot on the shell snapshot or a
+  dedicated account channel (server-side, not yet done).
 
 ### Arbitrary file attachments (not just images)
 
@@ -160,7 +194,7 @@ merging `upstream/main`.
   attachments"). A later `upstream/main` merge **partially reverted it**: the
   contracts, server, store, and timeline pieces survived, but the **web composer
   was clobbered back to images-only** (it rejected non-images with
-  *"Unsupported file type … Please attach image files only."*). The notes below
+  _"Unsupported file type … Please attach image files only."_). The notes below
   cover the full surface so the whole thing can be re-applied if a future merge
   reverts any layer again.
 - Contracts (`packages/contracts/src/orchestration.ts`) — **modified**: adds
@@ -196,7 +230,7 @@ merging `upstream/main`.
   - `apps/web/src/store.ts`, `apps/web/src/historyBootstrap.ts`,
     `apps/web/src/components/chat/MessagesTimeline.tsx` — map / summarize /
     render `file` attachments alongside images.
-- Key smell test after a merge: if you see *"Please attach image files only"*
+- Key smell test after a merge: if you see _"Please attach image files only"_
   in `ChatComposer.tsx` or `ComposerImageAttachment` aliased to an
   `Extract<…, { type: "image" }>`, the web layer has been reverted again —
   re-apply the web pieces above.
@@ -278,7 +312,7 @@ merging `upstream/main`.
 - Migration seam: `033_ProjectionThreadsForkedFrom` is fork-added. If upstream
   adds its own migration `33`, renumber ours to the next free id (and update
   `Migrations.ts`). The migration is idempotent (guards on `PRAGMA
-  table_info`), so re-running after a renumber is safe.
+table_info`), so re-running after a renumber is safe.
 - If the provider adapter contract ever gains a first-class cross-provider fork
   API, this Codex-only cursor hack can be replaced by it.
 

@@ -4,7 +4,9 @@ import {
   RATE_LIMIT_STALE_AFTER_MS,
   deriveLatestRateLimitSnapshot,
   formatRateLimitReset,
+  freshestRateLimitSnapshot,
   isRateLimitSnapshotStale,
+  sanitizeRateLimitSnapshot,
   shouldShowRateLimitMeter,
 } from "./rateLimits";
 
@@ -160,11 +162,105 @@ describe("deriveLatestRateLimitSnapshot", () => {
     expect(snapshot?.windows[1]?.label).toBe("Weekly");
   });
 
+  it("picks the freshest snapshot regardless of input order (cross-thread merge)", () => {
+    // Activities merged from multiple conversations on the same subscription are
+    // not globally sorted; the newest `createdAt` must still win per window.
+    const snapshot = deriveLatestRateLimitSnapshot([
+      activity({
+        createdAt: "2026-06-03T00:05:00.000Z",
+        payload: {
+          snapshot: {
+            windows: [
+              { kind: "spend", label: "Spend", usedPercent: 36, detail: "$358.77 / $1,000.00" },
+            ],
+            status: "allowed",
+          },
+        },
+      }),
+      activity({
+        createdAt: "2026-06-02T10:00:00.000Z",
+        payload: {
+          snapshot: {
+            windows: [
+              { kind: "spend", label: "Spend", usedPercent: 35, detail: "$352.39 / $1,000.00" },
+              { kind: "weekly", label: "Weekly", usedPercent: 80 },
+            ],
+          },
+        },
+      }),
+    ]);
+    expect(snapshot?.updatedAt).toBe("2026-06-03T00:05:00.000Z");
+    // Newest spend figure wins; the older thread still contributes its weekly window.
+    expect(snapshot?.windows.find((w) => w.kind === "spend")?.detail).toBe("$358.77 / $1,000.00");
+    expect(snapshot?.windows.find((w) => w.kind === "weekly")?.usedPercent).toBe(80);
+  });
+
   it("skips activities whose snapshot has no usable window", () => {
     const snapshot = deriveLatestRateLimitSnapshot([
       activity({ payload: { snapshot: { windows: [], status: "allowed" } } }),
     ]);
     expect(snapshot).toBeNull();
+  });
+});
+
+describe("sanitizeRateLimitSnapshot", () => {
+  it("rejects non-objects and bad timestamps", () => {
+    expect(sanitizeRateLimitSnapshot(null)).toBeNull();
+    expect(sanitizeRateLimitSnapshot("nope")).toBeNull();
+    expect(
+      sanitizeRateLimitSnapshot({
+        updatedAt: "not-a-date",
+        windows: [{ kind: "spend", label: "Spend", usedPercent: 1 }],
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects snapshots with no usable window", () => {
+    expect(
+      sanitizeRateLimitSnapshot({ updatedAt: "2026-06-03T00:00:00.000Z", windows: [] }),
+    ).toBeNull();
+  });
+
+  it("re-parses windows from a restored snapshot", () => {
+    const snapshot = sanitizeRateLimitSnapshot({
+      updatedAt: "2026-06-03T00:00:00.000Z",
+      status: "allowed",
+      planType: "max",
+      windows: [
+        { kind: "spend", label: "Spend", usedPercent: 200, detail: "$358.77 / $1,000.00" },
+        { kind: "bogus", label: "" }, // dropped: no usage/reset and invalid shape
+      ],
+    });
+    expect(snapshot?.windows).toHaveLength(1);
+    expect(snapshot?.windows[0]?.kind).toBe("spend");
+    expect(snapshot?.windows[0]?.usedPercent).toBe(100); // clamped
+    expect(snapshot?.status).toBe("allowed");
+    expect(snapshot?.planType).toBe("max");
+  });
+});
+
+describe("freshestRateLimitSnapshot", () => {
+  const older = {
+    updatedAt: "2026-06-02T00:00:00.000Z",
+    windows: [{ kind: "spend", label: "Spend", usedPercent: 35 }] as const,
+  };
+  const newer = {
+    updatedAt: "2026-06-03T00:00:00.000Z",
+    windows: [{ kind: "spend", label: "Spend", usedPercent: 36 }] as const,
+  };
+
+  it("handles nulls", () => {
+    expect(freshestRateLimitSnapshot(null, null)).toBeNull();
+    expect(freshestRateLimitSnapshot(older, null)).toBe(older);
+    expect(freshestRateLimitSnapshot(null, newer)).toBe(newer);
+  });
+
+  it("returns the most recently updated, preferring the first on ties", () => {
+    expect(freshestRateLimitSnapshot(older, newer)).toBe(newer);
+    expect(freshestRateLimitSnapshot(newer, older)).toBe(newer);
+    const tieA = { ...older };
+    const tieB = { ...older };
+    expect(freshestRateLimitSnapshot(tieA, tieB)).toBe(tieA);
   });
 });
 

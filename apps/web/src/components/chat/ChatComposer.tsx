@@ -117,7 +117,8 @@ import {
   deriveLatestContextWindowSnapshot,
   formatProviderDisplayName,
 } from "../../lib/contextWindow";
-import { deriveLatestRateLimitSnapshot, shouldShowRateLimitMeter } from "../../lib/rateLimits";
+import { type RateLimitSnapshot, shouldShowRateLimitMeter } from "../../lib/rateLimits";
+import { useAccountRateLimitSnapshot } from "../../lib/useAccountRateLimitSnapshot";
 import { formatProviderSkillDisplayName } from "../../providerSkillPresentation";
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
@@ -335,7 +336,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
 const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
   compact: boolean;
   activeContextWindow: ReturnType<typeof deriveLatestContextWindowSnapshot>;
-  activeRateLimits: ReturnType<typeof deriveLatestRateLimitSnapshot>;
+  activeRateLimits: RateLimitSnapshot | null;
   activeThreadProviderDisplayName: string | null;
   isPreparingWorktree: boolean;
   pendingAction: {
@@ -865,10 +866,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     () => deriveLatestContextWindowSnapshot(activeThreadActivities ?? []),
     [activeThreadActivities],
   );
-  const activeRateLimits = useMemo(
-    () => deriveLatestRateLimitSnapshot(activeThreadActivities ?? []),
-    [activeThreadActivities],
-  );
+  // Rate limits describe the subscription, not this one conversation, so merge
+  // the freshest snapshot across every thread on the selected instance instead
+  // of reading only the active thread's last-seen figures.
+  const activeRateLimits = useAccountRateLimitSnapshot(selectedInstanceId);
   const activeThreadProviderDisplayName = useMemo(() => {
     if (!activeThreadModelSelection) return null;
     const entry = providerStatuses.find(

@@ -2795,6 +2795,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         return;
       case "thinking_tokens":
         return;
+      case "task_updated":
+        // A wire-safe patch of TaskState fields for SDK clients that maintain a
+        // local task map. Our runtime event stream models the task lifecycle via
+        // the dedicated task_started/task_progress/task_notification messages, so
+        // this merge signal is redundant here — ignore it rather than surfacing a
+        // spurious "unhandled subtype" warning in the work log.
+        return;
       case "permission_denied":
         yield* offerRuntimeEvent({
           ...base,

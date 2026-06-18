@@ -1845,6 +1845,79 @@ export function selectSidebarThreadsAcrossEnvironments(state: AppState): Sidebar
   );
 }
 
+// Cache the latest rate-limit activity per thread, keyed on the thread's
+// ordered activity-id array. The id array reference only changes when that
+// thread's activities change (see writeThreadState), so this keeps the
+// across-environments scan O(threads) — no rescanning each thread's activity
+// list on unrelated state updates.
+const latestRateLimitActivityCache = new WeakMap<
+  ReadonlyArray<string>,
+  OrchestrationThreadActivity | null
+>();
+
+function latestRateLimitActivityForThread(
+  environmentState: EnvironmentState,
+  threadId: ThreadId,
+): OrchestrationThreadActivity | null {
+  const ids = environmentState.activityIdsByThreadId[threadId];
+  if (!ids || ids.length === 0) {
+    return null;
+  }
+  const cached = latestRateLimitActivityCache.get(ids);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const byId = environmentState.activityByThreadId[threadId];
+  let found: OrchestrationThreadActivity | null = null;
+  if (byId) {
+    for (let index = ids.length - 1; index >= 0; index -= 1) {
+      const activityId = ids[index];
+      const activity = activityId ? byId[activityId] : undefined;
+      if (activity && activity.kind === "account.rate-limits.updated") {
+        found = activity;
+        break;
+      }
+    }
+  }
+  latestRateLimitActivityCache.set(ids, found);
+  return found;
+}
+
+/**
+ * Latest `account.rate-limits.updated` activity for every thread bound to the
+ * given provider instance, across all environments. Rate limits describe an
+ * account/subscription rather than a single conversation, so the quota meter
+ * merges these (newest values win per window) instead of showing only the
+ * active thread's last-seen figures — which go stale while another
+ * conversation on the same subscription keeps reporting fresher usage.
+ *
+ * Wrap with `useShallow`: the returned array's elements are stable store
+ * references, so a shallow compare avoids re-renders when nothing changed.
+ */
+export function selectLatestRateLimitActivitiesForInstance(
+  instanceId: string | null | undefined,
+): (state: AppState) => OrchestrationThreadActivity[] {
+  return (state) => {
+    if (!instanceId) {
+      return [];
+    }
+    const out: OrchestrationThreadActivity[] = [];
+    for (const [, environmentState] of getEnvironmentEntries(state)) {
+      for (const threadId of environmentState.threadIds) {
+        const shell = environmentState.threadShellById[threadId];
+        if (!shell || shell.modelSelection.instanceId !== instanceId) {
+          continue;
+        }
+        const activity = latestRateLimitActivityForThread(environmentState, threadId);
+        if (activity) {
+          out.push(activity);
+        }
+      }
+    }
+    return out;
+  };
+}
+
 export function selectSidebarThreadsForProjectRef(
   state: AppState,
   ref: ScopedProjectRef | null | undefined,
