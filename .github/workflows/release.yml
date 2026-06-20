@@ -388,7 +388,10 @@ jobs:
           # Gradle from bash where cd/./gradlew behave normally.
           vp run --filter @t3tools/mobile prebuild:android:ci
           cd apps/mobile/android
-          ./gradlew assembleDebug
+          ./gradlew \
+            -Dorg.gradle.jvmargs="-Xmx4096m -XX:MaxMetaspaceSize=1024m -Dfile.encoding=UTF-8" \
+            -Dorg.gradle.workers.max=2 \
+            assembleDebug
 
       - id: apk_meta
         name: Detect Android APK output
