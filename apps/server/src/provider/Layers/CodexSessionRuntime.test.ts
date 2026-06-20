@@ -224,8 +224,10 @@ describe("isRecoverableThreadResumeError", () => {
 
 describe("openCodexThread", () => {
   it("falls back to thread/start when resume fails recoverably", async () => {
-    const calls: Array<{ method: "thread/start" | "thread/resume" | "thread/fork"; payload: unknown }> =
-      [];
+    const calls: Array<{
+      method: "thread/start" | "thread/resume" | "thread/fork";
+      payload: unknown;
+    }> = [];
     const started = makeThreadOpenResponse("fresh-thread");
     const client = {
       request: <M extends "thread/start" | "thread/resume" | "thread/fork">(
@@ -295,7 +297,7 @@ describe("openCodexThread", () => {
           requestedModel: "gpt-5.3-codex",
           serviceTier: undefined,
           resumeThreadId: "stale-thread",
-        forkFromThreadId: undefined,
+          forkFromThreadId: undefined,
         }),
       ),
       (error: unknown) =>

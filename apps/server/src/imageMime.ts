@@ -103,12 +103,22 @@ export function inferImageExtension(input: { mimeType: string; fileName?: string
   return ".bin";
 }
 
+// `Mime.getExtension` returns an extension without a leading dot (e.g. `pdf`),
+// whereas the SAFE_* sets are dotted (`.pdf`); normalize so lookups match.
+function normalizeMimeExtension(extension: string | null | undefined): string | undefined {
+  if (!extension) {
+    return undefined;
+  }
+  const lower = extension.toLowerCase();
+  return lower.startsWith(".") ? lower : `.${lower}`;
+}
+
 export function inferAttachmentExtension(input: { mimeType: string; fileName?: string }): string {
   if (input.mimeType.toLowerCase().startsWith("image/")) {
     return inferImageExtension(input);
   }
 
-  const fromMimeExtension = Mime.getExtension(input.mimeType);
+  const fromMimeExtension = normalizeMimeExtension(Mime.getExtension(input.mimeType));
   if (fromMimeExtension && SAFE_ATTACHMENT_FILE_EXTENSIONS.has(fromMimeExtension)) {
     return fromMimeExtension;
   }

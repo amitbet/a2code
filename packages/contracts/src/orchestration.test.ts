@@ -247,6 +247,39 @@ it.effect("preserves explicit provider and runtime mode in thread.turn.start", (
   }),
 );
 
+it.effect("accepts non-image file attachments in thread.turn.start", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadTurnStartCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-turn-file-attachment",
+      threadId: "thread-1",
+      message: {
+        messageId: "msg-file-attachment",
+        role: "user",
+        text: "read this file",
+        attachments: [
+          {
+            type: "file",
+            id: "attachment-1",
+            name: "data.json",
+            mimeType: "application/json",
+            sizeBytes: 128,
+          },
+        ],
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.deepStrictEqual(parsed.message.attachments[0], {
+      type: "file",
+      id: "attachment-1",
+      name: "data.json",
+      mimeType: "application/json",
+      sizeBytes: 128,
+    });
+  }),
+);
+
 it.effect("accepts bootstrap metadata in thread.turn.start", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadTurnStartCommand({
@@ -339,6 +372,30 @@ it.effect("decodes thread archive and unarchive commands", () =>
 
     assert.strictEqual(archive.type, "thread.archive");
     assert.strictEqual(unarchive.type, "thread.unarchive");
+  }),
+);
+
+it.effect("decodes thread.fork with an optional target model selection", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationCommand({
+      type: "thread.fork",
+      commandId: "cmd-thread-fork",
+      threadId: "thread-fork",
+      sourceThreadId: "thread-source",
+      title: "Source thread (fork)",
+      modelSelection: {
+        provider: "claudeAgent",
+        model: "claude-opus-4-6",
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.strictEqual(parsed.type, "thread.fork");
+    if (parsed.type !== "thread.fork") {
+      return;
+    }
+    assert.strictEqual(parsed.modelSelection?.instanceId, ProviderInstanceId.make("claudeAgent"));
+    assert.strictEqual(parsed.modelSelection?.model, "claude-opus-4-6");
   }),
 );
 

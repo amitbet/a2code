@@ -9,10 +9,31 @@ adds the features below on top of upstream. Fork-specific app identity
 (`A2 Code` name + bundle/package IDs) lets it install side-by-side with the
 upstream app.
 
-- **Thread forking** — fork a thread into a new one that inherits the prior
-  conversation context, staying in the same git environment. Available from the
-  thread right-click menu (**Fork thread**) and the **`/fork`** composer command.
-  (Codex-only for now.)
+- **Thread artifacts** — a thread's _completed_ history can be serialized into a
+  portable Markdown transcript: user/assistant messages interleaved with the
+  tool steps the agent actually ran (the command/file/search call **and its
+  result**), in order. It deliberately leaves out work that isn't done — the
+  in-flight turn that's still running and proposed-but-unexecuted plans — so the
+  artifact represents settled work, not a half-finished state. The transcript
+  rides the same attachment pipeline as regular files, which is what lets every
+  provider consume it without provider-specific code.
+  - **Fork** creates a new thread in the same git environment so you can explore
+    another avenue without disturbing the original. When the fork stays on a
+    provider that can branch its own conversation natively (Codex), it does
+    that — a lossless continuation. Otherwise (and for **any cross-provider
+    fork**, e.g. Codex→Claude) it carries the source context forward as the
+    serialized transcript artifact attached to the fork's first message. From
+    the thread right-click menu (**Fork thread**) and the **`/fork`** composer
+    command; to switch model/provider on a fork today, pick the target in the
+    composer's model picker before sending the first message.
+  - **Reference** pulls one thread's context into another conversation. Use the
+    thread right-click **Copy thread ref** action to copy an `@thread_ref:<id>`
+    token, paste it into any thread's message, and on send the server attaches
+    that thread's transcript — including across models/providers.
+  - **Export** downloads a thread as a zip — `transcript.md` plus every
+    attachment under `attachments/` — via the thread right-click **Export
+    thread (zip)** action, so the context can move to another checkout,
+    machine, or external agent.
 - **In-chat find (`Cmd/Ctrl+F`)** — a browser-style find toolbar over the chat
   timeline that searches the underlying row data (the timeline is virtualized,
   so native find-in-page can't see it), scrolls matches into view, and

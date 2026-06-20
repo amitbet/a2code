@@ -3981,6 +3981,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     provider: PROVIDER,
     capabilities: {
       sessionModelSwitch: "in-session",
+      // The Claude Agent SDK has no backend fork primitive (only session
+      // resume), so forks fall back to the transcript-replay path.
+      nativeFork: false,
     },
     startSession,
     sendTurn,

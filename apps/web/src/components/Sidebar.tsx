@@ -61,6 +61,8 @@ import {
   type SidebarThreadPreviewCount,
   type SidebarThreadSortOrder,
 } from "@t3tools/contracts/settings";
+import { formatThreadReference } from "@t3tools/shared/threadReference";
+import { resolveEnvironmentHttpUrl } from "../environments/runtime/catalog";
 import { usePrimaryEnvironmentId } from "../environments/primary";
 import { isElectron } from "../env";
 import { APP_MONOGRAM, APP_NAME_SUFFIX, APP_STAGE_LABEL, APP_VERSION } from "../branding";
@@ -1062,6 +1064,26 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       );
     },
   });
+  const { copyToClipboard: copyThreadRefToClipboard } = useCopyToClipboard<{
+    threadRef: string;
+  }>({
+    onCopy: (ctx) => {
+      toastManager.add({
+        type: "success",
+        title: "Thread reference copied",
+        description: ctx.threadRef,
+      });
+    },
+    onError: (error) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to copy thread reference",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        }),
+      );
+    },
+  });
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{
     path: string;
   }>({
@@ -2020,6 +2042,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           { id: "mark-unread", label: "Mark unread" },
           { id: "copy-path", label: "Copy Path" },
           { id: "copy-thread-id", label: "Copy Thread ID" },
+          { id: "copy-thread-ref", label: "Copy thread ref" },
+          { id: "export-zip", label: "Export thread (zip)" },
           { id: "delete", label: "Delete", destructive: true, icon: "trash" },
         ],
         position,
@@ -2038,8 +2062,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             stackedThreadToast({
               type: "error",
               title: "Fork failed",
-              description:
-                error instanceof Error ? error.message : "Could not fork this thread.",
+              description: error instanceof Error ? error.message : "Could not fork this thread.",
             }),
           );
         }
@@ -2068,6 +2091,41 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         copyThreadIdToClipboard(thread.id, { threadId: thread.id });
         return;
       }
+      if (clicked === "copy-thread-ref") {
+        const threadRefToken = formatThreadReference(thread.id);
+        copyThreadRefToClipboard(threadRefToken, { threadRef: threadRefToken });
+        return;
+      }
+      if (clicked === "export-zip") {
+        try {
+          const exportUrl = resolveEnvironmentHttpUrl({
+            environmentId: threadRef.environmentId,
+            pathname: `/api/thread-export/${encodeURIComponent(thread.id)}`,
+          });
+          const response = await fetch(exportUrl, { credentials: "include" });
+          if (!response.ok) {
+            throw new Error(`Export request failed (${response.status}).`);
+          }
+          const blob = await response.blob();
+          const objectUrl = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = objectUrl;
+          link.download = `thread-${thread.id}.zip`;
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+          URL.revokeObjectURL(objectUrl);
+        } catch (error) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Export failed",
+              description: error instanceof Error ? error.message : "Could not export this thread.",
+            }),
+          );
+        }
+        return;
+      }
       if (clicked !== "delete") return;
       if (appSettingsConfirmThreadDelete) {
         const confirmed = await api.dialogs.confirm(
@@ -2086,6 +2144,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       appSettingsConfirmThreadDelete,
       copyPathToClipboard,
       copyThreadIdToClipboard,
+      copyThreadRefToClipboard,
       deleteThread,
       forkThread,
       markThreadUnread,

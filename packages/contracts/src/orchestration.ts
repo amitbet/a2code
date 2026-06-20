@@ -547,6 +547,12 @@ const ThreadForkCommand = Schema.Struct({
   // The thread whose conversation context is forked into the new thread.
   sourceThreadId: ThreadId,
   title: TrimmedNonEmptyString,
+  // Optional target provider/model for the fork. When omitted the fork inherits
+  // the source thread's selection (same-provider fork). When it resolves to a
+  // different provider instance than the source, the fork switches providers and
+  // the source context is carried over via transcript replay rather than a
+  // provider-native fork.
+  modelSelection: Schema.optional(ModelSelection),
   createdAt: IsoDateTime,
 });
 

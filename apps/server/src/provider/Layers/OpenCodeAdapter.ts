@@ -1453,6 +1453,7 @@ export function makeOpenCodeAdapter(
       provider: PROVIDER,
       capabilities: {
         sessionModelSwitch: "in-session",
+        nativeFork: false,
       },
       startSession,
       sendTurn,

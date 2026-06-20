@@ -259,3 +259,56 @@ export function deriveToolActivityPresentation(
     summary: title ?? fallbackSummary,
   };
 }
+
+function firstStringField(
+  record: Record<string, unknown> | undefined,
+  keys: ReadonlyArray<string>,
+): string | undefined {
+  if (!record) {
+    return undefined;
+  }
+  for (const key of keys) {
+    const value = asTrimmedString(record[key]);
+    if (value !== undefined) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+const RESULT_FIELD_KEYS = [
+  "output",
+  "stdout",
+  "aggregated_output",
+  "aggregatedOutput",
+  "content",
+  "text",
+  "result",
+  "message",
+] as const;
+
+/**
+ * Best-effort extraction of a tool's *result/output* text from a completed
+ * activity payload. Tool result shapes vary by provider, so this probes the
+ * common locations (`data.item.result`, `data.result`, `data.output`, …) and
+ * falls back to the (possibly truncated) human `detail`. Returns `undefined`
+ * when no textual result is present (e.g. a pure file-read).
+ */
+export function deriveToolActivityResult(input: {
+  readonly data?: unknown;
+  readonly detail?: string | null | undefined;
+}): string | undefined {
+  const data = asRecord(input.data);
+  const item = asRecord(data?.item);
+  const itemResult = asRecord(item?.result);
+
+  const fromResultRecord = firstStringField(itemResult, RESULT_FIELD_KEYS);
+  const fromItem = firstStringField(item, RESULT_FIELD_KEYS);
+  const fromData = firstStringField(data, RESULT_FIELD_KEYS);
+  // `item.result` may itself be a plain string rather than a record.
+  const itemResultString = asTrimmedString(item?.result);
+
+  const candidate =
+    fromResultRecord ?? itemResultString ?? fromItem ?? fromData ?? asTrimmedString(input.detail);
+  return stripTrailingExitCode(candidate);
+}

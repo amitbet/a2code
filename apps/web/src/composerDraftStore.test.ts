@@ -103,6 +103,30 @@ function makeImage(input: {
   };
 }
 
+function makeFile(input: {
+  id: string;
+  name?: string;
+  mimeType?: string;
+  contents?: string;
+  lastModified?: number;
+}): Extract<ComposerImageAttachment, { type: "file" }> {
+  const name = input.name ?? "data.json";
+  const mimeType = input.mimeType ?? "application/json";
+  const contents = input.contents ?? '{"ok":true}';
+  const file = new File([contents], name, {
+    type: mimeType,
+    lastModified: input.lastModified ?? 1_700_000_000_000,
+  });
+  return {
+    type: "file",
+    id: input.id,
+    name,
+    mimeType,
+    sizeBytes: file.size,
+    file,
+  };
+}
+
 function makeTerminalContext(input: {
   id: string;
   text?: string;
@@ -254,6 +278,48 @@ describe("composerDraftStore addImages", () => {
     expect(draft?.images.map((image) => image.id)).toEqual(["img-shared"]);
     expect(revokeSpy).not.toHaveBeenCalledWith("blob:shared");
   });
+
+  it("stores generic file attachments without requiring preview URLs", () => {
+    const file = makeFile({
+      id: "file-json",
+      name: "payload.json",
+      mimeType: "application/json",
+    });
+
+    useComposerDraftStore.getState().addImage(threadRef, file);
+
+    const draft = draftFor(threadId, TEST_ENVIRONMENT_ID);
+    expect(draft?.images).toHaveLength(1);
+    expect(draft?.images[0]).toMatchObject({
+      type: "file",
+      id: "file-json",
+      name: "payload.json",
+      mimeType: "application/json",
+    });
+    expect(draft?.images[0]?.previewUrl).toBeUndefined();
+    expect(revokeSpy).not.toHaveBeenCalled();
+  });
+
+  it("deduplicates generic file attachments without revoking image preview URLs", () => {
+    const first = makeFile({
+      id: "file-first",
+      name: "same.log",
+      mimeType: "text/plain",
+      contents: "same",
+    });
+    const duplicate = makeFile({
+      id: "file-duplicate",
+      name: "same.log",
+      mimeType: "text/plain",
+      contents: "same",
+    });
+
+    useComposerDraftStore.getState().addImages(threadRef, [first, duplicate]);
+
+    const draft = draftFor(threadId, TEST_ENVIRONMENT_ID);
+    expect(draft?.images.map((image) => image.id)).toEqual(["file-first"]);
+    expect(revokeSpy).not.toHaveBeenCalled();
+  });
 });
 
 describe("composerDraftStore clearComposerContent", () => {
@@ -341,6 +407,48 @@ describe("composerDraftStore syncPersistedAttachments", () => {
 
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.persistedAttachments).toEqual([]);
     expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.nonPersistedImageIds).toEqual([image.id]);
+  });
+
+  it("hydrates non-image persisted attachments as file drafts", () => {
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        merge: (
+          persistedState: unknown,
+          currentState: ReturnType<typeof useComposerDraftStore.getState>,
+        ) => ReturnType<typeof useComposerDraftStore.getState>;
+      };
+    };
+    const mergedState = persistApi.getOptions().merge(
+      {
+        draftsByThreadId: {
+          [threadId]: {
+            prompt: "",
+            attachments: [
+              {
+                id: "file-persisted",
+                name: "notes.md",
+                mimeType: "text/markdown",
+                sizeBytes: 7,
+                dataUrl: "data:text/markdown;base64,IyBOb3Rl",
+              },
+            ],
+          },
+        },
+        draftThreadsByThreadId: {},
+        projectDraftThreadIdByProjectKey: {},
+      },
+      useComposerDraftStore.getInitialState(),
+    );
+
+    const hydrated = mergedState.draftsByThreadKey[threadKeyFor(threadId)]?.images[0];
+    expect(hydrated).toMatchObject({
+      type: "file",
+      id: "file-persisted",
+      name: "notes.md",
+      mimeType: "text/markdown",
+    });
+    expect(hydrated?.previewUrl).toBeUndefined();
+    expect(hydrated?.file.type).toBe("text/markdown");
   });
 });
 

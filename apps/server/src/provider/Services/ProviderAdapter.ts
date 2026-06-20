@@ -30,6 +30,25 @@ export interface ProviderAdapterCapabilities {
    * Declares whether changing the model on an existing session is supported.
    */
   readonly sessionModelSwitch: ProviderSessionModelSwitchMode;
+  /**
+   * Declares whether this adapter can natively fork an existing conversation
+   * into a new backend conversation that retains the source's context.
+   *
+   * When `true`, the orchestration layer forks by passing
+   * {@link ProviderSessionStartInput.forkFromThreadId} to {@link startSession}
+   * on the new thread's first start — the adapter is responsible for copying
+   * the source conversation in its own backend (e.g. Codex's `thread/fork`).
+   * Native fork only applies when the source and target resolve to the *same*
+   * provider instance; the source conversation id is meaningless to any other
+   * backend.
+   *
+   * When `false` (the default for adapters without a backend fork primitive),
+   * the orchestration layer falls back to a provider-agnostic replay: it
+   * serializes the source thread's transcript into a context artifact and
+   * attaches it to the fork's first message. This same path is used for every
+   * cross-provider fork, regardless of the target's capability.
+   */
+  readonly nativeFork: boolean;
 }
 
 export interface ProviderThreadTurnSnapshot {

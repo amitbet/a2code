@@ -1980,9 +1980,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         interactionMode: threadRow.value.interactionMode,
         branch: threadRow.value.branch,
         worktreePath: threadRow.value.worktreePath,
-        ...(threadRow.value.forkedFromId
-          ? { forkedFromId: threadRow.value.forkedFromId }
-          : {}),
+        ...(threadRow.value.forkedFromId ? { forkedFromId: threadRow.value.forkedFromId } : {}),
         latestTurn: Option.isSome(latestTurnRow) ? mapLatestTurn(latestTurnRow.value) : null,
         createdAt: threadRow.value.createdAt,
         updatedAt: threadRow.value.updatedAt,

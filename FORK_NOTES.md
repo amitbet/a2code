@@ -41,39 +41,78 @@ merging `upstream/main`.
   - sidebar thread context-menu action: **`Fork thread`**
   - composer slash command: **`/fork`** (only offered on a started server
     thread, not on a draft — a draft has no context to fork)
-- **Implementation approach actually taken (supersedes the earlier "copied
-  messages + bootstrap" plan that was sketched here):** the fork rides the
-  existing provider resume-cursor plumbing and calls the Codex app-server's
-  native **`thread/fork`** RPC on the new thread's first session start, instead
-  of `thread/start`. The cursor carries `{ threadId: <source conversation id>,
-fork: true }`; the runtime forks the source conversation into a brand-new
-  backend thread, then stores a normal resume cursor so subsequent starts just
-  resume. Fork happens exactly once (only when the new thread has no cursor of
-  its own yet).
-  - Reason for choosing provider-native fork over copied-messages+bootstrap:
-    it reuses machinery that already flows end-to-end (resume cursor →
-    `ProviderService.startSession` → `CodexAdapter` → `CodexSessionRuntime`),
-    so it touches far less surface and needs no synthetic bootstrap turn.
-  - Consequence / scope limit: this is **Codex-only**. The generic provider
-    adapter contract has no cross-provider fork. For a non-Codex source the
-    fork cursor's `{ threadId }` shape won't match that adapter's resume state,
-    so it degrades to a fresh (empty-context) thread rather than erroring.
-- **Known open item (verify at runtime):** the agent's context is forked, but
-  the orchestration-level message history (the visible transcript) is a separate
-  projection and is **not** copied by this change. Whether the prior messages
-  render in the new thread depends on whether `ProviderRuntimeIngestion` replays
-  the `thread/fork` response's historical turns (same situation as
-  `thread/resume`). If a forked thread looks empty but the agent clearly retains
-  context, the fix lives in `ProviderRuntimeIngestion`.
+- **Implementation approach — capability-driven, two strategies.** A fork can
+  now target a **different provider** than its source (Codex↔Claude, etc.). The
+  orchestration reactor picks one of two strategies on the fork's **first user
+  turn** (`buildSendTurnRequestForThread` in `ProviderCommandReactor.ts`), based
+  on a provider capability flag rather than any hard-coded provider name:
+  - **Native fork** — used only when the fork's target provider **instance is
+    the same** as the source's _and_ that adapter advertises
+    `capabilities.nativeFork === true` (currently Codex only). This rides the
+    existing resume-cursor plumbing: `ensureSessionForThread` passes
+    `forkFromThreadId`, `ProviderService.startSession` seeds the
+    `{ threadId: <source conversation id>, fork: true }` cursor, and
+    `CodexSessionRuntime.openCodexThread` calls the app-server's `thread/fork`
+    RPC. One-shot (only when the new thread has no cursor of its own yet).
+  - **Transcript replay** — used for **every cross-provider fork** and for any
+    same-provider fork whose adapter lacks `nativeFork` (e.g. Claude→Claude,
+    which previously started blank). The source thread's message history is
+    serialized to Markdown (`buildThreadTranscript`, in `@t3tools/shared`),
+    persisted into the attachment store as `forked-conversation.md`
+    (`createThreadContextArtifact`), and prepended to the fork's first message
+    `attachments`. The provider adapters already inline text attachments for
+    every provider, so the new session inherits the prior conversation with no
+    provider-specific code. A failure to build the artifact degrades to a
+    context-less fork (logged warning) rather than failing the turn.
+- **`nativeFork` capability.** `ProviderAdapterCapabilities.nativeFork`
+  (`provider/Services/ProviderAdapter.ts`) is the single switch. Each adapter
+  declares it: Codex `true`, all others (`Claude`, `Cursor`, `Grok`,
+  `OpenCode`) `false`. Adding a future provider with a backend fork primitive is
+  just flipping this flag — no orchestration changes needed.
+- **Replay transcript serializes completed work, not just text.**
+  `buildThreadTranscript` interleaves messages with **completed tool steps**
+  (`item.completed` activities — the call via `deriveToolActivityPresentation`
+  plus its result via `deriveToolActivityResult`, read from the untruncated
+  `payload.data`) and errors, in chronological order. It deliberately omits:
+  proposed plans (intent / in-flight, not completed work), the **currently
+  running turn** (excluded by `latestTurn.state === "running"` + matching
+  `turnId`, so an in-flight prompt and its partial work never leak in), and
+  `tool.started`/`tool.updated` lifecycle noise. The only thing it cannot
+  recover is what isn't persisted at all — the model's raw hidden reasoning and
+  the exact backend context window — which remain native-fork-only.
+- **`buildThreadTranscript` is a shared primitive, not fork-specific.** It is
+  intended to also back: referencing one thread from another, "copy thread ref"
+  (`thread_ref:<id>`) tokens, exporting a conversation (e.g. "export thread as
+  zip": transcript `.md` + attachments subdir), and handoff to external agents.
+  Keep it pure / I/O-free so those consumers stay trivial.
+- **Known open item (verify at runtime):** for the **native** (Codex) path the
+  visible transcript is still a separate projection that is not copied by the
+  fork — whether prior messages render depends on `ProviderRuntimeIngestion`
+  replaying the `thread/fork` response's historical turns. The **replay** path
+  surfaces context as the attached `forked-conversation.md` rather than as
+  rehydrated messages; making that a first-class visible chip on the fork's
+  first message (vs. a turn-level attachment) is a deferred enhancement.
 - Files:
   - `packages/contracts/src/orchestration.ts` — **modified**: `ThreadForkCommand`
-    (`thread.fork`: new `threadId`, `sourceThreadId`, `title`), added to both
+    (`thread.fork`: `threadId`, `sourceThreadId`, `title`, and the optional
+    **`modelSelection`** target used to switch providers on fork), added to both
     command unions; `forkedFromId` added to `OrchestrationThread` (optional) and
     `ThreadCreatedPayload` (optional).
   - `packages/contracts/src/provider.ts` — **modified**: `forkFromThreadId` on
     `ProviderSessionStartInput`.
+  - `apps/server/src/provider/Services/ProviderAdapter.ts` — **modified**:
+    `ProviderAdapterCapabilities.nativeFork: boolean` (the strategy switch).
+  - `apps/server/src/provider/Layers/{CodexAdapter,ClaudeAdapter,CursorAdapter,GrokAdapter,OpenCodeAdapter}.ts`
+    — **modified**: each declares `nativeFork` (Codex `true`, rest `false`).
+  - `packages/shared/src/threadTranscript.ts` + `package.json`
+    (`./threadTranscript` export) — **fork-added**: pure `buildThreadTranscript`
+    serializer (no I/O), shared between server and web.
+  - `apps/server/src/threadContextArtifact.ts` — **fork-added**:
+    `createThreadContextArtifact` writes a transcript into the attachment store
+    and returns a `ChatAttachment`.
   - `apps/server/src/orchestration/decider.ts` — **modified**: `thread.fork`
-    case validates source exists / new absent, copies source metadata, and
+    case validates source exists / new absent, copies source metadata
+    (`modelSelection` now `command.modelSelection ?? source.modelSelection`), and
     emits a `thread.created` event tagged with `forkedFromId` (no new event
     type — reuses `thread.created`).
   - `apps/server/src/orchestration/projector.ts` — **modified**: carries
@@ -95,19 +134,76 @@ fork: true }`; the runtime forks the source conversation into a brand-new
     set, resolves the source thread's persisted conversation id and builds the
     `{ threadId, fork: true }` cursor (`readResumeCursorThreadId` helper).
   - `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts` —
-    **modified**: passes `forkFromThreadId` on the first session start when the
-    thread has `forkedFromId`.
+    **modified**: on the fork's first user turn, decides native-vs-replay from
+    the target instance + `nativeFork` capability; passes `forkFromThreadId` to
+    `ensureSessionForThread` **only** for native forks, and for replay forks
+    builds + attaches the `forked-conversation.md` transcript artifact to the
+    first turn. Acquires `ServerConfig`/`FileSystem`/`Path` for the artifact.
   - `apps/server/src/provider/Layers/CodexSessionRuntime.ts` — **modified**:
     `CodexResumeCursorSchema` gains optional `fork`; `openCodexThread` adds a
     `thread/fork` branch; `CodexThreadOpenMethod`/`CodexThreadOpenResponse`
     include `thread/fork`; `readForkCursorThreadId` helper.
   - `apps/web/src/hooks/useThreadActions.ts` — **modified**: `forkThread` action
-    (dispatch `thread.fork`, wait for the new thread to project, navigate).
+    (dispatch `thread.fork`, wait for the new thread to project, navigate). Now
+    accepts an optional `{ modelSelection }` to fork onto a different provider.
+    NOTE: an explicit "fork to provider X" menu is **not yet wired**; the
+    cross-provider path is reachable today by forking and then switching the
+    provider in the composer model picker before sending the first message
+    (the reactor keys the strategy off the first turn's `modelSelection`).
   - `apps/web/src/components/Sidebar.tsx` — **modified**: `Fork thread` menu
     item + threads `forkThread` through the sidebar prop chain.
   - `apps/web/src/components/chat/ChatComposer.tsx` +
     `apps/web/src/composer-logic.ts` — **modified**: `/fork` slash command
     (`"fork"` added to `ComposerSlashCommand`) and its handler.
+
+### Thread references (`@thread_ref:<id>`)
+
+- A second consumer of the thread-artifact primitive: an inline
+  `@thread_ref:<id>` token in a message pulls the referenced thread's transcript
+  in as context, reusing `createThreadContextArtifact`. Works across
+  models/providers. **Copy thread ref** in the sidebar thread context menu
+  copies the token.
+- Files:
+  - `packages/shared/src/threadReference.ts` (+ `./threadReference` export in
+    `package.json`, + `threadReference.test.ts`) — **fork-added**: pure token
+    format/parse (`formatThreadReference`, `parseThreadReferenceIds`).
+  - `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts` —
+    **modified**: `buildSendTurnRequestForThread` parses `@thread_ref` tokens
+    from the message text, resolves each thread (skips self/unknown, caps at
+    `MAX_THREAD_REFERENCES`), and appends a transcript artifact per reference.
+  - `apps/web/src/components/Sidebar.tsx` — **modified**: `Copy thread ref`
+    context-menu item + `copyThreadRefToClipboard`.
+- **Merge guard:** `ProviderCommandReactor.test.ts` has a regression test
+  ("attaches a referenced thread transcript when a message contains
+  thread_ref:<id>") alongside the two fork tests ("uses provider-native fork
+  only when the same target instance supports native forks" and "replays a fork
+  transcript artifact when the fork targets a different provider"). These fail if
+  an upstream merge drops the reactor wiring. The pure serializer/token helpers
+  also have unit tests in `packages/shared` (fork-added files, so merge-safe).
+
+### Thread export (zip)
+
+- A third consumer of the thread-artifact primitive: download a thread as a zip
+  containing `transcript.md` (the shared serializer) plus every attachment under
+  `attachments/`. Sidebar context-menu action **Export thread (zip)**.
+- Files:
+  - `apps/server/src/threadExport.ts` (+ `threadExport.test.ts`) — **fork-added**:
+    pure `buildThreadExportZip` (transcript + attachment bytes → zip via
+    `fflate`). The builder is pure; the caller resolves attachment bytes.
+  - `apps/server/src/http.ts` — **modified**: `threadExportRouteLayer`
+    (`GET /api/thread-export/<id>`, read-scope auth, reads attachment bytes from
+    the store, returns `application/zip` with `Content-Disposition`). Uses a
+    dedicated top-level path (not under `/api/orchestration/v1`) to avoid
+    colliding with the orchestration HttpApi.
+  - `apps/server/src/server.ts` — **modified**: registers `threadExportRouteLayer`
+    in `makeRoutesLayer`.
+  - `apps/server/package.json` — **modified**: adds the `fflate` dependency.
+  - `apps/web/src/components/Sidebar.tsx` — **modified**: `Export thread (zip)`
+    context-menu item; fetches the env-aware export URL
+    (`resolveEnvironmentHttpUrl`) with `credentials: "include"` and downloads the
+    blob.
+- **Merge guard:** `threadExport.test.ts` asserts the zip contains
+  `transcript.md` + `attachments/<name>` and skips attachments without bytes.
 
 ### Live provider quota meter (5h / weekly bars + Claude spend bar)
 
@@ -331,8 +427,13 @@ useAccountRateLimitSnapshot(selectedInstanceId)` (NOT a per-thread
   adds its own migration `33`, renumber ours to the next free id (and update
   `Migrations.ts`). The migration is idempotent (guards on `PRAGMA
 table_info`), so re-running after a renumber is safe.
-- If the provider adapter contract ever gains a first-class cross-provider fork
-  API, this Codex-only cursor hack can be replaced by it.
+- Cross-provider fork now exists via the capability-driven replay path (see the
+  "Thread forking" feature above). The Codex cursor `thread/fork` is now just the
+  `nativeFork === true` branch; the replay path (`buildThreadTranscript` +
+  `createThreadContextArtifact`) covers every other provider pairing. When
+  merging upstream provider/adapter refactors, keep `ProviderAdapterCapabilities.nativeFork`
+  on the adapter contract and the native-vs-replay decision in
+  `ProviderCommandReactor.buildSendTurnRequestForThread`.
 
 ## Merge checklist
 

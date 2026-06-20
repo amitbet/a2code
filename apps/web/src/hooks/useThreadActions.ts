@@ -1,5 +1,5 @@
 import { parseScopedThreadKey, scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime";
-import { type ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import { type ModelSelection, type ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { useRouter } from "@tanstack/react-router";
 import { useCallback, useRef } from "react";
 
@@ -288,7 +288,7 @@ export function useThreadActions() {
   );
 
   const forkThread = useCallback(
-    async (target: ScopedThreadRef) => {
+    async (target: ScopedThreadRef, options?: { readonly modelSelection?: ModelSelection }) => {
       const api = readEnvironmentApi(target.environmentId);
       if (!api) return;
       const resolved = resolveThreadTarget(target);
@@ -301,6 +301,12 @@ export function useThreadActions() {
         threadId: forkThreadId,
         sourceThreadId: thread.id,
         title: `${thread.title} (fork)`,
+        // When provided, the fork targets a different provider/model than its
+        // source; the server replays the source transcript into the new
+        // provider session. When omitted the fork inherits the source.
+        ...(options?.modelSelection !== undefined
+          ? { modelSelection: options.modelSelection }
+          : {}),
         createdAt: new Date().toISOString(),
       });
       const forkRef = scopeThreadRef(target.environmentId, forkThreadId);

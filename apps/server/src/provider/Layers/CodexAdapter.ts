@@ -1777,6 +1777,9 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     provider: PROVIDER,
     capabilities: {
       sessionModelSwitch: "in-session",
+      // Codex app-server exposes a native `thread/fork` RPC; same-instance forks
+      // copy the source conversation in its backend (see CodexSessionRuntime).
+      nativeFork: true,
     },
     startSession,
     sendTurn,

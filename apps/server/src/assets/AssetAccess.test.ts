@@ -27,9 +27,11 @@ describe("AssetAccess", () => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-asset-workspace-",
-      });
+      // realPath so derived paths match resolveAsset's realpath-resolved output
+      // (on macOS the temp dir lives under /var -> /private/var symlink).
+      const root = yield* fileSystem
+        .makeTempDirectoryScoped({ prefix: "t3-asset-workspace-" })
+        .pipe(Effect.flatMap((dir) => fileSystem.realPath(dir)));
       const htmlPath = path.join(root, "report.html");
       const cssPath = path.join(root, "report.css");
       yield* fileSystem.writeFileString(htmlPath, '<link rel="stylesheet" href="report.css">');
@@ -115,9 +117,11 @@ describe("AssetAccess", () => {
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fileSystem.makeTempDirectoryScoped({
-        prefix: "t3-asset-favicon-",
-      });
+      // realPath so derived paths match resolveAsset's realpath-resolved output
+      // (on macOS the temp dir lives under /var -> /private/var symlink).
+      const root = yield* fileSystem
+        .makeTempDirectoryScoped({ prefix: "t3-asset-favicon-" })
+        .pipe(Effect.flatMap((dir) => fileSystem.realPath(dir)));
       const faviconPath = path.join(root, "favicon.svg");
       yield* fileSystem.writeFileString(faviconPath, "<svg />");
 

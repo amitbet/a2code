@@ -268,7 +268,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           projectId: sourceThread.projectId,
           title: command.title,
-          modelSelection: sourceThread.modelSelection,
+          modelSelection: command.modelSelection ?? sourceThread.modelSelection,
           runtimeMode: sourceThread.runtimeMode,
           interactionMode: sourceThread.interactionMode,
           // Fork stays in the same git environment as its source.

@@ -18,6 +18,7 @@ import {
   applyOrchestrationEvents,
   removeEnvironmentState,
   selectEnvironmentState,
+  selectLatestRateLimitActivitiesForInstance,
   selectProjectsAcrossEnvironments,
   selectThreadByRef,
   selectThreadExistsByRef,
@@ -30,6 +31,7 @@ import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./t
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
 const remoteEnvironmentId = EnvironmentId.make("environment-remote");
+const otherEnvironmentId = EnvironmentId.make("environment-other");
 
 function withActiveEnvironmentState(
   environmentState: EnvironmentState,
@@ -247,6 +249,27 @@ function makeEvent<T extends OrchestrationEvent["type"]>(
   } as Extract<OrchestrationEvent, { type: T }>;
 }
 
+function makeRateLimitActivity(input: {
+  id: string;
+  createdAt: string;
+  usedPercent: number;
+}): Thread["activities"][number] {
+  return {
+    id: EventId.make(input.id),
+    tone: "info",
+    kind: "account.rate-limits.updated",
+    summary: "Account rate limits updated",
+    payload: {
+      snapshot: {
+        windows: [{ kind: "spend", label: "Spend", usedPercent: input.usedPercent }],
+        status: "allowed",
+      },
+    },
+    turnId: null,
+    createdAt: input.createdAt,
+  };
+}
+
 describe("environment state removal", () => {
   it("drops local state for removed environments", () => {
     const removedThread = makeThread({
@@ -399,6 +422,70 @@ describe("thread selection memoization", () => {
       ),
     ).toBe(false);
     expect(selectThreadExistsByRef(state, null)).toBe(false);
+  });
+
+  it("selects the latest rate-limit activity per provider instance across environments", () => {
+    const localThread = makeThread({
+      id: ThreadId.make("thread-local-codex"),
+      activities: [
+        makeRateLimitActivity({
+          id: "activity-local-old",
+          createdAt: "2026-06-03T00:00:00.000Z",
+          usedPercent: 20,
+        }),
+        makeRateLimitActivity({
+          id: "activity-local-latest",
+          createdAt: "2026-06-03T00:05:00.000Z",
+          usedPercent: 25,
+        }),
+      ],
+    });
+    const remoteThread = makeThread({
+      id: ThreadId.make("thread-remote-codex"),
+      environmentId: remoteEnvironmentId,
+      activities: [
+        makeRateLimitActivity({
+          id: "activity-remote-latest",
+          createdAt: "2026-06-03T00:07:00.000Z",
+          usedPercent: 30,
+        }),
+      ],
+    });
+    const ignoredThread = makeThread({
+      id: ThreadId.make("thread-other-claude"),
+      environmentId: otherEnvironmentId,
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-opus-4-6",
+      },
+      activities: [
+        makeRateLimitActivity({
+          id: "activity-claude-latest",
+          createdAt: "2026-06-03T00:09:00.000Z",
+          usedPercent: 90,
+        }),
+      ],
+    });
+    const state: AppState = {
+      activeEnvironmentId: localEnvironmentId,
+      environmentStateById: {
+        [localEnvironmentId]: environmentStateOf(makeState(localThread), localEnvironmentId),
+        [remoteEnvironmentId]: environmentStateOf(makeState(remoteThread), remoteEnvironmentId),
+        [otherEnvironmentId]: environmentStateOf(makeState(ignoredThread), otherEnvironmentId),
+      },
+    };
+
+    expect(
+      selectLatestRateLimitActivitiesForInstance(ProviderInstanceId.make("codex"))(state).map(
+        (activity) => activity.id,
+      ),
+    ).toEqual([EventId.make("activity-local-latest"), EventId.make("activity-remote-latest")]);
+    expect(
+      selectLatestRateLimitActivitiesForInstance(ProviderInstanceId.make("claudeAgent"))(state).map(
+        (activity) => activity.id,
+      ),
+    ).toEqual([EventId.make("activity-claude-latest")]);
+    expect(selectLatestRateLimitActivitiesForInstance(null)(state)).toEqual([]);
   });
 });
 

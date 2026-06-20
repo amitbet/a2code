@@ -8,6 +8,7 @@ import { ServerConfig } from "./config.ts";
 import {
   otlpTracesProxyRouteLayer,
   assetRouteLayer,
+  threadExportRouteLayer,
   serverEnvironmentHttpApiLayer,
   staticAndDevRouteLayer,
   browserApiCorsLayer,
@@ -353,6 +354,7 @@ export const makeRoutesLayer = Layer.mergeAll(
     ),
     otlpTracesProxyRouteLayer,
     assetRouteLayer,
+    threadExportRouteLayer,
     staticAndDevRouteLayer,
     websocketRpcRouteLayer,
   ),
