@@ -45,8 +45,15 @@ export interface BuildThreadTranscriptOptions {
   readonly heading?: string;
   /** Optional intro paragraph rendered under the heading. */
   readonly intro?: string;
+  /** Optional source attachment access details keyed by attachment id. */
+  readonly attachmentDetailsById?: ReadonlyMap<string, ThreadTranscriptAttachmentDetails>;
   /** Max characters of a single tool result to inline (default 4000). */
   readonly maxToolResultChars?: number;
+}
+
+export interface ThreadTranscriptAttachmentDetails {
+  /** Absolute path to the original attachment on disk, when available. */
+  readonly absolutePath?: string;
 }
 
 const DEFAULT_HEADING = "# Conversation transcript";
@@ -96,7 +103,11 @@ type TranscriptEntry =
       readonly activity: OrchestrationThreadActivity;
     };
 
-function renderMessage(message: OrchestrationMessage, lines: string[]): void {
+function renderMessage(
+  message: OrchestrationMessage,
+  lines: string[],
+  attachmentDetailsById?: ReadonlyMap<string, ThreadTranscriptAttachmentDetails>,
+): void {
   const text = message.text.trim();
   const attachments = message.attachments ?? [];
   if (text.length === 0 && attachments.length === 0) {
@@ -109,7 +120,13 @@ function renderMessage(message: OrchestrationMessage, lines: string[]): void {
   if (attachments.length > 0) {
     lines.push("", "Attachments:");
     for (const attachment of attachments) {
-      lines.push(`- ${attachment.name} (${attachment.mimeType})`);
+      const sizeSuffix =
+        typeof attachment.sizeBytes === "number" ? `, ${attachment.sizeBytes} bytes` : "";
+      const detail = attachmentDetailsById?.get(attachment.id);
+      const pathSuffix = detail?.absolutePath
+        ? ` — read ${detail.absolutePath} if you need the original attachment bytes`
+        : "";
+      lines.push(`- ${attachment.name} (${attachment.mimeType}${sizeSuffix})${pathSuffix}`);
     }
   }
 }
@@ -212,7 +229,7 @@ export function buildThreadTranscript(
 
   for (const entry of entries) {
     if (entry.type === "message") {
-      renderMessage(entry.message, lines);
+      renderMessage(entry.message, lines, options?.attachmentDetailsById);
     } else {
       renderActivity(entry.activity, lines, maxResultChars);
     }

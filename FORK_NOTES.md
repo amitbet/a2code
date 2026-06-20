@@ -242,7 +242,7 @@ the next merge; the per-feature sections below were updated to match.
   - `apps/web/src/components/Sidebar.tsx` — **modified**: `Export thread (zip)`
     context-menu item; builds the env-aware export URL from the prepared
     connection (`readPreparedConnection(environmentId)` → `environmentEndpointUrl(
-    httpBaseUrl, pathname)`; the pre-merge `resolveEnvironmentHttpUrl` helper was
+httpBaseUrl, pathname)`; the pre-merge `resolveEnvironmentHttpUrl` helper was
     removed with the old environment catalog), fetches it with
     `credentials: "include"`, and downloads the blob.
 - **Merge guard:** `threadExport.test.ts` asserts the zip contains

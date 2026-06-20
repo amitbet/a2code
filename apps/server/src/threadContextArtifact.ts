@@ -83,6 +83,21 @@ export interface CreateThreadContextArtifactInput {
 export const createThreadContextArtifact = (input: CreateThreadContextArtifactInput) =>
   Effect.gen(function* () {
     const { fileSystem, path } = input;
+    const attachmentDetailsById = new Map<string, { absolutePath: string }>();
+    for (const message of input.messages) {
+      for (const attachment of message.attachments ?? []) {
+        if (attachmentDetailsById.has(attachment.id)) {
+          continue;
+        }
+        const absolutePath = resolveAttachmentPath({
+          attachmentsDir: input.attachmentsDir,
+          attachment,
+        });
+        if (absolutePath) {
+          attachmentDetailsById.set(attachment.id, { absolutePath });
+        }
+      }
+    }
 
     const transcript = buildThreadTranscript(
       {
@@ -93,6 +108,7 @@ export const createThreadContextArtifact = (input: CreateThreadContextArtifactIn
       {
         ...(input.sourceTitle !== undefined ? { sourceTitle: input.sourceTitle } : {}),
         ...(input.intro !== undefined ? { intro: input.intro } : {}),
+        ...(attachmentDetailsById.size > 0 ? { attachmentDetailsById } : {}),
       },
     );
     const bytes = clampTranscriptBytes(transcript);

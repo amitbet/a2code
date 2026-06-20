@@ -1184,6 +1184,21 @@ describe("ProviderCommandReactor", () => {
   it("attaches a referenced thread transcript when a message contains thread_ref:<id>", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
+    const attachmentContents = "account_id,total\nacct_1,42\n";
+    const sourceAttachment = {
+      type: "file" as const,
+      id: "thread_1_billing_csv",
+      name: "billing.csv",
+      mimeType: "text/csv",
+      sizeBytes: Buffer.byteLength(attachmentContents),
+    };
+    const sourceAttachmentPath = NodePath.join(
+      harness.stateDir,
+      "attachments",
+      `${sourceAttachment.id}.csv`,
+    );
+    NodeFS.mkdirSync(NodePath.dirname(sourceAttachmentPath), { recursive: true });
+    NodeFS.writeFileSync(sourceAttachmentPath, attachmentContents);
 
     // Source thread (thread-1) gets a turn so it has content worth referencing.
     await Effect.runPromise(
@@ -1195,7 +1210,7 @@ describe("ProviderCommandReactor", () => {
           messageId: asMessageId("user-message-ref-source"),
           role: "user",
           text: "Referenced billing reconciliation context.",
-          attachments: [],
+          attachments: [sourceAttachment],
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
@@ -1254,9 +1269,10 @@ describe("ProviderCommandReactor", () => {
         })
       : null;
     expect(artifactPath).toBeTruthy();
-    expect(NodeFS.readFileSync(artifactPath!, "utf8")).toContain(
-      "Referenced billing reconciliation context.",
-    );
+    const transcript = NodeFS.readFileSync(artifactPath!, "utf8");
+    expect(transcript).toContain("Referenced billing reconciliation context.");
+    expect(transcript).toContain("billing.csv (text/csv, 27 bytes)");
+    expect(transcript).toContain(sourceAttachmentPath);
   });
 
   it("reuses the same provider session when runtime mode is unchanged", async () => {

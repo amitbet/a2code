@@ -91,7 +91,39 @@ describe("buildThreadTranscript", () => {
     expect(transcript).toContain("**Source thread:** Source Thread");
     expect(transcript.indexOf("## User")).toBeLessThan(transcript.indexOf("## Assistant"));
     expect(transcript).toContain("Please inspect this config.");
-    expect(transcript).toContain("- config.json (application/json)");
+    expect(transcript).toContain("- config.json (application/json, 42 bytes)");
+  });
+
+  it("includes original attachment paths when provided", () => {
+    const transcript = buildThreadTranscript(
+      {
+        messages: [
+          message({
+            id: "msg-1",
+            role: "user",
+            text: "See the attachment.",
+            attachments: [
+              {
+                type: "file",
+                id: "attachment-1",
+                name: "config.json",
+                mimeType: "application/json",
+                sizeBytes: 42,
+              },
+            ],
+          }),
+        ],
+      },
+      {
+        attachmentDetailsById: new Map([
+          ["attachment-1", { absolutePath: "/state/attachments/attachment-1.json" }],
+        ]),
+      },
+    );
+
+    expect(transcript).toContain(
+      "- config.json (application/json, 42 bytes) — read /state/attachments/attachment-1.json if you need the original attachment bytes",
+    );
   });
 
   it("skips empty messages without dropping later content", () => {
