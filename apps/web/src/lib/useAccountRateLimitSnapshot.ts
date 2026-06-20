@@ -1,6 +1,5 @@
 import { useEffect, useMemo } from "react";
-import { useShallow } from "zustand/react/shallow";
-import { selectLatestRateLimitActivitiesForInstance, useStore } from "../store";
+import { useLatestRateLimitActivitiesForInstance } from "../state/rateLimits";
 import {
   selectPersistedRateLimitSnapshot,
   useRateLimitSnapshotStore,
@@ -29,7 +28,7 @@ import {
 export function useAccountRateLimitSnapshot(
   instanceId: string | null | undefined,
 ): RateLimitSnapshot | null {
-  const activities = useStore(useShallow(selectLatestRateLimitActivitiesForInstance(instanceId)));
+  const activities = useLatestRateLimitActivitiesForInstance(instanceId);
   const live = useMemo(() => deriveLatestRateLimitSnapshot(activities), [activities]);
 
   const persisted = useRateLimitSnapshotStore((state) =>

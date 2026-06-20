@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 
 import { describe, expect, it } from "vite-plus/test";
 
@@ -45,11 +45,13 @@ describe("attachmentStore", () => {
   });
 
   it("resolves attachment path by id using the extension that exists on disk", () => {
-    const attachmentsDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3code-attachment-store-"));
+    const attachmentsDir = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "t3code-attachment-store-"),
+    );
     try {
       const attachmentId = "thread-1-attachment";
-      const pngPath = path.join(attachmentsDir, `${attachmentId}.png`);
-      fs.writeFileSync(pngPath, Buffer.from("hello"));
+      const pngPath = NodePath.join(attachmentsDir, `${attachmentId}.png`);
+      NodeFS.writeFileSync(pngPath, Buffer.from("hello"));
 
       const resolved = resolveAttachmentPathById({
         attachmentsDir,
@@ -57,16 +59,18 @@ describe("attachmentStore", () => {
       });
       expect(resolved).toBe(pngPath);
     } finally {
-      fs.rmSync(attachmentsDir, { recursive: true, force: true });
+      NodeFS.rmSync(attachmentsDir, { recursive: true, force: true });
     }
   });
 
   it("resolves non-image attachment paths by id", () => {
-    const attachmentsDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3code-attachment-store-"));
+    const attachmentsDir = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "t3code-attachment-store-"),
+    );
     try {
       const attachmentId = "thread-1-attachment";
-      const pdfPath = path.join(attachmentsDir, `${attachmentId}.pdf`);
-      fs.writeFileSync(pdfPath, Buffer.from("hello"));
+      const pdfPath = NodePath.join(attachmentsDir, `${attachmentId}.pdf`);
+      NodeFS.writeFileSync(pdfPath, Buffer.from("hello"));
 
       const resolved = resolveAttachmentPathById({
         attachmentsDir,
@@ -74,12 +78,14 @@ describe("attachmentStore", () => {
       });
       expect(resolved).toBe(pdfPath);
     } finally {
-      fs.rmSync(attachmentsDir, { recursive: true, force: true });
+      NodeFS.rmSync(attachmentsDir, { recursive: true, force: true });
     }
   });
 
   it("returns null when no attachment file exists for the id", () => {
-    const attachmentsDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3code-attachment-store-"));
+    const attachmentsDir = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "t3code-attachment-store-"),
+    );
     try {
       const resolved = resolveAttachmentPathById({
         attachmentsDir,
@@ -87,7 +93,7 @@ describe("attachmentStore", () => {
       });
       expect(resolved).toBeNull();
     } finally {
-      fs.rmSync(attachmentsDir, { recursive: true, force: true });
+      NodeFS.rmSync(attachmentsDir, { recursive: true, force: true });
     }
   });
 });

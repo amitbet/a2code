@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import path from "node:path";
+import * as NodePath from "node:path";
 
 /**
  * How an uploaded attachment should be rendered into model input. Adapters share
@@ -63,7 +63,7 @@ export function classifyAttachment(input: {
   if (mime.startsWith("text/") || TEXT_MIME_TYPES.has(mime)) {
     return "text";
   }
-  const extension = path.extname(input.fileName?.trim() ?? "").toLowerCase();
+  const extension = NodePath.extname(input.fileName?.trim() ?? "").toLowerCase();
   if (TEXT_EXTENSIONS.has(extension)) {
     return "text";
   }
@@ -75,7 +75,7 @@ export function fenceLanguageForAttachment(input: {
   readonly mimeType: string;
   readonly fileName?: string;
 }): string {
-  const extension = path.extname(input.fileName?.trim() ?? "").toLowerCase();
+  const extension = NodePath.extname(input.fileName?.trim() ?? "").toLowerCase();
   if (extension && Object.hasOwn(FENCE_LANGUAGE_BY_EXTENSION, extension)) {
     return FENCE_LANGUAGE_BY_EXTENSION[extension] ?? "";
   }

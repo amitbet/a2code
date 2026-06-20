@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import Mime from "@effect/platform-node/Mime";
-import path from "node:path";
+import * as NodePath from "node:path";
 
 export const IMAGE_EXTENSION_BY_MIME_TYPE: Record<string, string> = {
   "image/avif": ".avif",
@@ -123,7 +123,7 @@ export function inferAttachmentExtension(input: { mimeType: string; fileName?: s
     return fromMimeExtension;
   }
 
-  const fileNameExtension = path.extname(input.fileName?.trim() ?? "").toLowerCase();
+  const fileNameExtension = NodePath.extname(input.fileName?.trim() ?? "").toLowerCase();
   if (fileNameExtension && SAFE_ATTACHMENT_FILE_EXTENSIONS.has(fileNameExtension)) {
     return fileNameExtension;
   }

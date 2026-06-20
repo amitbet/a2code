@@ -1,9 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
-import { join } from "node:path";
-import { promisify } from "node:util";
+import * as NodePath from "node:path";
+import * as NodeUtil from "node:util";
 
 import type { ProviderRateLimitSnapshot, ProviderRateLimitWindow } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -55,7 +55,7 @@ const UtilizationSchema = Schema.Struct({
 });
 type Utilization = typeof UtilizationSchema.Type;
 
-const execFileAsync = promisify(execFile);
+const execFileAsync = NodeUtil.promisify(NodeChildProcess.execFile);
 
 interface StoredOAuth {
   readonly accessToken: string;
@@ -94,13 +94,14 @@ const readClaudeOAuthToken = (homePath: string | undefined): Effect.Effect<strin
     const resolvedHome =
       trimmedHome && trimmedHome.length > 0
         ? trimmedHome.startsWith("~")
-          ? join(NodeOS.homedir(), trimmedHome.slice(1))
+          ? NodePath.join(NodeOS.homedir(), trimmedHome.slice(1))
           : trimmedHome
         : NodeOS.homedir();
-    const configDir = process.env.CLAUDE_CONFIG_DIR?.trim() || join(resolvedHome, ".claude");
+    const configDir =
+      process.env.CLAUDE_CONFIG_DIR?.trim() || NodePath.join(resolvedHome, ".claude");
 
     const fromFile = yield* Effect.tryPromise(() =>
-      readFile(join(configDir, ".credentials.json"), "utf-8"),
+      NodeFSP.readFile(NodePath.join(configDir, ".credentials.json"), "utf-8"),
     ).pipe(
       Effect.map(parseStoredOAuth),
       Effect.catch(() => Effect.succeed(null)),

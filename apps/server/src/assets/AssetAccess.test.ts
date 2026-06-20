@@ -7,18 +7,18 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import { ServerConfig } from "../config.ts";
-import { ProjectFaviconResolverLive } from "../project/Layers/ProjectFaviconResolver.ts";
-import { WorkspacePathsLive } from "../workspace/Layers/WorkspacePaths.ts";
+import * as ServerConfig from "../config.ts";
+import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
+import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { ASSET_ROUTE_PREFIX, issueAssetUrl, resolveAsset } from "./AssetAccess.ts";
 
-const configLayer = ServerConfig.layerTest(process.cwd(), {
+const configLayer = ServerConfig.ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-asset-access-test-",
 });
 const testLayer = Layer.mergeAll(
   configLayer,
-  WorkspacePathsLive,
-  ProjectFaviconResolverLive.pipe(Layer.provide(WorkspacePathsLive)),
+  WorkspacePaths.layer,
+  ProjectFaviconResolver.layer.pipe(Layer.provide(WorkspacePaths.layer)),
   ServerSecretStore.layer.pipe(Layer.provide(configLayer)),
 ).pipe(Layer.provideMerge(NodeServices.layer));
 
@@ -37,6 +37,8 @@ describe("AssetAccess", () => {
       yield* fileSystem.writeFileString(htmlPath, '<link rel="stylesheet" href="report.css">');
       yield* fileSystem.writeFileString(cssPath, "body { color: red; }");
       yield* fileSystem.writeFileString(path.join(root, ".env"), "SECRET=value");
+      const canonicalHtmlPath = yield* fileSystem.realPath(htmlPath);
+      const canonicalCssPath = yield* fileSystem.realPath(cssPath);
 
       const result = yield* issueAssetUrl({
         resource: {
@@ -52,11 +54,11 @@ describe("AssetAccess", () => {
 
       expect(yield* resolveAsset(token, "report.html")).toEqual({
         kind: "file",
-        path: htmlPath,
+        path: canonicalHtmlPath,
       });
       expect(yield* resolveAsset(token, "report.css")).toEqual({
         kind: "file",
-        path: cssPath,
+        path: canonicalCssPath,
       });
       expect(yield* resolveAsset(token, "../secret.txt")).toBeNull();
       expect(yield* resolveAsset(token, ".env")).toBeNull();
@@ -89,9 +91,45 @@ describe("AssetAccess", () => {
     }).pipe(Effect.provide(testLayer)),
   );
 
+  it.effect("issues exact workspace URLs for image previews", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-asset-image-workspace-",
+      });
+      const assetsDirectory = path.join(root, "assets");
+      const imagePath = path.join(assetsDirectory, "icon.png");
+      const siblingPath = path.join(assetsDirectory, "other.png");
+      yield* fileSystem.makeDirectory(assetsDirectory, { recursive: true });
+      yield* fileSystem.writeFile(imagePath, new Uint8Array([137, 80, 78, 71]));
+      yield* fileSystem.writeFile(siblingPath, new Uint8Array([137, 80, 78, 71]));
+      const canonicalImagePath = yield* fileSystem.realPath(imagePath);
+
+      const result = yield* issueAssetUrl({
+        resource: {
+          _tag: "workspace-file",
+          threadId: ThreadId.make("thread-1"),
+          path: imagePath,
+        },
+        workspaceRoot: root,
+      });
+      const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const separatorIndex = suffix.indexOf("/");
+      const token = suffix.slice(0, separatorIndex);
+
+      expect(yield* resolveAsset(token, "icon.png")).toEqual({
+        kind: "file",
+        path: canonicalImagePath,
+      });
+      expect(yield* resolveAsset(token, "other.png")).toBeNull();
+      expect(yield* resolveAsset(token, "../icon.png")).toBeNull();
+    }).pipe(Effect.provide(testLayer)),
+  );
+
   it.effect("issues exact attachment capabilities by attachment id", () =>
     Effect.gen(function* () {
-      const config = yield* ServerConfig;
+      const config = yield* ServerConfig.ServerConfig;
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const attachmentId = "thread-1-00000000-0000-4000-8000-000000000001";
@@ -124,6 +162,7 @@ describe("AssetAccess", () => {
         .pipe(Effect.flatMap((dir) => fileSystem.realPath(dir)));
       const faviconPath = path.join(root, "favicon.svg");
       yield* fileSystem.writeFileString(faviconPath, "<svg />");
+      const canonicalFaviconPath = yield* fileSystem.realPath(faviconPath);
 
       const faviconResult = yield* issueAssetUrl({
         resource: { _tag: "project-favicon", cwd: root },
@@ -135,7 +174,7 @@ describe("AssetAccess", () => {
           faviconSuffix.slice(0, faviconSeparatorIndex),
           faviconSuffix.slice(faviconSeparatorIndex + 1),
         ),
-      ).toEqual({ kind: "file", path: faviconPath });
+      ).toEqual({ kind: "file", path: canonicalFaviconPath });
 
       yield* fileSystem.remove(faviconPath);
       const fallbackResult = yield* issueAssetUrl({

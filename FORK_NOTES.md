@@ -3,6 +3,39 @@
 This file tracks fork-specific divergences that are likely to conflict when
 merging `upstream/main`.
 
+## 2026-06-20 upstream merge (client architecture rewrite) — migration notes
+
+The `upstream/main` merge on 2026-06-20 (up to `97e5cd3bf`) brought two sweeping
+refactors that moved several fork features onto new plumbing. Re-read this before
+the next merge; the per-feature sections below were updated to match.
+
+- **`apps/web/src/store.ts` was deleted** (upstream PR #2978 "Rewrite client
+  connection architecture"). Client state now lives in an atom architecture
+  under `packages/client-runtime/src/state/` and `apps/web/src/state/`. Fork
+  logic that lived in `store.ts` was re-homed:
+  - Quota-meter selector `selectLatestRateLimitActivitiesForInstance` →
+    `apps/web/src/state/rateLimits.ts` as the `useLatestRateLimitActivitiesForInstance`
+    atom hook (iterates `environmentThreadShells.threadRefsAtom`, filters by
+    `shell.modelSelection.instanceId`, reads `environmentThreadDetails.activitiesAtom`).
+    `useAccountRateLimitSnapshot.ts` now consumes this hook instead of the zustand
+    selector. The old `store.test.ts` rate-limit unit test was dropped with
+    `store.ts`; coverage now relies on the meter's other tests — consider porting
+    a selector test against the new atom if it regresses.
+  - File-attachment message mapping (`mapMessage`) is no longer needed: the new
+    reducer carries contract attachments (image/file) through unchanged, and
+    `ChatView.tsx` attaches image `previewUrl`s from `serverAttachmentUrlById`.
+- **Effect services now use namespace node imports** (PR #3238 + the
+  `t3code(namespace-node-imports)` oxlint rule). All fork server files were
+  converted: `import * as NodeFS/NodePath/NodeOS/NodeUtil/NodeChildProcess/NodeFSP`.
+  Touched fork files: `attachmentStore.ts`, `attachmentContent.ts`, `imageMime.ts`,
+  `provider/Layers/ClaudeUsageApi.ts`, plus the fork test blocks in
+  `attachmentStore.test.ts`, `ProviderCommandReactor.test.ts`, `ClaudeAdapter.test.ts`.
+  When adding fork code, use namespace node imports and access service tags as
+  `ServerConfig.ServerConfig` (not `yield* ServerConfig`).
+- **Browser-mode tests (`*.browser.tsx`) were removed** (only `*.test.{ts,tsx}`
+  run now). The in-chat-find browser test (`MessagesTimeline.browser.tsx`) was
+  dropped; the feature itself survives in `MessagesTimeline.tsx`.
+
 ## Fork features
 
 ### In-chat find (Cmd/Ctrl+F)
@@ -143,9 +176,17 @@ merging `upstream/main`.
     `CodexResumeCursorSchema` gains optional `fork`; `openCodexThread` adds a
     `thread/fork` branch; `CodexThreadOpenMethod`/`CodexThreadOpenResponse`
     include `thread/fork`; `readForkCursorThreadId` helper.
+  - `packages/client-runtime/src/operations/commands.ts` — **fork-added (post-merge)**:
+    `forkThread` command builder + `ForkThreadInput` (dispatches `thread.fork`),
+    mirroring `createThread`. Wired as the `fork` atom command in
+    `packages/client-runtime/src/state/threadCommands.ts`. This replaces the old
+    direct `api.orchestration.dispatchCommand` call after the atom-architecture
+    rewrite.
   - `apps/web/src/hooks/useThreadActions.ts` — **modified**: `forkThread` action
-    (dispatch `thread.fork`, wait for the new thread to project, navigate). Now
-    accepts an optional `{ modelSelection }` to fork onto a different provider.
+    now dispatches via `useAtomCommand(threadEnvironment.fork)`, waits for the new
+    thread to project (`waitForServerThread` polls `readThreadShell` rather than
+    the deleted zustand store), then navigates. Accepts an optional
+    `{ modelSelection }` to fork onto a different provider.
     NOTE: an explicit "fork to provider X" menu is **not yet wired**; the
     cross-provider path is reachable today by forking and then switching the
     provider in the composer model picker before sending the first message
@@ -199,9 +240,11 @@ merging `upstream/main`.
     in `makeRoutesLayer`.
   - `apps/server/package.json` — **modified**: adds the `fflate` dependency.
   - `apps/web/src/components/Sidebar.tsx` — **modified**: `Export thread (zip)`
-    context-menu item; fetches the env-aware export URL
-    (`resolveEnvironmentHttpUrl`) with `credentials: "include"` and downloads the
-    blob.
+    context-menu item; builds the env-aware export URL from the prepared
+    connection (`readPreparedConnection(environmentId)` → `environmentEndpointUrl(
+    httpBaseUrl, pathname)`; the pre-merge `resolveEnvironmentHttpUrl` helper was
+    removed with the old environment catalog), fetches it with
+    `credentials: "include"`, and downloads the blob.
 - **Merge guard:** `threadExport.test.ts` asserts the zip contains
   `transcript.md` + `attachments/<name>` and skips attachments without bytes.
 
