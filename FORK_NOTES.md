@@ -394,6 +394,32 @@ useAccountRateLimitSnapshot(selectedInstanceId)` (NOT a per-thread
 
 ## Recurring merge seams
 
+### CI / release workflows (`.github/workflows/`)
+
+- The fork **repurposed and trimmed** the GitHub Actions surface. It keeps only
+  two workflow files; upstream ships more. This conflicts on most merges because
+  both sides edit `ci.yml` / `release.yml` and upstream keeps adding workflows.
+- Fork-intended state (preserve this when resolving):
+  - `ci.yml` — repurposed as **"Build Artifacts"**: an Android preview APK job +
+    unsigned desktop artifact jobs (macOS arm64/x64, Linux x64, Windows x64).
+    **Drop** upstream's attempts to merge in `test` / `mobile_native_static_analysis`
+    / preload-verification jobs — the fork's `ci.yml` is build-only.
+  - `release.yml` — **"Release"**: separate per-platform jobs that each build an
+    **unsigned** artifact. **Drop** upstream's matrix-based Azure Trusted Signing /
+    Apple code-signing flow and the ImageMagick step.
+  - `mobile-eas-preview.yml` — **deleted in the fork** (the Android build lives in
+    `ci.yml`). On a modify/delete conflict, keep it deleted (`git rm`).
+  - Upstream-only workflows the fork does **not** carry: `deploy-relay.yml`,
+    `issue-labels.yml`, `pr-size.yml`, `pr-vouch.yml`. Don't add them unless
+    deliberately adopting them.
+- **Consequence (intentional):** no fork workflow runs `vp check`, `vp run test`,
+  or typecheck, so CI does not gate on tests/typecheck. Run those locally before
+  merging (see the Merge checklist below). If we ever want CI gating, add a
+  dedicated workflow rather than re-adopting upstream's `ci.yml` test job.
+- After resolving, confirm with `git diff <fork-tip> HEAD -- .github/workflows`
+  is empty (workflows unchanged) and that no upstream-only workflow files were
+  pulled in.
+
 ### File attachment support
 
 - Expected conflict area (see the "Arbitrary file attachments" feature above
@@ -485,5 +511,12 @@ When pulling from `upstream/main`:
 1. Check any conflict in the files above first.
 2. Prefer upstream structural refactors, then re-apply the fork-specific
    behavior on top.
-3. Run `bunx vp check`.
-4. Run `bunx vp run typecheck`.
+3. Preserve the fork CI surface (see "CI / release workflows" above). After
+   resolving, confirm the workflows are byte-identical to the fork tip and no
+   upstream-only workflow files were pulled in:
+   - `git diff <fork-tip-before-merge> HEAD -- .github/workflows` is empty.
+   - `ls .github/workflows` lists only `ci.yml` and `release.yml`.
+4. Run `bunx vp check`.
+5. Run `bunx vp run typecheck`.
+6. Because CI does not gate on tests, run `bunx vp run test` locally and confirm
+   the fork-feature suites pass before pushing the merge.
