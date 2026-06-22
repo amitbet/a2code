@@ -140,6 +140,21 @@ interface TimelineRowActivityState {
 
 const TimelineRowCtx = createContext<TimelineRowSharedState>(null!);
 const TimelineRowActivityCtx = createContext<TimelineRowActivityState>(null!);
+
+interface TimelineSearchState {
+  /**
+   * Row ids that contain at least one in-chat find match for the active query
+   * (empty while find is closed). Rows in this set force their collapsible
+   * sections open so the painted highlight is actually mounted and on screen —
+   * the data-model search counts matches inside collapsed/folded content the
+   * DOM highlighter would otherwise never see. Only matching rows expand.
+   */
+  matchRowIds: ReadonlySet<string>;
+}
+
+const EMPTY_SEARCH_MATCH_ROW_IDS: ReadonlySet<string> = new Set();
+const CLOSED_SEARCH_STATE: TimelineSearchState = { matchRowIds: EMPTY_SEARCH_MATCH_ROW_IDS };
+const TimelineSearchCtx = createContext<TimelineSearchState>(CLOSED_SEARCH_STATE);
 const TIMELINE_LIST_HEADER = <div className="h-3 sm:h-4" />;
 const TIMELINE_LIST_FOOTER = <div className="h-3 sm:h-4" />;
 const EMPTY_TIMELINE_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
@@ -303,6 +318,17 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     [rows, searchQuery],
   );
   const matchCount = searchResult.occurrences.length;
+  // Rows holding a match force their collapsible/folded sections open while find
+  // is active, so the highlight lands on mounted, on-screen content. Empty (and
+  // referentially stable) when find is closed so non-matching rows never re-render.
+  const searchState = useMemo<TimelineSearchState>(() => {
+    if (!searchOpen || searchResult.occurrences.length === 0) {
+      return CLOSED_SEARCH_STATE;
+    }
+    const matchRowIds = new Set<string>();
+    for (const occurrence of searchResult.occurrences) matchRowIds.add(occurrence.rowId);
+    return { matchRowIds };
+  }, [searchOpen, searchResult]);
   const clampedActiveIndex = clampActiveIndex(matchCount, activeMatchIndex);
   const activeOccurrence =
     clampedActiveIndex >= 0 ? (searchResult.occurrences[clampedActiveIndex] ?? null) : null;
@@ -494,22 +520,24 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       {searchBar}
       <TimelineRowCtx value={sharedState}>
         <TimelineRowActivityCtx value={activityState}>
-          <LegendList<MessagesTimelineRow>
-            ref={listRef}
-            data={rows}
-            keyExtractor={keyExtractor}
-            renderItem={renderItem}
-            estimatedItemSize={90}
-            initialScrollAtEnd
-            maintainScrollAtEnd={!foldToggleSettling}
-            maintainScrollAtEndThreshold={0.1}
-            maintainVisibleContentPosition
-            onScroll={handleScroll}
-            className="scrollbar-gutter-both h-full overflow-x-hidden overscroll-y-contain px-3 sm:px-5"
-            data-chat-scroll-container="true"
-            ListHeaderComponent={TIMELINE_LIST_HEADER}
-            ListFooterComponent={TIMELINE_LIST_FOOTER}
-          />
+          <TimelineSearchCtx value={searchState}>
+            <LegendList<MessagesTimelineRow>
+              ref={listRef}
+              data={rows}
+              keyExtractor={keyExtractor}
+              renderItem={renderItem}
+              estimatedItemSize={90}
+              initialScrollAtEnd
+              maintainScrollAtEnd={!foldToggleSettling}
+              maintainScrollAtEndThreshold={0.1}
+              maintainVisibleContentPosition
+              onScroll={handleScroll}
+              className="scrollbar-gutter-both h-full overflow-x-hidden overscroll-y-contain px-3 sm:px-5"
+              data-chat-scroll-container="true"
+              ListHeaderComponent={TIMELINE_LIST_HEADER}
+              ListFooterComponent={TIMELINE_LIST_FOOTER}
+            />
+          </TimelineSearchCtx>
         </TimelineRowActivityCtx>
       </TimelineRowCtx>
     </div>
@@ -530,6 +558,10 @@ type TimelineWorkEntry = Extract<MessagesTimelineRow, { kind: "work" }>["grouped
 type TimelineRow = MessagesTimelineRow;
 
 const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: TimelineRow }) {
+  // When find is open and this row holds a match, force its collapsible sections
+  // open so the highlight is mounted and visible. Rows without a match are
+  // unaffected (and don't re-render — the match set is empty/stable when closed).
+  const searchExpanded = use(TimelineSearchCtx).matchRowIds.has(row.id);
   return (
     <div
       className={cn(
@@ -546,9 +578,13 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       data-message-id={row.kind === "message" ? row.message.id : undefined}
       data-message-role={row.kind === "message" ? row.message.role : undefined}
     >
-      {row.kind === "work" ? <WorkGroupSection groupedEntries={row.groupedEntries} /> : null}
+      {row.kind === "work" ? (
+        <WorkGroupSection groupedEntries={row.groupedEntries} searchExpanded={searchExpanded} />
+      ) : null}
       {row.kind === "turn-fold" ? <TurnFoldTimelineRow row={row} /> : null}
-      {row.kind === "message" && row.message.role === "user" ? <UserTimelineRow row={row} /> : null}
+      {row.kind === "message" && row.message.role === "user" ? (
+        <UserTimelineRow row={row} searchExpanded={searchExpanded} />
+      ) : null}
       {row.kind === "message" && row.message.role === "assistant" ? (
         <AssistantTimelineRow row={row} />
       ) : null}
@@ -558,7 +594,13 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
   );
 });
 
-function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
+function UserTimelineRow({
+  row,
+  searchExpanded,
+}: {
+  row: Extract<TimelineRow, { kind: "message" }>;
+  searchExpanded: boolean;
+}) {
   const ctx = use(TimelineRowCtx);
   const userAttachments = row.message.attachments ?? [];
   const userImages = userAttachments.filter(
@@ -638,6 +680,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           terminalContexts={terminalContexts}
           skills={ctx.skills}
           markdownCwd={ctx.markdownCwd}
+          searchExpanded={searchExpanded}
         />
       </div>
       <div className="flex w-full max-w-[80%] items-center justify-end pe-1 text-xs tabular-nums opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
@@ -842,11 +885,16 @@ function WorkingTimer({ createdAt }: { createdAt: string }) {
 /** Collapsed state shows the earliest chunk so "Show more" only appends rows downward. */
 const WorkGroupSection = memo(function WorkGroupSection({
   groupedEntries,
+  searchExpanded = false,
 }: {
   groupedEntries: Extract<MessagesTimelineRow, { kind: "work" }>["groupedEntries"];
+  searchExpanded?: boolean;
 }) {
   const { workspaceRoot } = use(TimelineRowCtx);
   const [isExpanded, setIsExpanded] = useState(false);
+  // Force every entry visible while find has a match in this row, so the
+  // highlighter can paint matches in otherwise-hidden tool calls.
+  const effectiveExpanded = isExpanded || searchExpanded;
   const sectionRef = useRef<HTMLElement>(null);
   const anchorBottomBeforeToggleRef = useRef<number | null>(null);
   const nonEmptyEntries = useMemo(
@@ -855,7 +903,7 @@ const WorkGroupSection = memo(function WorkGroupSection({
   );
   const hasOverflow = nonEmptyEntries.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
   const visibleEntries =
-    hasOverflow && !isExpanded
+    hasOverflow && !effectiveExpanded
       ? nonEmptyEntries.slice(-MAX_VISIBLE_WORK_LOG_ENTRIES)
       : nonEmptyEntries;
   const hiddenCount = nonEmptyEntries.length - visibleEntries.length;
@@ -913,6 +961,7 @@ const WorkGroupSection = memo(function WorkGroupSection({
             key={workEntry.id}
             workEntry={workEntry}
             workspaceRoot={workspaceRoot}
+            searchExpanded={searchExpanded}
           />
         ))}
       </div>
@@ -923,13 +972,13 @@ const WorkGroupSection = memo(function WorkGroupSection({
           onClick={toggleExpanded}
         >
           <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground/65">
-            {isExpanded ? (
+            {effectiveExpanded ? (
               <ChevronUpIcon className="size-3.5 shrink-0 opacity-70" />
             ) : (
               <ChevronDownIcon className="size-3.5 shrink-0 opacity-70" />
             )}
           </span>
-          {isExpanded ? (
+          {effectiveExpanded ? (
             <span className="font-medium text-foreground/82">Show fewer tool calls</span>
           ) : (
             <span className="font-medium text-foreground/82">
@@ -1162,12 +1211,14 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
   terminalContexts: ParsedTerminalContextEntry[];
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   markdownCwd: string | undefined;
+  searchExpanded?: boolean;
   footer?: ReactNode;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const effectivelyExpanded = expanded || Boolean(props.searchExpanded);
   const hasVisibleBody = props.text.trim().length > 0 || props.terminalContexts.length > 0;
   const canCollapse = hasVisibleBody && shouldCollapseUserMessage(props.text);
-  const isCollapsed = canCollapse && !expanded;
+  const isCollapsed = canCollapse && !effectivelyExpanded;
 
   return (
     <div>
@@ -1208,12 +1259,12 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
               type="button"
               size="xs"
               variant="ghost"
-              aria-expanded={expanded}
+              aria-expanded={effectivelyExpanded}
               data-scroll-anchor-ignore
               onClick={() => setExpanded((value) => !value)}
               className="-ml-1 h-6 rounded-md px-1.5 text-xs text-muted-foreground/72 hover:bg-muted/55 hover:text-foreground/85"
             >
-              {expanded ? "Show less" : "Show full message"}
+              {effectivelyExpanded ? "Show less" : "Show full message"}
             </Button>
           ) : null}
           {props.footer ? (
@@ -1677,10 +1728,14 @@ const stopRowToggle = (e: { stopPropagation: () => void }) => e.stopPropagation(
 const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   workEntry: TimelineWorkEntry;
   workspaceRoot: string | undefined;
+  searchExpanded?: boolean;
 }) {
-  const { workEntry, workspaceRoot } = props;
+  const { workEntry, workspaceRoot, searchExpanded = false } = props;
   const activity = use(TimelineRowActivityCtx);
   const [expanded, setExpanded] = useState(false);
+  // While find has a match in this row, mount the tool body (command/detail) so
+  // the highlighter can find matches that live in the otherwise-collapsed output.
+  const effectiveExpanded = expanded || searchExpanded;
   const iconConfig = workToneIcon(workEntry.tone);
   const showWarningIndicator = workEntry.sourceActivityKind === "runtime.warning";
   const entryIconName = showWarningIndicator ? "x" : workEntryIconName(workEntry);
@@ -1754,7 +1809,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
           <div className="min-w-0 flex-1 overflow-hidden">
             <p className="flex min-w-0 w-full items-baseline gap-1.5 text-[12px] leading-5">
               <span className={cn("min-w-0 shrink truncate", headingClass)}>{heading}</span>
-              {preview && !(expanded && canExpand) && (
+              {preview && !(effectiveExpanded && canExpand) && (
                 <span className="min-w-0 flex-1 truncate text-muted-foreground/55">{preview}</span>
               )}
             </p>
@@ -1768,7 +1823,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 <ChevronDownIcon
                   className={cn(
                     "size-3 shrink-0 opacity-70 transition-transform duration-200",
-                    expanded && "rotate-180",
+                    effectiveExpanded && "rotate-180",
                   )}
                   aria-hidden
                 />
@@ -1818,7 +1873,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
           </div>
         </div>
       </div>
-      {expanded && canExpand && expandedBody ? (
+      {effectiveExpanded && canExpand && expandedBody ? (
         <div
           className="mt-1 ms-7 cursor-default border-s border-border/45 ps-3 pt-0.5"
           onClick={stopRowToggle}
