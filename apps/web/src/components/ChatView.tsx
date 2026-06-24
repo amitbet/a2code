@@ -1095,6 +1095,13 @@ function ChatViewContent(props: ChatViewProps) {
   const [localServerErrorsByThreadKey, setLocalServerErrorsByThreadKey] = useState<
     Record<string, string | null>
   >({});
+  // Server `session.lastError` persists until the server clears it, so clearing
+  // the local override alone can't dismiss it — the fallback re-surfaces it.
+  // This records the exact error string the user dismissed (per thread) so the
+  // banner stays hidden until a *different* error appears.
+  const [dismissedServerErrorsByThreadKey, setDismissedServerErrorsByThreadKey] = useState<
+    Record<string, string | null>
+  >({});
   const [isConnecting, _setIsConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
   const [maximizedRightPanelThreadKey, setMaximizedRightPanelThreadKey] = useState<string | null>(
@@ -1205,9 +1212,28 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const isServerThread = routeKind === "server" && serverThread !== null;
   const activeThread = isServerThread ? serverThread : localDraftThread;
-  const threadError = isServerThread
+  // Full server-side error (local override wins over the persistent session
+  // error), before applying the user's dismissal.
+  const rawServerError = isServerThread
     ? (localServerError ?? serverThread?.session?.lastError ?? null)
+    : null;
+  const dismissedServerError = dismissedServerErrorsByThreadKey[routeThreadKey] ?? null;
+  const threadError = isServerThread
+    ? rawServerError !== null && rawServerError === dismissedServerError
+      ? null
+      : rawServerError
     : localDraftError;
+  // Drop the dismissal once the error it referred to is gone, so a later
+  // identical error isn't permanently suppressed.
+  useEffect(() => {
+    if (rawServerError !== null) return;
+    setDismissedServerErrorsByThreadKey((existing) => {
+      if (!(routeThreadKey in existing)) return existing;
+      const rest = { ...existing };
+      delete rest[routeThreadKey];
+      return rest;
+    });
+  }, [rawServerError, routeThreadKey]);
   const runtimeMode = composerRuntimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   const interactionMode =
     composerInteractionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
@@ -4727,7 +4753,18 @@ function ChatViewContent(props: ChatViewProps) {
         <ProviderStatusBanner status={activeProviderStatus} />
         <ThreadErrorBanner
           error={threadError}
-          onDismiss={() => setThreadError(activeThread.id, null)}
+          onDismiss={() => {
+            // Remember the dismissed server error so the persistent
+            // `session.lastError` fallback doesn't immediately re-show it.
+            if (isServerThread && rawServerError !== null) {
+              setDismissedServerErrorsByThreadKey((existing) =>
+                (existing[routeThreadKey] ?? null) === rawServerError
+                  ? existing
+                  : { ...existing, [routeThreadKey]: rawServerError },
+              );
+            }
+            setThreadError(activeThread.id, null);
+          }}
         />
         {/* Main content area with optional plan sidebar */}
         <div className="flex min-h-0 min-w-0 flex-1">
