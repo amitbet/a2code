@@ -56,6 +56,7 @@ import {
   scopeProjectRef,
   scopeThreadRef,
 } from "@t3tools/client-runtime/environment";
+import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
 import {
   isAtomCommandInterrupted,
   settlePromise,
@@ -189,12 +190,12 @@ import {
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadSeedContext,
   resolveSidebarNewThreadEnvMode,
+  resolveSidebarStageBadgeLabel,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
   orderItemsByPreferredIds,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
-  resolveSidebarStageBadgeLabel,
   useThreadJumpHintVisibility,
   ThreadStatusPill,
 } from "./Sidebar.logic";
@@ -1548,7 +1549,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                   console.error("Failed to remove project", {
                     projectId: member.id,
                     environmentId: member.environmentId,
-                    error,
+                    ...safeErrorLogAttributes(error),
                   });
                   toastManager.add(
                     stackedThreadToast({
@@ -1583,7 +1584,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         console.error("Failed to remove project", {
           projectId: member.id,
           environmentId: member.environmentId,
-          error,
+          ...safeErrorLogAttributes(error),
         });
         toastManager.add(
           stackedThreadToast({
@@ -2742,50 +2743,59 @@ const SidebarChromeHeader = memo(function SidebarChromeHeader({
 }: {
   isElectron: boolean;
 }) {
+  return isElectron ? (
+    <SidebarHeader className="@container/sidebar-header drag-region h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center px-3 py-0 md:px-0">
+      <SidebarTrigger className="md:hidden" />
+      <SidebarBrand />
+    </SidebarHeader>
+  ) : (
+    <SidebarHeader className="@container/sidebar-header h-[var(--workspace-topbar-height)] shrink-0 flex-row items-center px-3 py-0 md:px-0">
+      <SidebarTrigger className="md:hidden" />
+      <SidebarBrand />
+    </SidebarHeader>
+  );
+});
+
+function SidebarBrand() {
+  const stageLabel = useSidebarStageLabel();
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Link
+            aria-label="Go to threads"
+            className="sidebar-brand ml-[var(--workspace-titlebar-content-left)] h-7 w-fit min-w-0 shrink-0 items-center gap-1 overflow-hidden rounded-md text-foreground outline-hidden ring-ring focus-visible:ring-2"
+            to="/"
+          >
+            <AppWordmark />
+            {APP_NAME_SUFFIX ? (
+              <span className="truncate text-sm font-medium tracking-tight text-muted-foreground">
+                {APP_NAME_SUFFIX}
+              </span>
+            ) : null}
+            <span className="sidebar-brand-stage shrink-0 items-center whitespace-nowrap rounded-full bg-muted/50 px-1.5 py-0.5 text-[8px] font-medium uppercase tracking-[0.18em] text-muted-foreground/60">
+              {stageLabel}
+            </span>
+          </Link>
+        }
+      />
+      <TooltipPopup side="bottom" sideOffset={2}>
+        Version {APP_VERSION}
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
+function useSidebarStageLabel() {
   const primaryServerVersion =
     useAtomValue(primaryServerConfigAtom)?.environment.serverVersion ?? null;
-  const stageBadgeLabel = resolveSidebarStageBadgeLabel({
+
+  return resolveSidebarStageBadgeLabel({
     primaryServerVersion,
     fallbackStageLabel: APP_STAGE_LABEL,
   });
-  const wordmark = (
-    <div className="flex items-center gap-2">
-      <SidebarTrigger className="shrink-0 md:hidden" />
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Link
-              aria-label="Go to threads"
-              className="ml-1 flex min-w-0 flex-1 cursor-pointer items-center gap-1 rounded-md outline-hidden ring-ring transition-colors hover:text-foreground focus-visible:ring-2"
-              to="/"
-            >
-              <AppWordmark />
-              {APP_NAME_SUFFIX ? (
-                <span className="truncate text-sm font-medium tracking-tight text-muted-foreground">
-                  {APP_NAME_SUFFIX}
-                </span>
-              ) : null}
-              <span className="rounded-full bg-muted/50 px-1.5 py-0.5 text-[8px] font-medium uppercase tracking-[0.18em] text-muted-foreground/60">
-                {stageBadgeLabel}
-              </span>
-            </Link>
-          }
-        />
-        <TooltipPopup side="bottom" sideOffset={2}>
-          Version {APP_VERSION}
-        </TooltipPopup>
-      </Tooltip>
-    </div>
-  );
-
-  return isElectron ? (
-    <SidebarHeader className="drag-region h-[52px] flex-row items-center gap-2 px-4 py-0 pl-[90px] wco:h-[env(titlebar-area-height)] wco:pl-[calc(env(titlebar-area-x)+1em)]">
-      {wordmark}
-    </SidebarHeader>
-  ) : (
-    <SidebarHeader className="gap-3 px-3 py-2 sm:gap-2.5 sm:px-4 sm:py-3">{wordmark}</SidebarHeader>
-  );
-});
+}
 
 const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   const navigate = useNavigate();

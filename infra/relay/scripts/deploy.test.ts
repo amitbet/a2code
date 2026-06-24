@@ -6,12 +6,56 @@ import * as Path from "effect/Path";
 
 import {
   hasDeployChanges,
+  missingRelayPublicConfigFields,
   publicConfigFromOutput,
   reconcileRootEnvPublicConfig,
   reconcileRootEnvRelayUrl,
+  RelayDeployError,
+  RelayDeployPublicConfigUnavailableError,
   serializeGithubOutput,
   serializeRelayClientTracingEnvironment,
 } from "./deploy.ts";
+
+describe("RelayDeployError", () => {
+  it("reports the incomplete state source, stage, and missing fields", () => {
+    const missingFields = missingRelayPublicConfigFields({
+      url: "https://relay.example.test",
+      mobileTracingUrl: "https://api.axiom.co/v1/traces",
+    });
+    const error = new RelayDeployError({
+      source: "alchemy_state",
+      stage: "production",
+      missingFields,
+    });
+
+    expect(error).toMatchObject({
+      source: "alchemy_state",
+      stage: "production",
+      missingFields: [
+        "mobileTracingDataset",
+        "mobileTracingToken",
+        "clientTracingUrl",
+        "clientTracingDataset",
+        "clientTracingToken",
+      ],
+    });
+    expect(error.message).toBe(
+      "Relay deploy output from 'alchemy_state' for stage 'production' is missing required public config fields: mobileTracingDataset, mobileTracingToken, clientTracingUrl, clientTracingDataset, clientTracingToken",
+    );
+  });
+
+  it("distinguishes deploy results that do not produce public config", () => {
+    const error = new RelayDeployPublicConfigUnavailableError({
+      result: "dry-run",
+      stage: "production",
+      outputPath: "/tmp/relay-client.env",
+    });
+
+    expect(error.message).toBe(
+      "Relay deploy result 'dry-run' for stage 'production' did not produce public config required by GitHub environment output '/tmp/relay-client.env'.",
+    );
+  });
+});
 
 describe("hasDeployChanges", () => {
   it("detects resource, binding, and deletion changes", () => {
@@ -155,8 +199,8 @@ describe("serializeRelayClientTracingEnvironment", () => {
   });
 });
 
-describe("release workflow tracing config propagation", () => {
-  it.effect("uses an artifact instead of a masked cross-job token output", () =>
+describe("fork release workflow tracing config propagation", () => {
+  it.effect("keeps the fork release workflow independent of relay tracing deployment outputs", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -167,9 +211,9 @@ describe("release workflow tracing config propagation", () => {
 
       expect(workflow).not.toContain("client_tracing_token:");
       expect(workflow).not.toContain("needs.relay_public_config.outputs.client_tracing_token");
-      expect(workflow).toContain('--github-env-file "$RUNNER_TEMP/relay-client-tracing.env"');
-      expect(workflow).toContain("name: relay-client-tracing-config");
-      expect(workflow).toContain('cat "$config_path" >> "$GITHUB_ENV"');
+      expect(workflow).not.toContain('--github-env-file "$RUNNER_TEMP/relay-client-tracing.env"');
+      expect(workflow).not.toContain("name: relay-client-tracing-config");
+      expect(workflow).not.toContain('cat "$config_path" >> "$GITHUB_ENV"');
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

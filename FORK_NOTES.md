@@ -419,6 +419,10 @@ useAccountRateLimitSnapshot(selectedInstanceId)` (NOT a per-thread
 - After resolving, confirm with `git diff <fork-tip> HEAD -- .github/workflows`
   is empty (workflows unchanged) and that no upstream-only workflow files were
   pulled in.
+- 2026-06-24 merge note: upstream relay/deploy tests may assert release workflow
+  relay tracing propagation (`relay-client-tracing-config`, `--github-env-file`
+  env artifacts). Preserve the fork-trimmed `release.yml`; adjust those tests to
+  assert the fork workflow remains independent of relay deployment outputs.
 
 ### File attachment support
 
@@ -451,6 +455,10 @@ useAccountRateLimitSnapshot(selectedInstanceId)` (NOT a per-thread
   handling for web flows. Keep the fork-specific identity choices, but prefer
   upstream protocol literals when resolving conflicts unless the desktop auth
   flow itself is being redesigned.
+- 2026-06-24 merge note: upstream added/updated tests around desktop build
+  config and backend output log paths. Keep the fork package identity in those
+  expectations too: packaged app id `com.amitbet.a2code`, protocol display name
+  `A2 Code`, and user-data/log paths under `.a2code` / `A2 Code`.
 
 ### Claude SDK telemetry handling
 

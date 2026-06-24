@@ -618,6 +618,10 @@ function UserTimelineRow({
     visibleText = extracted.promptText;
   }
   const elementContextState = extractTrailingElementContexts(visibleText);
+  const elementContexts = [
+    ...displayedUserMessage.elementContexts,
+    ...elementContextState.contexts,
+  ];
   const previewImages = userImages.filter((image) => image.name.startsWith("preview-annotation-"));
   const regularImages = userImages.filter((image) => !image.name.startsWith("preview-annotation-"));
   const canRevertAgentWork = typeof row.revertTurnCount === "number";
@@ -665,9 +669,9 @@ function UserTimelineRow({
             image={previewImages[index] ?? null}
           />
         ))}
-        {elementContextState.contexts.length > 0 ? (
+        {elementContexts.length > 0 ? (
           <div className="mb-2 flex flex-wrap gap-1.5">
-            {elementContextState.contexts.map((context) => (
+            {elementContexts.map((context) => (
               <UserMessageElementContextChip
                 key={`${context.header}:${context.body}`}
                 context={context}
