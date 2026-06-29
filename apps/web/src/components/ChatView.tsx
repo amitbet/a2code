@@ -3941,6 +3941,9 @@ function ChatViewContent(props: ChatViewProps) {
       environmentId,
       input: {
         threadId: activeThread.id,
+        ...(activeThread.session?.activeTurnId
+          ? { turnId: activeThread.session.activeTurnId }
+          : {}),
       },
     });
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
