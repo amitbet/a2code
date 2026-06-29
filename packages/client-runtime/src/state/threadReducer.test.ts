@@ -37,6 +37,7 @@ const baseThread: OrchestrationThread = {
   deletedAt: null,
   messages: [],
   proposedPlans: [],
+  queuedPrompts: [],
   activities: [],
   checkpoints: [],
   session: null,

@@ -52,6 +52,14 @@ export class DesktopEnvironment extends Context.Service<
     readonly rootDir: string;
     readonly appRoot: string;
     readonly backendEntryPath: string;
+    /** Shell-bundled backend entry; the fallback when no hot-update payload is active. */
+    readonly bundledBackendEntryPath: string;
+    /** Directory holding extracted hot-update payloads (one subdir per version). */
+    readonly payloadsDir: string;
+    /** JSON pointer to the currently-applied hot-update payload version. */
+    readonly activePayloadPointerPath: string;
+    /** JSON pointer to a staged payload promoted to active on the next backend start. */
+    readonly pendingPayloadPointerPath: string;
     readonly backendCwd: string;
     readonly preloadPath: string;
     readonly appUpdateYmlPath: string;
@@ -183,6 +191,10 @@ const make = Effect.fn("desktop.environment.make")(function* (
     rootDir,
     appRoot,
     backendEntryPath: path.join(appRoot, "apps/server/dist/bin.mjs"),
+    bundledBackendEntryPath: path.join(appRoot, "apps/server/dist/bin.mjs"),
+    payloadsDir: path.join(stateDir, "payloads"),
+    activePayloadPointerPath: path.join(stateDir, "payloads", "active.json"),
+    pendingPayloadPointerPath: path.join(stateDir, "payloads", "pending.json"),
     backendCwd: input.isPackaged ? homeDirectory : appRoot,
     preloadPath: path.join(input.dirname, "preload.cjs"),
     appUpdateYmlPath: input.isPackaged

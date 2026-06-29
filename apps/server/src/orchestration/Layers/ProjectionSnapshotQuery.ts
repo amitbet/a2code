@@ -7,6 +7,7 @@ import {
   OrchestrationCheckpointFile,
   OrchestrationProposedPlanId,
   OrchestrationReadModel,
+  OrchestrationQueuedPrompt,
   OrchestrationShellSnapshot,
   OrchestrationThread,
   ProjectScript,
@@ -73,6 +74,16 @@ const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFields(
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
   }),
 );
+const ProjectionQueuedPromptDbRowSchema = OrchestrationQueuedPrompt.mapFields(
+  Struct.assign({
+    threadId: ThreadId,
+    attachments: Schema.fromJsonString(Schema.Array(ChatAttachment)),
+    modelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
+    titleSeed: Schema.NullOr(Schema.String),
+    sourceProposedPlanThreadId: Schema.NullOr(ThreadId),
+    sourceProposedPlanId: Schema.NullOr(OrchestrationProposedPlanId),
+  }),
+);
 const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
 const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
   Struct.assign({
@@ -91,6 +102,29 @@ const ProjectionCheckpointDbRowSchema = ProjectionCheckpoint.mapFields(
     files: Schema.fromJsonString(Schema.Array(OrchestrationCheckpointFile)),
   }),
 );
+
+function mapQueuedPromptRow(
+  row: Schema.Schema.Type<typeof ProjectionQueuedPromptDbRowSchema>,
+): OrchestrationQueuedPrompt {
+  return {
+    messageId: row.messageId,
+    text: row.text,
+    attachments: row.attachments,
+    ...(row.modelSelection !== null ? { modelSelection: row.modelSelection } : {}),
+    ...(row.titleSeed !== null ? { titleSeed: row.titleSeed } : {}),
+    runtimeMode: row.runtimeMode,
+    interactionMode: row.interactionMode,
+    ...(row.sourceProposedPlanThreadId !== null && row.sourceProposedPlanId !== null
+      ? {
+          sourceProposedPlan: {
+            threadId: row.sourceProposedPlanThreadId,
+            planId: row.sourceProposedPlanId,
+          },
+        }
+      : {}),
+    createdAt: row.createdAt,
+  };
+}
 const ProjectionLatestTurnDbRowSchema = Schema.Struct({
   threadId: ProjectionThread.fields.threadId,
   turnId: TurnId,
@@ -143,6 +177,7 @@ const REQUIRED_SNAPSHOT_PROJECTORS = [
   ORCHESTRATION_PROJECTOR_NAMES.projects,
   ORCHESTRATION_PROJECTOR_NAMES.threads,
   ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
+  ORCHESTRATION_PROJECTOR_NAMES.queuedPrompts,
   ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans,
   ORCHESTRATION_PROJECTOR_NAMES.threadActivities,
   ORCHESTRATION_PROJECTOR_NAMES.threadSessions,
@@ -422,6 +457,28 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_messages
+        ORDER BY thread_id ASC, created_at ASC, message_id ASC
+      `,
+  });
+
+  const listQueuedPromptRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionQueuedPromptDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          message_id AS "messageId",
+          thread_id AS "threadId",
+          text,
+          attachments_json AS "attachments",
+          model_selection_json AS "modelSelection",
+          title_seed AS "titleSeed",
+          runtime_mode AS "runtimeMode",
+          interaction_mode AS "interactionMode",
+          source_proposed_plan_thread_id AS "sourceProposedPlanThreadId",
+          source_proposed_plan_id AS "sourceProposedPlanId",
+          created_at AS "createdAt"
+        FROM projection_queued_prompts
         ORDER BY thread_id ASC, created_at ASC, message_id ASC
       `,
   });
@@ -791,6 +848,29 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const listQueuedPromptRowsByThread = SqlSchema.findAll({
+    Request: ThreadIdLookupInput,
+    Result: ProjectionQueuedPromptDbRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT
+          message_id AS "messageId",
+          thread_id AS "threadId",
+          text,
+          attachments_json AS "attachments",
+          model_selection_json AS "modelSelection",
+          title_seed AS "titleSeed",
+          runtime_mode AS "runtimeMode",
+          interaction_mode AS "interactionMode",
+          source_proposed_plan_thread_id AS "sourceProposedPlanThreadId",
+          source_proposed_plan_id AS "sourceProposedPlanId",
+          created_at AS "createdAt"
+        FROM projection_queued_prompts
+        WHERE thread_id = ${threadId}
+        ORDER BY created_at ASC, message_id ASC
+      `,
+  });
+
   const listThreadProposedPlanRowsByThread = SqlSchema.findAll({
     Request: ThreadIdLookupInput,
     Result: ProjectionThreadProposedPlanDbRowSchema,
@@ -962,6 +1042,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
+          listQueuedPromptRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getSnapshot:listQueuedPrompts:query",
+                "ProjectionSnapshotQuery.getSnapshot:listQueuedPrompts:decodeRows",
+              ),
+            ),
+          ),
           listThreadProposedPlanRows(undefined).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
@@ -1018,6 +1106,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             projectRows,
             threadRows,
             messageRows,
+            queuedPromptRows,
             proposedPlanRows,
             activityRows,
             sessionRows,
@@ -1027,6 +1116,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           ]) =>
             Effect.gen(function* () {
               const messagesByThread = new Map<string, Array<OrchestrationMessage>>();
+              const queuedPromptsByThread = new Map<string, Array<OrchestrationQueuedPrompt>>();
               const proposedPlansByThread = new Map<string, Array<OrchestrationProposedPlan>>();
               const activitiesByThread = new Map<string, Array<OrchestrationThreadActivity>>();
               const checkpointsByThread = new Map<string, Array<OrchestrationCheckpointSummary>>();
@@ -1059,6 +1149,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   updatedAt: row.updatedAt,
                 });
                 messagesByThread.set(row.threadId, threadMessages);
+              }
+              for (const row of queuedPromptRows) {
+                updatedAt = maxIso(updatedAt, row.createdAt);
+                const prompts = queuedPromptsByThread.get(row.threadId) ?? [];
+                prompts.push(mapQueuedPromptRow(row));
+                queuedPromptsByThread.set(row.threadId, prompts);
               }
 
               for (const row of proposedPlanRows) {
@@ -1191,6 +1287,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 archivedAt: row.archivedAt,
                 deletedAt: row.deletedAt,
                 messages: messagesByThread.get(row.threadId) ?? [],
+                queuedPrompts: queuedPromptsByThread.get(row.threadId) ?? [],
                 proposedPlans: proposedPlansByThread.get(row.threadId) ?? [],
                 activities: activitiesByThread.get(row.threadId) ?? [],
                 checkpoints: checkpointsByThread.get(row.threadId) ?? [],
@@ -1389,6 +1486,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   archivedAt: row.archivedAt,
                   deletedAt: row.deletedAt,
                   messages: [],
+                  queuedPrompts: [],
                   proposedPlans: proposedPlansByThread.get(row.threadId) ?? [],
                   activities: [],
                   checkpoints: [],
@@ -1903,6 +2001,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       const [
         threadRow,
         messageRows,
+        queuedPromptRows,
         proposedPlanRows,
         activityRows,
         checkpointRows,
@@ -1922,6 +2021,14 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             toPersistenceSqlOrDecodeError(
               "ProjectionSnapshotQuery.getThreadDetailById:listMessages:query",
               "ProjectionSnapshotQuery.getThreadDetailById:listMessages:decodeRows",
+            ),
+          ),
+        ),
+        listQueuedPromptRowsByThread({ threadId }).pipe(
+          Effect.mapError(
+            toPersistenceSqlOrDecodeError(
+              "ProjectionSnapshotQuery.getThreadDetailById:listQueuedPrompts:query",
+              "ProjectionSnapshotQuery.getThreadDetailById:listQueuedPrompts:decodeRows",
             ),
           ),
         ),
@@ -2001,6 +2108,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           }
           return message;
         }),
+        queuedPrompts: queuedPromptRows.map(mapQueuedPromptRow),
         proposedPlans: proposedPlanRows.map(mapProposedPlanRow),
         activities: activityRows.map((row) => {
           const activity = {

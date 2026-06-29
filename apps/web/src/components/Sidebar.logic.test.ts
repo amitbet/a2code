@@ -828,6 +828,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     session: null,
     messages: [],
     proposedPlans: [],
+    queuedPrompts: [],
     createdAt: "2026-03-09T10:00:00.000Z",
     archivedAt: null,
     deletedAt: null,

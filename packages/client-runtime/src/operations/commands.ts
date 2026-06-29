@@ -40,6 +40,9 @@ export type UpdateThreadMetadataInput = CommandInput<"thread.meta.update">;
 export type SetThreadRuntimeModeInput = CommandInput<"thread.runtime-mode.set">;
 export type SetThreadInteractionModeInput = CommandInput<"thread.interaction-mode.set">;
 export type StartThreadTurnInput = CommandInput<"thread.turn.start">;
+export type QueueThreadPromptInput = CommandInput<"thread.prompt.queue">;
+export type RemoveThreadPromptInput = CommandInput<"thread.prompt.remove">;
+export type SteerThreadPromptInput = CommandInput<"thread.prompt.steer">;
 export type InterruptThreadTurnInput = CommandInput<"thread.turn.interrupt">;
 export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond">;
 export type RespondToThreadUserInputInput = CommandInput<"thread.user-input.respond">;
@@ -206,6 +209,42 @@ export const startThreadTurn: (input: StartThreadTurnInput) => CommandEffect = E
   return yield* dispatch({
     ...input,
     type: "thread.turn.start",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const queueThreadPrompt: (input: QueueThreadPromptInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.queueThreadPrompt",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.prompt.queue",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const removeThreadPrompt: (input: RemoveThreadPromptInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.removeThreadPrompt",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.prompt.remove",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const steerThreadPrompt: (input: SteerThreadPromptInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.steerThreadPrompt",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.prompt.steer",
     commandId: metadata.commandId,
     createdAt: metadata.createdAt,
   });

@@ -66,7 +66,7 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
       } satisfies OrchestrationCommand;
     }
 
-    if (command.type !== "thread.turn.start") {
+    if (command.type !== "thread.turn.start" && command.type !== "thread.prompt.queue") {
       return command as OrchestrationCommand;
     }
 

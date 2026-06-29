@@ -43,6 +43,10 @@
       "types": "./src/semver.ts",
       "import": "./src/semver.ts"
     },
+    "./payloadArchive": {
+      "types": "./src/payloadArchive.ts",
+      "import": "./src/payloadArchive.ts"
+    },
     "./Net": {
       "types": "./src/Net.ts",
       "import": "./src/Net.ts"

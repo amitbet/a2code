@@ -1,6 +1,7 @@
 import {
   ApprovalRequestId,
-  type ChatAttachment,
+  ChatAttachment,
+  ModelSelection,
   type OrchestrationEvent,
   type OrchestrationSessionStatus,
   ThreadId,
@@ -9,6 +10,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -63,6 +65,7 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
   threadActivities: "projection.thread-activities",
   threadSessions: "projection.thread-sessions",
   threadTurns: "projection.thread-turns",
+  queuedPrompts: "projection.queued-prompts",
   checkpoints: "projection.checkpoints",
   pendingApprovals: "projection.pending-approvals",
 } as const;
@@ -109,6 +112,12 @@ interface AttachmentSideEffects {
 const materializeAttachmentsForProjection = Effect.fn("materializeAttachmentsForProjection")(
   (input: { readonly attachments: ReadonlyArray<ChatAttachment> }) =>
     Effect.succeed(input.attachments.length === 0 ? [] : input.attachments),
+);
+const encodeQueuedPromptAttachmentsJson = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Array(ChatAttachment)),
+);
+const encodeQueuedPromptModelSelectionJson = Schema.encodeSync(
+  Schema.fromJsonString(ModelSelection),
 );
 
 function extractActivityRequestId(payload: unknown): ApprovalRequestId | null {
@@ -715,6 +724,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         }
 
         case "thread.message-sent":
+        case "thread.prompt-queued":
+        case "thread.prompt-removed":
+        case "thread.prompt-steer-requested":
         case "thread.proposed-plan-upserted":
         case "thread.activity-appended":
         case "thread.approval-response-requested":
@@ -881,6 +893,92 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           );
           return;
         }
+
+        default:
+          return;
+      }
+    });
+
+    const applyQueuedPromptsProjection: ProjectorDefinition["apply"] = Effect.fn(
+      "applyQueuedPromptsProjection",
+    )(function* (event, _attachmentSideEffects) {
+      switch (event.type) {
+        case "thread.prompt-queued": {
+          const prompt = event.payload.prompt;
+          yield* sql`
+            INSERT INTO projection_queued_prompts (
+              message_id,
+              thread_id,
+              text,
+              attachments_json,
+              model_selection_json,
+              title_seed,
+              runtime_mode,
+              interaction_mode,
+              source_proposed_plan_thread_id,
+              source_proposed_plan_id,
+              created_at
+            )
+            VALUES (
+              ${prompt.messageId},
+              ${event.payload.threadId},
+              ${prompt.text},
+              ${encodeQueuedPromptAttachmentsJson(prompt.attachments)},
+              ${
+                prompt.modelSelection !== undefined
+                  ? encodeQueuedPromptModelSelectionJson(prompt.modelSelection)
+                  : null
+              },
+              ${prompt.titleSeed ?? null},
+              ${prompt.runtimeMode},
+              ${prompt.interactionMode},
+              ${prompt.sourceProposedPlan?.threadId ?? null},
+              ${prompt.sourceProposedPlan?.planId ?? null},
+              ${prompt.createdAt}
+            )
+            ON CONFLICT (message_id)
+            DO UPDATE SET
+              thread_id = excluded.thread_id,
+              text = excluded.text,
+              attachments_json = excluded.attachments_json,
+              model_selection_json = excluded.model_selection_json,
+              title_seed = excluded.title_seed,
+              runtime_mode = excluded.runtime_mode,
+              interaction_mode = excluded.interaction_mode,
+              source_proposed_plan_thread_id = excluded.source_proposed_plan_thread_id,
+              source_proposed_plan_id = excluded.source_proposed_plan_id,
+              created_at = excluded.created_at
+          `.pipe(
+            Effect.mapError(
+              toPersistenceSqlError("ProjectionQueuedPromptsRepository.upsert:query"),
+            ),
+          );
+          return;
+        }
+
+        case "thread.prompt-removed":
+        case "thread.prompt-steer-requested":
+          yield* sql`
+            DELETE FROM projection_queued_prompts
+            WHERE thread_id = ${event.payload.threadId}
+              AND message_id = ${event.payload.messageId}
+          `.pipe(
+            Effect.mapError(
+              toPersistenceSqlError("ProjectionQueuedPromptsRepository.deleteByMessageId:query"),
+            ),
+          );
+          return;
+
+        case "thread.deleted":
+          yield* sql`
+            DELETE FROM projection_queued_prompts
+            WHERE thread_id = ${event.payload.threadId}
+          `.pipe(
+            Effect.mapError(
+              toPersistenceSqlError("ProjectionQueuedPromptsRepository.deleteByThreadId:query"),
+            ),
+          );
+          return;
 
         default:
           return;
@@ -1468,6 +1566,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
         apply: applyThreadMessagesProjection,
+      },
+      {
+        name: ORCHESTRATION_PROJECTOR_NAMES.queuedPrompts,
+        apply: applyQueuedPromptsProjection,
       },
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans,

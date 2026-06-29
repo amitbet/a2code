@@ -14,6 +14,9 @@ import {
   ProjectCreatedPayload,
   ProjectDeletedPayload,
   ProjectMetaUpdatedPayload,
+  ThreadPromptQueuedPayload,
+  ThreadPromptRemovedPayload,
+  ThreadPromptSteerRequestedPayload,
   ThreadActivityAppendedPayload,
   ThreadArchivedPayload,
   ThreadCreatedPayload,
@@ -289,6 +292,8 @@ export function projectEvent(
             archivedAt: null,
             deletedAt: null,
             messages: [],
+            queuedPrompts: [],
+            proposedPlans: [],
             activities: [],
             checkpoints: [],
             session: null,
@@ -441,6 +446,68 @@ export function projectEvent(
           }),
         };
       });
+
+    case "thread.prompt-queued":
+      return decodeForEvent(ThreadPromptQueuedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) return nextBase;
+          const queuedPrompts = [
+            ...thread.queuedPrompts.filter((entry) => entry.messageId !== payload.prompt.messageId),
+            payload.prompt,
+          ].toSorted(
+            (left, right) =>
+              left.createdAt.localeCompare(right.createdAt) ||
+              left.messageId.localeCompare(right.messageId),
+          );
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              queuedPrompts,
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.prompt-removed":
+      return decodeForEvent(ThreadPromptRemovedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) return nextBase;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              queuedPrompts: thread.queuedPrompts.filter(
+                (entry) => entry.messageId !== payload.messageId,
+              ),
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.prompt-steer-requested":
+      return decodeForEvent(
+        ThreadPromptSteerRequestedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) return nextBase;
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              queuedPrompts: thread.queuedPrompts.filter(
+                (entry) => entry.messageId !== payload.messageId,
+              ),
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
 
     case "thread.session-set":
       return Effect.gen(function* () {

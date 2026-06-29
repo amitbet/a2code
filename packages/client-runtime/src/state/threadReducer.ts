@@ -23,6 +23,11 @@ const proposedPlanOrder = O.combine<OrchestrationThread["proposedPlans"][number]
   O.mapInput(O.String, (p) => p.id),
 );
 
+const queuedPromptOrder = O.combine<OrchestrationThread["queuedPrompts"][number]>(
+  O.mapInput(O.String, (p) => p.createdAt),
+  O.mapInput(O.String, (p) => p.messageId),
+);
+
 const checkpointOrder = O.mapInput(
   O.Number,
   (cp: OrchestrationThread["checkpoints"][number]) =>
@@ -75,6 +80,7 @@ export function applyThreadDetailEvent(
           deletedAt: null,
           messages: [],
           proposedPlans: [],
+          queuedPrompts: [],
           activities: [],
           checkpoints: [],
           session: null,
@@ -269,6 +275,44 @@ export function applyThreadDetailEvent(
           messages,
           checkpoints,
           latestTurn,
+          updatedAt: event.occurredAt,
+        },
+      };
+    }
+
+    case "thread.prompt-queued": {
+      const queuedPrompts = pipe(
+        [
+          ...thread.queuedPrompts.filter(
+            (prompt) => prompt.messageId !== event.payload.prompt.messageId,
+          ),
+          event.payload.prompt,
+        ],
+        Arr.sort(queuedPromptOrder),
+      );
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          queuedPrompts,
+          updatedAt: event.occurredAt,
+        },
+      };
+    }
+
+    case "thread.prompt-removed":
+    case "thread.prompt-steer-requested": {
+      const queuedPrompts = thread.queuedPrompts.filter(
+        (prompt) => prompt.messageId !== event.payload.messageId,
+      );
+      if (queuedPrompts.length === thread.queuedPrompts.length) {
+        return { kind: "unchanged" };
+      }
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          queuedPrompts,
           updatedAt: event.occurredAt,
         },
       };

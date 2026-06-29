@@ -497,6 +497,95 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       return [userMessageEvent, turnStartRequestedEvent];
     }
 
+    case "thread.prompt.queue": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.prompt-queued",
+        payload: {
+          threadId: command.threadId,
+          prompt: {
+            messageId: command.message.messageId,
+            text: command.message.text,
+            attachments: command.message.attachments,
+            ...(command.modelSelection !== undefined
+              ? { modelSelection: command.modelSelection }
+              : {}),
+            ...(command.titleSeed !== undefined ? { titleSeed: command.titleSeed } : {}),
+            runtimeMode: command.runtimeMode,
+            interactionMode: command.interactionMode,
+            ...(command.sourceProposedPlan !== undefined
+              ? { sourceProposedPlan: command.sourceProposedPlan }
+              : {}),
+            createdAt: command.createdAt,
+          },
+        },
+      };
+    }
+
+    case "thread.prompt.remove": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.prompt-removed",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
+    case "thread.prompt.steer": {
+      const targetThread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const prompt = targetThread.queuedPrompts.find(
+        (entry) => entry.messageId === command.messageId,
+      );
+      if (!prompt) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Queued prompt '${command.messageId}' does not exist on thread '${command.threadId}'.`,
+        });
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.prompt-steer-requested",
+        payload: {
+          threadId: command.threadId,
+          messageId: command.messageId,
+          prompt,
+          createdAt: command.createdAt,
+        },
+      };
+    }
+
     case "thread.turn.interrupt": {
       yield* requireThread({
         readModel,

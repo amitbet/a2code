@@ -53,6 +53,12 @@ export const DesktopConfig = Config.all({
   mockUpdateServerPort: Config.port("T3CODE_DESKTOP_MOCK_UPDATE_SERVER_PORT").pipe(
     Config.withDefault(3000),
   ),
+  // Payload hot-update channel (JS-only server+client swap; see DesktopPayloadUpdates).
+  disablePayloadUpdate: optionalBoolean("T3CODE_DISABLE_PAYLOAD_UPDATE"),
+  payloadManifestUrl: trimmedString("T3CODE_PAYLOAD_MANIFEST_URL"),
+  payloadPublicKeyOverride: trimmedString("T3CODE_PAYLOAD_PUBLIC_KEY"),
+  allowUnsignedPayload: optionalBoolean("T3CODE_PAYLOAD_ALLOW_UNSIGNED"),
+  restartBackendOnPayloadStage: optionalBoolean("T3CODE_PAYLOAD_RESTART_ON_STAGE"),
 });
 
 export const layerTest = (env: Readonly<Record<string, string | undefined>>) =>

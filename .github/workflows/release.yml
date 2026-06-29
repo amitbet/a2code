@@ -133,13 +133,23 @@ jobs:
             --build-version "${{ needs.preflight.outputs.version }}" \
             --verbose
 
+      # JS-only payload hot-update asset (server + web client). Arch-independent,
+      # so it is built once in this job and published alongside the full app.
+      - name: Build payload hot-update asset
+        shell: bash
+        env:
+          T3CODE_PAYLOAD_VERSION: ${{ needs.preflight.outputs.version }}
+          T3CODE_PAYLOAD_SIGNING_KEY: ${{ secrets.T3CODE_PAYLOAD_SIGNING_KEY }}
+        run: |
+          vp run dist:payload:asset
+
       - name: Collect release assets
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p release-publish
           shopt -s nullglob
-          for pattern in "release/*.dmg" "release/*.zip" "release/*.blockmap" "release/*.yml"; do
+          for pattern in "release/*.dmg" "release/*.zip" "release/*.blockmap" "release/*.yml" "release/payload-*.tar.gz" "release/payload-manifest.json"; do
             for file in $pattern; do
               cp "$file" release-publish/
             done
@@ -465,6 +475,8 @@ jobs:
             release-assets/*.exe
             release-assets/*.blockmap
             release-assets/*.yml
+            release-assets/payload-*.tar.gz
+            release-assets/payload-manifest.json
           fail_on_unmatched_files: false
 
       - name: Publish first release
@@ -484,6 +496,8 @@ jobs:
             release-assets/*.exe
             release-assets/*.blockmap
             release-assets/*.yml
+            release-assets/payload-*.tar.gz
+            release-assets/payload-manifest.json
           fail_on_unmatched_files: false
 
   append_macos_x64:

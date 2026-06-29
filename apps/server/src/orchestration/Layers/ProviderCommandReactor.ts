@@ -55,10 +55,12 @@ type ProviderIntentEvent = Extract<
     type:
       | "thread.runtime-mode-set"
       | "thread.turn-start-requested"
+      | "thread.prompt-steer-requested"
       | "thread.turn-interrupt-requested"
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
-      | "thread.session-stop-requested";
+      | "thread.session-stop-requested"
+      | "thread.session-set";
   }
 >;
 
@@ -985,6 +987,57 @@ const make = Effect.gen(function* () {
       .pipe(Effect.catchCause(recoverTurnStartFailure), Effect.forkScoped);
   });
 
+  const processPromptSteerRequested = Effect.fn("processPromptSteerRequested")(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.prompt-steer-requested" }>,
+  ) {
+    yield* orchestrationEngine.dispatch({
+      type: "thread.turn.start",
+      commandId: yield* serverCommandId("queued-prompt-start"),
+      threadId: event.payload.threadId,
+      message: {
+        messageId: event.payload.prompt.messageId,
+        role: "user",
+        text: event.payload.prompt.text,
+        attachments: [...event.payload.prompt.attachments],
+      },
+      ...(event.payload.prompt.modelSelection !== undefined
+        ? { modelSelection: event.payload.prompt.modelSelection }
+        : {}),
+      ...(event.payload.prompt.titleSeed !== undefined
+        ? { titleSeed: event.payload.prompt.titleSeed }
+        : {}),
+      runtimeMode: event.payload.prompt.runtimeMode,
+      interactionMode: event.payload.prompt.interactionMode,
+      ...(event.payload.prompt.sourceProposedPlan !== undefined
+        ? { sourceProposedPlan: event.payload.prompt.sourceProposedPlan }
+        : {}),
+      createdAt: event.payload.createdAt,
+    });
+  });
+
+  const processSessionSet = Effect.fn("processSessionSet")(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.session-set" }>,
+  ) {
+    if (
+      (event.payload.session.status !== "ready" && event.payload.session.status !== "idle") ||
+      event.payload.session.activeTurnId !== null
+    ) {
+      return;
+    }
+    const thread = yield* resolveThread(event.payload.threadId);
+    const prompt = thread?.queuedPrompts[0];
+    if (!prompt) {
+      return;
+    }
+    yield* orchestrationEngine.dispatch({
+      type: "thread.prompt.steer",
+      commandId: yield* serverCommandId("queued-prompt-drain"),
+      threadId: event.payload.threadId,
+      messageId: prompt.messageId,
+      createdAt: event.occurredAt,
+    });
+  });
+
   const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-interrupt-requested" }>,
   ) {
@@ -1155,6 +1208,9 @@ const make = Effect.gen(function* () {
       case "thread.turn-start-requested":
         yield* processTurnStartRequested(event);
         return;
+      case "thread.prompt-steer-requested":
+        yield* processPromptSteerRequested(event);
+        return;
       case "thread.turn-interrupt-requested":
         yield* processTurnInterruptRequested(event);
         return;
@@ -1166,6 +1222,9 @@ const make = Effect.gen(function* () {
         return;
       case "thread.session-stop-requested":
         yield* processSessionStopRequested(event);
+        return;
+      case "thread.session-set":
+        yield* processSessionSet(event);
         return;
     }
   });
@@ -1190,10 +1249,12 @@ const make = Effect.gen(function* () {
       if (
         event.type === "thread.runtime-mode-set" ||
         event.type === "thread.turn-start-requested" ||
+        event.type === "thread.prompt-steer-requested" ||
         event.type === "thread.turn-interrupt-requested" ||
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
-        event.type === "thread.session-stop-requested"
+        event.type === "thread.session-stop-requested" ||
+        event.type === "thread.session-set"
       ) {
         return yield* worker.enqueue(event);
       }

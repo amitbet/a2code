@@ -38,6 +38,40 @@ the next merge; the per-feature sections below were updated to match.
 
 ## Fork features
 
+### Queued prompt steering
+
+- Adds Codex-like running-turn prompt handling: sending while a thread is
+  running queues the prompt instead of immediately steering; each queued prompt
+  can be removed or promoted with **Steer**, which sends it to the active agent
+  mid-flight. When the session becomes ready/idle, queued prompts drain FIFO as
+  normal next turns.
+- Provider behavior remains routed through the existing provider turn-start
+  path. For running sessions, adapters that already treat a second send as a
+  steer continue to do so; for idle/ready sessions the same command starts the
+  next turn. This keeps the feature provider-neutral across Codex, Claude,
+  Cursor, Grok, and OpenCode.
+- Merge note: migration `034_ProjectionQueuedPrompts` is fork-added. Renumber or
+  reconcile if upstream adds a migration with id `34`.
+- Files:
+  - `packages/contracts/src/orchestration.ts` — **modified**: queued prompt
+    schema on `OrchestrationThread`, prompt queue/remove/steer commands, and
+    prompt queued/removed/steer-requested events.
+  - `packages/client-runtime/src/operations/commands.ts` and
+    `packages/client-runtime/src/state/threadCommands.ts` — **modified**:
+    client command helpers/atoms for queue, remove, and steer.
+  - `apps/server/src/orchestration/{decider,projector,Schemas,Normalizer}.ts`
+    — **modified**: validate/project queued prompts and normalize queued
+    attachments.
+  - `apps/server/src/orchestration/Layers/{ProjectionPipeline,ProjectionSnapshotQuery,ProviderCommandReactor}.ts`
+    — **modified**: persist/read queued prompts, drain FIFO after ready/idle
+    session updates, and promote queued prompts into provider turn-start work.
+  - `apps/server/src/persistence/Migrations/034_ProjectionQueuedPrompts.ts` —
+    **fork-added**: `projection_queued_prompts` table.
+  - `apps/web/src/components/ChatView.tsx` and
+    `apps/web/src/components/chat/{ChatComposer,ComposerPrimaryActions}.tsx` —
+    **modified**: running composer queues by default and renders queue controls
+    with explicit **Steer** promotion.
+
 ### In-chat find (Cmd/Ctrl+F)
 
 - Adds a browser-style find toolbar to the chat timeline. Because the timeline
@@ -406,7 +440,12 @@ useAccountRateLimitSnapshot(selectedInstanceId)` (NOT a per-thread
     / preload-verification jobs — the fork's `ci.yml` is build-only.
   - `release.yml` — **"Release"**: separate per-platform jobs that each build an
     **unsigned** artifact. **Drop** upstream's matrix-based Azure Trusted Signing /
-    Apple code-signing flow and the ImageMagick step.
+    Apple code-signing flow and the ImageMagick step. The macOS arm64 job also
+    builds the **payload hot-update asset** (`Build payload hot-update asset`
+    step → `vp run dist:payload:asset`, using the `T3CODE_PAYLOAD_SIGNING_KEY`
+    secret) and the `release` job publishes `payload-*.tar.gz` +
+    `payload-manifest.json`. Preserve these when resolving — see the "Payload
+    hot-update channel" feature above.
   - `mobile-eas-preview.yml` — **deleted in the fork** (the Android build lives in
     `ci.yml`). On a modify/delete conflict, keep it deleted (`git rm`).
   - Upstream-only workflows the fork does **not** carry: `deploy-relay.yml`,
@@ -511,6 +550,76 @@ table_info`), so re-running after a renumber is safe.
   merging upstream provider/adapter refactors, keep `ProviderAdapterCapabilities.nativeFork`
   on the adapter contract and the native-vs-replay decision in
   `ProviderCommandReactor.buildSendTurnRequestForThread`.
+
+### Payload hot-update channel (desktop JS-only updates)
+
+- **What it is.** A second desktop update path that ships *only* the JS payload
+  (`apps/server/dist` — the bundled server `bin.mjs` + chunks + the web `client/`
+  it serves) as a GitHub release asset, so the app can swap front-end **and**
+  back-end without replacing the signed/notarized `.app` shell via
+  electron-updater. The renderer loads `t3code://app/` which proxies to the local
+  backend, and the backend serves the bundled client — so swapping
+  `apps/server/dist` swaps both ends at once.
+- **Why it doesn't break Apple signing.** Payloads land in `stateDir`
+  (`~/.a2code/userdata/payloads/<version>/`), never inside the `.app`, and they
+  are JavaScript only (Gatekeeper/hardened-runtime enforce signatures on native
+  Mach-O, not on JS loaded at runtime). The signed shell is untouched. Anything
+  that needs a new **native** binary (the `@ff-labs/fff-bin-*` addon) or a new
+  Electron/main-process build must go through the full electron-updater path
+  instead — gated by the manifest's `minShellVersion`.
+- **Apply model.** Download → verify (size + sha256 + **Ed25519 signature**) →
+  extract to `payloads/<version>.partial` → atomic rename → write a `pending`
+  pointer. The pointer is promoted to `active` at the next **backend start**
+  (zero interruption); set `T3CODE_PAYLOAD_RESTART_ON_STAGE=1` to restart the
+  backend immediately. Resolution is fault-tolerant: a missing/corrupt payload
+  falls back to the shell-bundled backend, so a bad payload can't brick the app.
+- **Security.** The app embeds an Ed25519 public key
+  (`PAYLOAD_SIGNING_PUBLIC_KEY` in `payloadSigning.ts`, **currently empty — must
+  be filled before shipping**); the release build signs with the
+  `T3CODE_PAYLOAD_SIGNING_KEY` CI secret. With no embedded key the channel stays
+  disabled in production unless `T3CODE_PAYLOAD_ALLOW_UNSIGNED=1` (dev only).
+- **`minShellVersion` contract.** Defaults to `0.0.0` (any shell). Bump it via
+  `T3CODE_PAYLOAD_MIN_SHELL_VERSION` whenever native deps / Electron change, so
+  older shells stop pulling JS payloads that need a newer native ABI. This is
+  the single most important operational lever — get it wrong and an old shell
+  can load a payload its native modules can't run.
+- **Status / follow-up.** The updater is **headless + automatic** (polls,
+  downloads, stages). State is broadcast over `PAYLOAD_UPDATE_STATE_CHANNEL` but
+  there is **no renderer UI / preload bridge / invokable IPC yet** — a manual
+  "check / apply now" surface in settings is a deliberate future enhancement.
+- **Files (fork-added unless noted):**
+  - `packages/shared/src/payloadArchive.ts` (+ `./payloadArchive` export) —
+    dependency-free `.tar.gz` codec used by both the build script and the app.
+  - `packages/contracts/src/ipc.ts` — **modified**: `DesktopPayloadManifest` +
+    `DesktopPayloadUpdateState` schemas.
+  - `apps/desktop/src/updates/DesktopPayloadUpdates.ts` — the updater service
+    (poll → check → download → verify → stage → optional restart).
+  - `apps/desktop/src/updates/payloadLayout.ts` — pointer model + the
+    `resolveActiveBackendEntryPath` resolver (pending→active promotion + bundled
+    fallback).
+  - `apps/desktop/src/updates/payloadSigning.ts` — Ed25519 verify + embedded key.
+  - `apps/desktop/src/app/DesktopConfig.ts` — **modified**: payload env vars
+    (`T3CODE_DISABLE_PAYLOAD_UPDATE`, `T3CODE_PAYLOAD_MANIFEST_URL`,
+    `T3CODE_PAYLOAD_PUBLIC_KEY`, `T3CODE_PAYLOAD_ALLOW_UNSIGNED`,
+    `T3CODE_PAYLOAD_RESTART_ON_STAGE`).
+  - `apps/desktop/src/app/DesktopEnvironment.ts` — **modified**: `payloadsDir`,
+    `activePayloadPointerPath`, `pendingPayloadPointerPath`,
+    `bundledBackendEntryPath`.
+  - `apps/desktop/src/backend/DesktopBackendConfiguration.ts` — **modified**:
+    resolves the backend entry via `resolveActiveBackendEntryPath` so a
+    stop/start restart applies a staged payload.
+  - `apps/desktop/src/app/DesktopApp.ts`, `apps/desktop/src/main.ts` —
+    **modified**: wire + start `DesktopPayloadUpdates`.
+  - `apps/desktop/src/ipc/channels.ts` — **modified**:
+    `PAYLOAD_UPDATE_STATE_CHANNEL`.
+  - `scripts/build-payload-asset.ts` (+ root `dist:payload:asset` script) —
+    builds `payload-<version>.tar.gz` + signed `payload-manifest.json`.
+  - `.github/workflows/release.yml` — **modified**: builds + publishes the
+    payload asset + manifest (see CI section).
+- **Merge note:** the updater defaults its manifest URL to
+  `https://github.com/amitbet/a2code/releases/latest/download/payload-manifest.json`
+  (mirrors `DEFAULT_DESKTOP_UPDATE_REPOSITORY` in `build-desktop-artifact.ts`).
+  Keep both pointing at the fork repo.
 
 ## Merge checklist
 

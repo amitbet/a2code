@@ -258,6 +258,90 @@ export const DesktopUpdateCheckResultSchema = Schema.Struct({
   state: DesktopUpdateStateSchema,
 });
 
+/**
+ * Manifest describing a JS-only "payload" (the bundled server + web client that
+ * live under `apps/server/dist`) published as a GitHub release asset. The
+ * desktop app can hot-swap this payload without replacing the signed/notarized
+ * `.app` shell — see the payload hot-update channel in `apps/desktop`.
+ *
+ * `signature` is a base64 Ed25519 signature over the ASCII `sha256` hex string,
+ * verified by the running app against an embedded public key before the payload
+ * is ever extracted or executed. `minShellVersion` gates payloads that need a
+ * newer native shell (Electron/native modules) — those must instead arrive via
+ * the full app updater.
+ */
+export interface DesktopPayloadManifest {
+  schemaVersion: 1;
+  version: string;
+  minShellVersion: string;
+  fileName: string;
+  sizeBytes: number;
+  sha256: string;
+  signature: string;
+  createdAt: string;
+  notes?: string;
+}
+
+export const DesktopPayloadManifestSchema = Schema.Struct({
+  schemaVersion: Schema.Literal(1),
+  version: Schema.String,
+  minShellVersion: Schema.String,
+  fileName: Schema.String,
+  sizeBytes: Schema.Number,
+  sha256: Schema.String,
+  signature: Schema.String,
+  createdAt: Schema.String,
+  notes: Schema.optionalKey(Schema.String),
+});
+
+export type DesktopPayloadUpdateStatus =
+  | "disabled"
+  | "idle"
+  | "checking"
+  | "up-to-date"
+  | "available"
+  | "downloading"
+  | "staged"
+  | "error";
+
+export const DesktopPayloadUpdateStatusSchema = Schema.Literals([
+  "disabled",
+  "idle",
+  "checking",
+  "up-to-date",
+  "available",
+  "downloading",
+  "staged",
+  "error",
+]);
+
+export interface DesktopPayloadUpdateState {
+  enabled: boolean;
+  status: DesktopPayloadUpdateStatus;
+  shellVersion: string;
+  /** Applied payload version, or null when running the shell-bundled payload. */
+  currentPayloadVersion: string | null;
+  /** Newest compatible payload offered by the manifest, if any. */
+  availableVersion: string | null;
+  /** Version downloaded + verified and waiting to apply on next backend start. */
+  stagedVersion: string | null;
+  downloadPercent: number | null;
+  checkedAt: string | null;
+  message: string | null;
+}
+
+export const DesktopPayloadUpdateStateSchema = Schema.Struct({
+  enabled: Schema.Boolean,
+  status: DesktopPayloadUpdateStatusSchema,
+  shellVersion: Schema.String,
+  currentPayloadVersion: Schema.NullOr(Schema.String),
+  availableVersion: Schema.NullOr(Schema.String),
+  stagedVersion: Schema.NullOr(Schema.String),
+  downloadPercent: Schema.NullOr(Schema.Number),
+  checkedAt: Schema.NullOr(Schema.String),
+  message: Schema.NullOr(Schema.String),
+});
+
 export interface DesktopEnvironmentBootstrap {
   label: string;
   httpBaseUrl: string | null;

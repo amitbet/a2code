@@ -126,7 +126,13 @@ import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
-import { ChevronDownIcon, TriangleAlertIcon, WifiOffIcon } from "lucide-react";
+import {
+  ChevronDownIcon,
+  SendHorizontalIcon,
+  TriangleAlertIcon,
+  WifiOffIcon,
+  XIcon,
+} from "lucide-react";
 import { cn, randomHex } from "~/lib/utils";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { stackedThreadToast, toastManager } from "./ui/toast";
@@ -317,6 +323,20 @@ function formatOutgoingPrompt(params: {
   const caps = getProviderModelCapabilities(params.models, params.model, params.provider);
   const promptEffort = resolvePromptInjectedEffort(caps, params.effort);
   return applyClaudePromptEffortPrefix(params.text, promptEffort);
+}
+
+function formatQueuedPromptPreview(prompt: {
+  readonly text: string;
+  readonly attachments: ReadonlyArray<unknown>;
+}): string {
+  const text = prompt.text.trim();
+  if (text) {
+    return text;
+  }
+  if (prompt.attachments.length === 1) {
+    return "1 attachment";
+  }
+  return `${prompt.attachments.length} attachments`;
 }
 const SCRIPT_TERMINAL_COLS = 120;
 const SCRIPT_TERMINAL_ROWS = 30;
@@ -1000,6 +1020,11 @@ function ChatViewContent(props: ChatViewProps) {
     reportFailure: false,
   });
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
+  const queueThreadPrompt = useAtomCommand(threadEnvironment.queuePrompt, { reportFailure: false });
+  const removeThreadPrompt = useAtomCommand(threadEnvironment.removePrompt, {
+    reportFailure: false,
+  });
+  const steerThreadPrompt = useAtomCommand(threadEnvironment.steerPrompt, { reportFailure: false });
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, {
     reportFailure: false,
   });
@@ -1213,6 +1238,7 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const isServerThread = routeKind === "server" && serverThread !== null;
   const activeThread = isServerThread ? serverThread : localDraftThread;
+  const queuedPrompts = activeThread?.queuedPrompts ?? [];
   // Full server-side error (local override wins over the persistent session
   // error), before applying the user's dismissal.
   const rawServerError = isServerThread
@@ -2243,6 +2269,46 @@ function ChatViewContent(props: ChatViewProps) {
       });
     },
     [draftId, routeThreadKey, routeThreadRef, serverThread],
+  );
+  const onRemoveQueuedPrompt = useCallback(
+    async (messageId: MessageId) => {
+      if (!isServerThread || activeThreadId === null) return;
+      const result = await removeThreadPrompt({
+        environmentId,
+        input: {
+          threadId: activeThreadId,
+          messageId,
+        },
+      });
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        setThreadError(
+          activeThreadId,
+          error instanceof Error ? error.message : "Failed to remove queued prompt.",
+        );
+      }
+    },
+    [activeThreadId, environmentId, isServerThread, removeThreadPrompt, setThreadError],
+  );
+  const onSteerQueuedPrompt = useCallback(
+    async (messageId: MessageId) => {
+      if (!isServerThread || activeThreadId === null) return;
+      const result = await steerThreadPrompt({
+        environmentId,
+        input: {
+          threadId: activeThreadId,
+          messageId,
+        },
+      });
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        setThreadError(
+          activeThreadId,
+          error instanceof Error ? error.message : "Failed to steer queued prompt.",
+        );
+      }
+    },
+    [activeThreadId, environmentId, isServerThread, steerThreadPrompt, setThreadError],
   );
 
   const focusComposer = useCallback(() => {
@@ -3662,6 +3728,7 @@ function ChatViewContent(props: ChatViewProps) {
       isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath
         ? activeThreadBranch
         : null;
+    const shouldQueuePrompt = phase === "running" && isServerThread && !isFirstMessage;
 
     // In worktree mode, require an explicit base branch so we don't silently
     // fall back to local execution when branch selection is missing.
@@ -3829,59 +3896,89 @@ function ChatViewContent(props: ChatViewProps) {
 
     let turnStartSucceeded = false;
     if (failure === null && turnAttachmentsResult._tag === "Success") {
-      const bootstrap =
-        isLocalDraftThread || baseBranchForWorktree
-          ? {
-              ...(isLocalDraftThread
-                ? {
-                    createThread: {
-                      projectId: activeProject.id,
-                      title,
-                      modelSelection: threadCreateModelSelection,
-                      runtimeMode,
-                      interactionMode,
-                      branch: activeThreadBranch,
-                      worktreePath: activeThread.worktreePath,
-                      createdAt: activeThread.createdAt,
-                    },
-                  }
-                : {}),
-              ...(baseBranchForWorktree
-                ? {
-                    prepareWorktree: {
-                      projectCwd: activeProject.workspaceRoot,
-                      baseBranch: baseBranchForWorktree,
-                      branch: buildTemporaryWorktreeBranchName(randomHex),
-                      ...(startFromOrigin ? { startFromOrigin: true } : {}),
-                    },
-                    runSetupScript: true,
-                  }
-                : {}),
-            }
-          : undefined;
-      beginLocalDispatch({ preparingWorktree: false });
-      const startResult = await startThreadTurn({
-        environmentId,
-        input: {
-          threadId: threadIdForSend,
-          message: {
-            messageId: messageIdForSend,
-            role: "user",
-            text: outgoingMessageText,
-            attachments: turnAttachmentsResult.value,
+      if (shouldQueuePrompt) {
+        const queueResult = await queueThreadPrompt({
+          environmentId,
+          input: {
+            threadId: threadIdForSend,
+            message: {
+              messageId: messageIdForSend,
+              role: "user",
+              text: outgoingMessageText,
+              attachments: turnAttachmentsResult.value,
+            },
+            modelSelection: ctxSelectedModelSelection,
+            titleSeed: title,
+            runtimeMode,
+            interactionMode,
+            createdAt: messageCreatedAt,
           },
-          modelSelection: ctxSelectedModelSelection,
-          titleSeed: title,
-          runtimeMode,
-          interactionMode,
-          ...(bootstrap ? { bootstrap } : {}),
-          createdAt: messageCreatedAt,
-        },
-      });
-      if (startResult._tag === "Failure") {
-        failure = startResult;
+        });
+        if (queueResult._tag === "Failure") {
+          failure = queueResult;
+        } else {
+          turnStartSucceeded = true;
+          setOptimisticUserMessages((existing) => {
+            const next = existing.filter((message) => message.id !== messageIdForSend);
+            return next.length === existing.length ? existing : next;
+          });
+          resetLocalDispatch();
+        }
       } else {
-        turnStartSucceeded = true;
+        const bootstrap =
+          isLocalDraftThread || baseBranchForWorktree
+            ? {
+                ...(isLocalDraftThread
+                  ? {
+                      createThread: {
+                        projectId: activeProject.id,
+                        title,
+                        modelSelection: threadCreateModelSelection,
+                        runtimeMode,
+                        interactionMode,
+                        branch: activeThreadBranch,
+                        worktreePath: activeThread.worktreePath,
+                        createdAt: activeThread.createdAt,
+                      },
+                    }
+                  : {}),
+                ...(baseBranchForWorktree
+                  ? {
+                      prepareWorktree: {
+                        projectCwd: activeProject.workspaceRoot,
+                        baseBranch: baseBranchForWorktree,
+                        branch: buildTemporaryWorktreeBranchName(randomHex),
+                        ...(startFromOrigin ? { startFromOrigin: true } : {}),
+                      },
+                      runSetupScript: true,
+                    }
+                  : {}),
+              }
+            : undefined;
+        beginLocalDispatch({ preparingWorktree: false });
+        const startResult = await startThreadTurn({
+          environmentId,
+          input: {
+            threadId: threadIdForSend,
+            message: {
+              messageId: messageIdForSend,
+              role: "user",
+              text: outgoingMessageText,
+              attachments: turnAttachmentsResult.value,
+            },
+            modelSelection: ctxSelectedModelSelection,
+            titleSeed: title,
+            runtimeMode,
+            interactionMode,
+            ...(bootstrap ? { bootstrap } : {}),
+            createdAt: messageCreatedAt,
+          },
+        });
+        if (startResult._tag === "Failure") {
+          failure = startResult;
+        } else {
+          turnStartSucceeded = true;
+        }
       }
     }
 
@@ -4829,6 +4926,47 @@ function ChatViewContent(props: ChatViewProps) {
               <div className="relative isolate">
                 <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
                 <div className="relative z-10">
+                  {queuedPrompts.length > 0 ? (
+                    <div className="mx-auto mb-2 w-full max-w-208 rounded-lg border border-border/70 bg-card/95 p-2 shadow-sm">
+                      <div className="mb-1.5 flex items-center justify-between gap-3 px-1">
+                        <span className="font-medium text-muted-foreground text-xs">
+                          Queue ({queuedPrompts.length})
+                        </span>
+                      </div>
+                      <div className="flex flex-col gap-1.5">
+                        {queuedPrompts.map((prompt) => (
+                          <div
+                            key={prompt.messageId}
+                            className="flex min-h-8 items-center gap-2 rounded-md bg-muted/45 px-2 py-1.5"
+                          >
+                            <div className="min-w-0 flex-1 truncate text-sm">
+                              {formatQueuedPromptPreview(prompt)}
+                            </div>
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              onClick={() => {
+                                void onSteerQueuedPrompt(prompt.messageId);
+                              }}
+                            >
+                              <SendHorizontalIcon className="size-3.5" />
+                              Steer
+                            </Button>
+                            <Button
+                              aria-label="Remove queued prompt"
+                              size="icon-xs"
+                              variant="ghost"
+                              onClick={() => {
+                                void onRemoveQueuedPrompt(prompt.messageId);
+                              }}
+                            >
+                              <XIcon className="size-3.5" />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                   <ChatComposer
                     composerRef={composerRef}
                     composerDraftTarget={composerDraftTarget}

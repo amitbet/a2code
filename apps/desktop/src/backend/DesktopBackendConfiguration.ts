@@ -13,6 +13,7 @@ import * as Schema from "effect/Schema";
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopServerExposure from "./DesktopServerExposure.ts";
+import * as DesktopPayloadLayout from "../updates/payloadLayout.ts";
 
 export class DesktopBackendObservabilitySettingsReadError extends Schema.TaggedErrorClass<DesktopBackendObservabilitySettingsReadError>()(
   "DesktopBackendObservabilitySettingsReadError",
@@ -107,15 +108,20 @@ const resolveBackendStartConfig = Effect.fn("desktop.backendConfiguration.resolv
   }): Effect.fn.Return<
     DesktopBackendManager.DesktopBackendStartConfig,
     never,
-    DesktopEnvironment.DesktopEnvironment | DesktopServerExposure.DesktopServerExposure
+    | DesktopEnvironment.DesktopEnvironment
+    | DesktopServerExposure.DesktopServerExposure
+    | FileSystem.FileSystem
   > {
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const serverExposure = yield* DesktopServerExposure.DesktopServerExposure;
     const backendExposure = yield* serverExposure.backendConfig;
+    // Prefer an applied hot-update payload's backend over the shell-bundled one;
+    // falls back to the bundle when no payload is staged/active or one is corrupt.
+    const entryPath = yield* DesktopPayloadLayout.resolveActiveBackendEntryPath;
 
     return {
       executablePath: process.execPath,
-      entryPath: environment.backendEntryPath,
+      entryPath,
       cwd: environment.backendCwd,
       env: {
         ...backendChildEnvPatch(),
@@ -175,6 +181,7 @@ export const make = Effect.gen(function* () {
       }).pipe(
         Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
         Effect.provideService(DesktopServerExposure.DesktopServerExposure, serverExposure),
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
       );
     }).pipe(Effect.withSpan("desktop.backendConfiguration.resolve")),
   });

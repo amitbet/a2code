@@ -10,6 +10,7 @@ export const UPDATE_SET_CHANNEL_CHANNEL = "desktop:update-set-channel";
 export const UPDATE_DOWNLOAD_CHANNEL = "desktop:update-download";
 export const UPDATE_INSTALL_CHANNEL = "desktop:update-install";
 export const UPDATE_CHECK_CHANNEL = "desktop:update-check";
+export const PAYLOAD_UPDATE_STATE_CHANNEL = "desktop:payload-update-state";
 export const GET_APP_BRANDING_CHANNEL = "desktop:get-app-branding";
 export const GET_LOCAL_ENVIRONMENT_BOOTSTRAP_CHANNEL = "desktop:get-local-environment-bootstrap";
 export const GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL =
