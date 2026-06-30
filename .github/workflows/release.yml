@@ -101,6 +101,63 @@ jobs:
           )"
           echo "previous_tag=$previous_tag" >> "$GITHUB_OUTPUT"
 
+  build_payload:
+    name: Build payload hot-update asset
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.ref }}
+          fetch-depth: 0
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Align package versions to release version
+        run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
+
+      # JS-only payload hot-update asset (server + web client). Arch-independent,
+      # so it builds on a fast Linux runner and gates release creation instead of
+      # the full desktop builds. The server bundle (apps/server/dist) it packages
+      # is produced by build:desktop.
+      - name: Build server bundle
+        shell: bash
+        run: vp run build:desktop
+
+      - name: Build payload hot-update asset
+        shell: bash
+        env:
+          T3CODE_PAYLOAD_VERSION: ${{ needs.preflight.outputs.version }}
+          T3CODE_PAYLOAD_SIGNING_KEY: ${{ secrets.T3CODE_PAYLOAD_SIGNING_KEY }}
+        run: |
+          vp run dist:payload:asset
+
+      - name: Collect payload assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-publish
+          shopt -s nullglob
+          for pattern in "release/payload-*.tar.gz" "release/payload-manifest.json"; do
+            for file in $pattern; do
+              cp "$file" release-publish/
+            done
+          done
+
+      - name: Upload payload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: desktop-payload
+          path: release-publish/*
+          if-no-files-found: error
+
   build_macos_arm64:
     name: Build macOS arm64
     needs: preflight
@@ -148,23 +205,13 @@ jobs:
             --build-version "${{ needs.preflight.outputs.version }}" \
             --verbose
 
-      # JS-only payload hot-update asset (server + web client). Arch-independent,
-      # so it is built once in this job and published alongside the full app.
-      - name: Build payload hot-update asset
-        shell: bash
-        env:
-          T3CODE_PAYLOAD_VERSION: ${{ needs.preflight.outputs.version }}
-          T3CODE_PAYLOAD_SIGNING_KEY: ${{ secrets.T3CODE_PAYLOAD_SIGNING_KEY }}
-        run: |
-          vp run dist:payload:asset
-
       - name: Collect release assets
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p release-publish
           shopt -s nullglob
-          for pattern in "release/*.dmg" "release/*.zip" "release/*.blockmap" "release/*.yml" "release/payload-*.tar.gz" "release/payload-manifest.json"; do
+          for pattern in "release/*.dmg" "release/*.zip" "release/*.blockmap" "release/*.yml"; do
             for file in $pattern; do
               cp "$file" release-publish/
             done
@@ -477,32 +524,18 @@ jobs:
     if: |
       !failure() && !cancelled() &&
       needs.preflight.result == 'success' &&
-      needs.build_macos_arm64.result == 'success'
+      needs.build_payload.result == 'success'
     name: Publish GitHub Release
     needs:
       - preflight
-      - build_macos_arm64
+      - build_payload
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.preflight.outputs.ref }}
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
-        with:
-          node-version-file: package.json
-          cache: true
-          run-install: |
-            args:
-              - --filter=@t3tools/scripts...
-
-      - name: Download all desktop artifacts
+      - name: Download payload artifacts
         uses: actions/download-artifact@v8
         with:
-          name: desktop-mac-arm64
+          name: desktop-payload
           path: release-assets
 
       - name: Publish release
@@ -517,12 +550,6 @@ jobs:
           prerelease: ${{ needs.preflight.outputs.is_prerelease }}
           make_latest: ${{ needs.preflight.outputs.make_latest }}
           files: |
-            release-assets/*.dmg
-            release-assets/*.zip
-            release-assets/*.AppImage
-            release-assets/*.exe
-            release-assets/*.blockmap
-            release-assets/*.yml
             release-assets/payload-*.tar.gz
             release-assets/payload-manifest.json
           fail_on_unmatched_files: false
@@ -538,14 +565,40 @@ jobs:
           prerelease: ${{ needs.preflight.outputs.is_prerelease }}
           make_latest: ${{ needs.preflight.outputs.make_latest }}
           files: |
-            release-assets/*.dmg
-            release-assets/*.zip
-            release-assets/*.AppImage
-            release-assets/*.exe
-            release-assets/*.blockmap
-            release-assets/*.yml
             release-assets/payload-*.tar.gz
             release-assets/payload-manifest.json
+          fail_on_unmatched_files: false
+
+  append_macos_arm64:
+    if: |
+      !failure() && !cancelled() &&
+      needs.preflight.result == 'success' &&
+      needs.release.result == 'success' &&
+      needs.build_macos_arm64.result == 'success'
+    name: Append macOS arm64 assets
+    needs:
+      - preflight
+      - release
+      - build_macos_arm64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Download macOS arm64 artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: desktop-mac-arm64
+          path: release-assets
+
+      - name: Upload macOS arm64 assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          target_commitish: ${{ needs.preflight.outputs.ref }}
+          files: |
+            release-assets/*.dmg
+            release-assets/*.zip
+            release-assets/*.blockmap
+            release-assets/*.yml
           fail_on_unmatched_files: false
 
   append_macos_x64:

@@ -531,12 +531,16 @@ every mobile`_.test.ts`under mobile's`tsc`+`customConditions: ["react-native"]`
     / preload-verification jobs — the fork's `ci.yml` is build-only.
   - `release.yml` — **"Release"**: separate per-platform jobs that each build an
     **unsigned** artifact. **Drop** upstream's matrix-based Azure Trusted Signing /
-    Apple code-signing flow and the ImageMagick step. The macOS arm64 job also
-    builds the **payload hot-update asset** (`Build payload hot-update asset`
-    step → `vp run dist:payload:asset`, using the `T3CODE_PAYLOAD_SIGNING_KEY`
-    secret) and the `release` job publishes `payload-*.tar.gz` +
-    `payload-manifest.json`. Preserve these when resolving — see the "Payload
-    hot-update channel" feature above.
+    Apple code-signing flow and the ImageMagick step. A dedicated **`build_payload`**
+    job (on `ubuntu-24.04`) builds the **payload hot-update asset** (`vp run
+    build:desktop` → `vp run dist:payload:asset`, using the
+    `T3CODE_PAYLOAD_SIGNING_KEY` secret) and uploads it as the `desktop-payload`
+    artifact. The `release` job depends on `build_payload` (NOT the macOS build) and
+    publishes `payload-*.tar.gz` + `payload-manifest.json`, so release creation is
+    gated on the fast JS-only payload build rather than the slow desktop builds.
+    Every desktop binary — including macOS arm64 — then attaches via an
+    `append_<platform>` job that depends on `release`. Preserve this split when
+    resolving — see the "Payload hot-update channel" feature above.
   - `mobile-eas-preview.yml` — **deleted in the fork** (the Android build lives in
     `ci.yml`). On a modify/delete conflict, keep it deleted (`git rm`).
   - Upstream-only workflows the fork does **not** carry: `deploy-relay.yml`,
