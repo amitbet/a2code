@@ -44,6 +44,13 @@ upstream app.
 - **Arbitrary file attachments** — attach any file type (PDF, JSON, CSV, logs,
   archives, …), not just images, by pasting or dragging it into the composer.
   Images keep their inline preview; other files show as a labelled chip.
+- **One-click in-place desktop updates** — the desktop app hot-swaps its JS
+  payload (bundled server + web client) without a full reinstall. New versions
+  **auto-download in the background**, then the sidebar **Update available**
+  button applies them with a **single click and no confirmation dialog**
+  (VSCode-style) by quickly restarting the backend. Nothing is applied until you
+  click, and updates that need a newer native shell fall back to the full
+  installer automatically.
 
 For the full per-feature breakdown, the files each feature touches, and guidance
 on preserving these changes when merging `upstream/main`, see

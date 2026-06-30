@@ -22,7 +22,10 @@ import * as NodeCrypto from "node:crypto";
  * Empty here means "no embedded key": payload updates stay disabled in
  * production unless an unsigned/dev override is explicitly enabled.
  */
-export const PAYLOAD_SIGNING_PUBLIC_KEY = "";
+export const PAYLOAD_SIGNING_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAGBE9CkYpGzRSpvWHG9InXdY8zyhZ8hTH/tN4qSlLvcw=
+-----END PUBLIC KEY-----
+`;
 
 export function computeSha256Hex(data: Uint8Array): string {
   return NodeCrypto.createHash("sha256").update(data).digest("hex");

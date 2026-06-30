@@ -432,6 +432,19 @@ The `upstream/main` merge on 2026-06-30 (up to `a9b1190a1`, "Desktop: parallel W
 Windows backends with mode picker") brought a desktop backend-service refactor, a
 Legend List scroll upgrade, and a `vite-plus` major bump. Fork-feature touch points:
 
+- **macOS desktop build EMFILE (CI fix, not byte-identical to fork tip).** Upstream's
+  WSL change made `scripts/build-desktop-artifact.ts` `asarUnpack` include
+  `"**/node_modules/**"` (the WSL Linux Node reads node_modules off the real FS, not
+  from asar). That unpacks the *entire* node_modules tree on **every** platform. On
+  macOS, electron-builder's (ad-hoc, unsigned) signing walk opens far more files than
+  the runner's default 256-fd soft limit → `EMFILE: too many open files` (seen on a
+  `core-js` file). **Fix:** both mac build steps (arm64 + x64) in **`ci.yml` and
+  `release.yml`** now run `ulimit -n 65536` before `vp run dist:desktop:artifact`.
+  This is the **only** intentional deviation of the fork workflows from the fork tip —
+  when the merge checklist says "workflows byte-identical to fork tip", expect exactly
+  these four `ulimit` lines as the diff, and preserve them. (A narrower alternative —
+  gating `**/node_modules/**` to the Windows target only — was rejected as risky: the
+  mac/linux ESM server bundle may rely on the unpacked node_modules at runtime.)
 - **`DesktopBackendManager` Context.Service was removed** in favor of
   `DesktopBackendPool` (multi-instance). `apps/desktop/src/updates/DesktopPayloadUpdates.ts`
   (payload hot-update) was ported: it now acquires `DesktopBackendPool.DesktopBackendPool`
@@ -516,9 +529,13 @@ Legend List scroll upgrade, and a `vite-plus` major bump. Fork-feature touch poi
   or typecheck, so CI does not gate on tests/typecheck. Run those locally before
   merging (see the Merge checklist below). If we ever want CI gating, add a
   dedicated workflow rather than re-adopting upstream's `ci.yml` test job.
-- After resolving, confirm with `git diff <fork-tip> HEAD -- .github/workflows`
-  is empty (workflows unchanged) and that no upstream-only workflow files were
-  pulled in.
+- Both `ci.yml` and `release.yml` run **`ulimit -n 65536`** before the macOS
+  `vp run dist:desktop:artifact` steps (arm64 + x64) — required since the
+  `asarUnpack: "**/node_modules/**"` (WSL backend) makes electron-builder's signing
+  walk overrun the macOS 256-fd default with `EMFILE`. Preserve these four lines.
+- After resolving, confirm `git diff <fork-tip> HEAD -- .github/workflows` shows
+  **only** the four `ulimit -n 65536` additions above (nothing else changed) and that
+  no upstream-only workflow files were pulled in.
 - 2026-06-24 merge note: upstream relay/deploy tests may assert release workflow
   relay tracing propagation (`relay-client-tracing-config`, `--github-env-file`
   env artifacts). Preserve the fork-trimmed `release.yml`; adjust those tests to
@@ -628,41 +645,74 @@ table_info`), so re-running after a renumber is safe.
   that needs a new **native** binary (the `@ff-labs/fff-bin-*` addon) or a new
   Electron/main-process build must go through the full electron-updater path
   instead — gated by the manifest's `minShellVersion`.
-- **Apply model.** Download → verify (size + sha256 + **Ed25519 signature**) →
-  extract to `payloads/<version>.partial` → atomic rename → write a `pending`
-  pointer. The pointer is promoted to `active` at the next **backend start**
-  (zero interruption); set `T3CODE_PAYLOAD_RESTART_ON_STAGE=1` to restart the
-  backend immediately. Resolution is fault-tolerant: a missing/corrupt payload
-  falls back to the shell-bundled backend, so a bad payload can't brick the app.
+- **Apply model (fork UX, reworked 2026-06-30).** The payload **auto-downloads
+  in the background** (poll → check → download → verify size + sha256 +
+  **Ed25519 signature** → extract to `payloads/<version>.partial` → atomic
+  rename), but the staged payload is **never activated automatically**: the
+  `pending` pointer (promoted to `active` at the next backend start) is written
+  **only when the user clicks apply**. So a plain app/backend restart can never
+  silently apply a downloaded payload — only the disruptive step requires a
+  click. Apply then restarts the **primary backend** (promotes pending→active);
+  the renderer reconnects through the connection layer, so there is no window
+  reload and no full app reinstall. The in-memory staged pointer lives in
+  `DesktopPayloadUpdates`' `stagedPointerRef`. Resolution stays fault-tolerant:
+  a missing/corrupt payload falls back to the shell-bundled backend, so a bad
+  payload can't brick the app. (Replaces the old "promote on next backend start
+  + `T3CODE_PAYLOAD_RESTART_ON_STAGE`" model, which auto-applied without consent.)
 - **Security.** The app embeds an Ed25519 public key
-  (`PAYLOAD_SIGNING_PUBLIC_KEY` in `payloadSigning.ts`, **currently empty — must
-  be filled before shipping**); the release build signs with the
-  `T3CODE_PAYLOAD_SIGNING_KEY` CI secret. With no embedded key the channel stays
-  disabled in production unless `T3CODE_PAYLOAD_ALLOW_UNSIGNED=1` (dev only).
+  (`PAYLOAD_SIGNING_PUBLIC_KEY` in `payloadSigning.ts`, **filled in for the
+  fork**); the release build signs with the `T3CODE_PAYLOAD_SIGNING_KEY` CI
+  secret. With no embedded key the channel stays disabled in production unless
+  `T3CODE_PAYLOAD_ALLOW_UNSIGNED=1` (dev only). **Keep the embedded key across
+  merges** — emptying it disables in-place updates in production.
 - **`minShellVersion` contract.** Defaults to `0.0.0` (any shell). Bump it via
   `T3CODE_PAYLOAD_MIN_SHELL_VERSION` whenever native deps / Electron change, so
   older shells stop pulling JS payloads that need a newer native ABI. This is
   the single most important operational lever — get it wrong and an old shell
   can load a payload its native modules can't run.
-- **Status / follow-up.** The updater is **headless + automatic** (polls,
-  downloads, stages). State is broadcast over `PAYLOAD_UPDATE_STATE_CHANNEL` but
-  there is **no renderer UI / preload bridge / invokable IPC yet** — a manual
-  "check / apply now" surface in settings is a deliberate future enhancement.
+- **Button integration (fork, 2026-06-30).** The in-place channel is surfaced
+  through the **same** "Update available" button as the electron installer — no
+  separate preload bridge / IPC / state channel. `DesktopUpdates` is now the
+  single UI-facing aggregator: it merges the installer state with the payload
+  state via the pure `mergeDesktopUpdateState()` (`updateMerge.ts`),
+  **preferring in-place** when a compatible payload is on offer and falling back
+  to the installer otherwise. The chosen mechanism is carried on
+  `DesktopUpdateState.kind` (`"installer" | "in-place"`). UX is VSCode-style:
+  the payload downloads silently (button hidden while downloading), then the
+  button shows **"Restart to update"** → **single click, no confirmation popup**
+  → in-place apply. `DesktopUpdates.install` routes to the payload `apply`/`update`
+  when `kind === "in-place"`; the installer path keeps its confirm + `quitAndInstall`.
+  `DesktopUpdates` subscribes to `DesktopPayloadUpdates.changes` to re-broadcast
+  the merged state on the existing `UPDATE_STATE_CHANNEL`.
 - **Files (fork-added unless noted):**
   - `packages/shared/src/payloadArchive.ts` (+ `./payloadArchive` export) —
     dependency-free `.tar.gz` codec used by both the build script and the app.
   - `packages/contracts/src/ipc.ts` — **modified**: `DesktopPayloadManifest` +
-    `DesktopPayloadUpdateState` schemas.
+    `DesktopPayloadUpdateState` schemas, and `kind: "installer" | "in-place"` on
+    `DesktopUpdateState` (drives the merged button behavior).
   - `apps/desktop/src/updates/DesktopPayloadUpdates.ts` — the updater service
-    (poll → check → download → verify → stage → optional restart).
+    (poll → check → **auto-download** → verify → stage; `download`/`apply`/`update`
+    methods; `SubscriptionRef` state consumed by `DesktopUpdates`). Detection +
+    download are automatic; **apply is user-initiated only** (writes the pending
+    pointer then restarts the primary backend).
+  - `apps/desktop/src/updates/updateMerge.ts` — **fork-added**: pure
+    `mergeDesktopUpdateState(installer, payload)` (prefer-in-place + status
+    mapping), unit-tested in `updateMerge.test.ts`.
+  - `apps/desktop/src/updates/DesktopUpdates.ts` — **modified**: depends on
+    `DesktopPayloadUpdates`, aggregates both states onto `UPDATE_STATE_CHANNEL`,
+    and routes `download`/`install` to the payload service when `kind` is in-place.
+  - `apps/web/src/components/desktopUpdate.logic.ts` +
+    `apps/web/src/components/sidebar/SidebarUpdatePill.tsx` — **modified**:
+    in-place is a single-click action with no confirmation popup, hidden while
+    auto-downloading, success toast on apply.
   - `apps/desktop/src/updates/payloadLayout.ts` — pointer model + the
     `resolveActiveBackendEntryPath` resolver (pending→active promotion + bundled
     fallback).
   - `apps/desktop/src/updates/payloadSigning.ts` — Ed25519 verify + embedded key.
   - `apps/desktop/src/app/DesktopConfig.ts` — **modified**: payload env vars
     (`T3CODE_DISABLE_PAYLOAD_UPDATE`, `T3CODE_PAYLOAD_MANIFEST_URL`,
-    `T3CODE_PAYLOAD_PUBLIC_KEY`, `T3CODE_PAYLOAD_ALLOW_UNSIGNED`,
-    `T3CODE_PAYLOAD_RESTART_ON_STAGE`).
+    `T3CODE_PAYLOAD_PUBLIC_KEY`, `T3CODE_PAYLOAD_ALLOW_UNSIGNED`). The old
+    `T3CODE_PAYLOAD_RESTART_ON_STAGE` was **removed** (auto-apply is gone).
   - `apps/desktop/src/app/DesktopEnvironment.ts` — **modified**: `payloadsDir`,
     `activePayloadPointerPath`, `pendingPayloadPointerPath`,
     `bundledBackendEntryPath`.
@@ -671,8 +721,9 @@ table_info`), so re-running after a renumber is safe.
     stop/start restart applies a staged payload.
   - `apps/desktop/src/app/DesktopApp.ts`, `apps/desktop/src/main.ts` —
     **modified**: wire + start `DesktopPayloadUpdates`.
-  - `apps/desktop/src/ipc/channels.ts` — **modified**:
-    `PAYLOAD_UPDATE_STATE_CHANNEL`.
+  - `apps/desktop/src/ipc/channels.ts` — **modified**: the payload state now
+    rides the existing `UPDATE_STATE_CHANNEL`; the old
+    `PAYLOAD_UPDATE_STATE_CHANNEL` was **removed**.
   - `scripts/build-payload-asset.ts` (+ root `dist:payload:asset` script) —
     builds `payload-<version>.tar.gz` + signed `payload-manifest.json`.
   - `.github/workflows/release.yml` — **modified**: builds + publishes the

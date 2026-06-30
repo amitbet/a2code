@@ -22,6 +22,7 @@ export function createInitialDesktopUpdateState(
   return {
     enabled: false,
     status: "disabled",
+    kind: "installer",
     channel,
     currentVersion,
     hostArch: runtimeInfo.hostArch,

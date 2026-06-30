@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { DesktopUpdateState } from "@t3tools/contracts";
+import type { DesktopPayloadUpdateState, DesktopUpdateState } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
@@ -11,6 +11,7 @@ import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as References from "effect/References";
 import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
@@ -20,6 +21,7 @@ import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopState from "../app/DesktopState.ts";
+import * as DesktopPayloadUpdates from "./DesktopPayloadUpdates.ts";
 import * as DesktopUpdates from "./DesktopUpdates.ts";
 
 interface UpdatesHarnessOptions {
@@ -124,6 +126,29 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
   };
   const backendLayer = DesktopBackendPool.layerTest([stubBackendInstance]);
 
+  // The installer service aggregates the in-place payload channel; stub it as
+  // disabled so these tests exercise the installer path unchanged.
+  const disabledPayloadState: DesktopPayloadUpdateState = {
+    enabled: false,
+    status: "disabled",
+    shellVersion: "1.2.3",
+    currentPayloadVersion: null,
+    availableVersion: null,
+    stagedVersion: null,
+    downloadPercent: null,
+    checkedAt: null,
+    message: null,
+  };
+  const payloadUpdatesLayer = Layer.succeed(DesktopPayloadUpdates.DesktopPayloadUpdates, {
+    getState: Effect.succeed(disabledPayloadState),
+    changes: Stream.empty,
+    configure: Effect.void,
+    check: () => Effect.succeed(disabledPayloadState),
+    download: Effect.succeed(disabledPayloadState),
+    apply: Effect.succeed(disabledPayloadState),
+    update: Effect.succeed(disabledPayloadState),
+  } satisfies DesktopPayloadUpdates.DesktopPayloadUpdates["Service"]);
+
   const environmentLayer = DesktopEnvironment.layer({
     dirname: "/repo/apps/desktop/src",
     homeDirectory: `/tmp/t3-desktop-updates-home-${process.pid}`,
@@ -168,6 +193,7 @@ function makeHarness(options: UpdatesHarnessOptions = {}) {
     Layer.provideMerge(updaterLayer),
     Layer.provideMerge(windowLayer),
     Layer.provideMerge(backendLayer),
+    Layer.provideMerge(payloadUpdatesLayer),
     Layer.provideMerge(DesktopState.layer),
     Layer.provideMerge(settingsLayer),
     Layer.provideMerge(

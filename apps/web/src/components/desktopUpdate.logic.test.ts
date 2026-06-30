@@ -17,6 +17,7 @@ import {
 const baseState: DesktopUpdateState = {
   enabled: true,
   status: "idle",
+  kind: "installer",
   channel: "latest",
   currentVersion: "1.0.0",
   hostArch: "x64",
@@ -103,6 +104,47 @@ describe("desktop update button state", () => {
     expect(shouldShowDesktopUpdateButton(state)).toBe(true);
     expect(isDesktopUpdateButtonDisabled(state)).toBe(true);
     expect(getDesktopUpdateButtonTooltip(state)).toContain("42%");
+  });
+});
+
+describe("in-place (payload) update button state", () => {
+  it("hides the button while the payload auto-downloads in the background", () => {
+    const state: DesktopUpdateState = {
+      ...baseState,
+      kind: "in-place",
+      status: "downloading",
+      availableVersion: "1.1.0",
+      downloadPercent: 30,
+    };
+    expect(shouldShowDesktopUpdateButton(state)).toBe(false);
+    expect(resolveDesktopUpdateButtonAction(state)).toBe("none");
+  });
+
+  it("offers a single-click apply once the payload is staged", () => {
+    const state: DesktopUpdateState = {
+      ...baseState,
+      kind: "in-place",
+      status: "downloaded",
+      availableVersion: "1.1.0",
+      downloadedVersion: "1.1.0",
+    };
+    expect(shouldShowDesktopUpdateButton(state)).toBe(true);
+    expect(resolveDesktopUpdateButtonAction(state)).toBe("install");
+    expect(getDesktopUpdateButtonTooltip(state)).toContain("restart and apply");
+  });
+
+  it("offers a retry on a failed in-place update", () => {
+    const state: DesktopUpdateState = {
+      ...baseState,
+      kind: "in-place",
+      status: "error",
+      availableVersion: "1.1.0",
+      message: "checksum mismatch",
+      errorContext: "download",
+      canRetry: true,
+    };
+    expect(shouldShowDesktopUpdateButton(state)).toBe(true);
+    expect(resolveDesktopUpdateButtonAction(state)).toBe("install");
   });
 });
 

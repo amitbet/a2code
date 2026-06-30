@@ -203,9 +203,20 @@ export const DesktopRuntimeInfoSchema = Schema.Struct({
   runningUnderArm64Translation: Schema.Boolean,
 });
 
+/**
+ * Which mechanism the currently-actionable update uses:
+ * - `installer`: the full electron-updater package (download + quit/relaunch).
+ * - `in-place`: the JS-only payload hot-update (download + primary-backend
+ *   restart, no app reinstall). The button prefers in-place when a compatible
+ *   payload update is available and falls back to the installer otherwise.
+ */
+export type DesktopUpdateKind = "installer" | "in-place";
+export const DesktopUpdateKindSchema = Schema.Literals(["installer", "in-place"]);
+
 export interface DesktopUpdateState {
   enabled: boolean;
   status: DesktopUpdateStatus;
+  kind: DesktopUpdateKind;
   channel: DesktopUpdateChannel;
   currentVersion: string;
   hostArch: DesktopRuntimeArch;
@@ -223,6 +234,7 @@ export interface DesktopUpdateState {
 export const DesktopUpdateStateSchema = Schema.Struct({
   enabled: Schema.Boolean,
   status: DesktopUpdateStatusSchema,
+  kind: DesktopUpdateKindSchema,
   channel: DesktopUpdateChannelSchema,
   currentVersion: Schema.String,
   hostArch: DesktopRuntimeArchSchema,

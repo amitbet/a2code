@@ -5,6 +5,17 @@ export type DesktopUpdateButtonAction = "download" | "install" | "none";
 export function resolveDesktopUpdateButtonAction(
   state: DesktopUpdateState,
 ): DesktopUpdateButtonAction {
+  if (state.kind === "in-place") {
+    // The payload auto-downloads in the background, so the only user action is a
+    // single-click apply once it is staged ("downloaded") — or a retry on error.
+    if (state.status === "downloaded") {
+      return "install";
+    }
+    if (state.status === "error" && state.canRetry) {
+      return "install";
+    }
+    return "none";
+  }
   if (state.downloadedVersion) {
     return "install";
   }
@@ -24,7 +35,9 @@ export function shouldShowDesktopUpdateButton(state: DesktopUpdateState | null):
     return false;
   }
   if (state.status === "downloading") {
-    return true;
+    // In-place updates download silently in the background (VSCode-style); the
+    // button only appears once the update is staged and ready to apply.
+    return state.kind !== "in-place";
   }
   return resolveDesktopUpdateButtonAction(state) !== "none";
 }
@@ -62,7 +75,11 @@ export function getDesktopUpdateButtonTooltip(state: DesktopUpdateState): string
     return `Downloading update${progress}`;
   }
   if (state.status === "downloaded") {
-    return `Update ${state.downloadedVersion ?? state.availableVersion ?? "ready"} downloaded. Click to restart and install.`;
+    const version = state.downloadedVersion ?? state.availableVersion ?? "ready";
+    if (state.kind === "in-place") {
+      return `Update ${version} ready. Click to restart and apply.`;
+    }
+    return `Update ${version} downloaded. Click to restart and install.`;
   }
   if (state.status === "error") {
     if (state.errorContext === "download" && state.availableVersion) {

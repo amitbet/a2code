@@ -15,6 +15,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 
@@ -22,9 +24,8 @@ import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
-import * as ElectronWindow from "../electron/ElectronWindow.ts";
-import * as IpcChannels from "../ipc/channels.ts";
 import {
+  type PayloadPointer,
   payloadVersionDir,
   readActivePayloadVersion,
   shellSatisfiesPayload,
@@ -59,8 +60,16 @@ export class DesktopPayloadUpdates extends Context.Service<
   DesktopPayloadUpdates,
   {
     readonly getState: Effect.Effect<DesktopPayloadUpdateState>;
+    /** Emits the latest payload-update state on every change (current value first). */
+    readonly changes: Stream.Stream<DesktopPayloadUpdateState>;
     readonly configure: Effect.Effect<void, never, Scope.Scope>;
     readonly check: (reason: string) => Effect.Effect<DesktopPayloadUpdateState>;
+    /** Download + verify + stage the newest compatible payload (no apply). */
+    readonly download: Effect.Effect<DesktopPayloadUpdateState>;
+    /** Apply a staged payload by restarting the primary backend. */
+    readonly apply: Effect.Effect<DesktopPayloadUpdateState>;
+    /** One-click user-initiated update: download then apply. */
+    readonly update: Effect.Effect<DesktopPayloadUpdateState>;
   }
 >()("@t3tools/desktop/updates/DesktopPayloadUpdates") {}
 
@@ -69,7 +78,6 @@ export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const backendPool = yield* DesktopBackendPool.DesktopBackendPool;
-  const electronWindow = yield* ElectronWindow.ElectronWindow;
   const baseHttpClient = yield* HttpClient.HttpClient;
   const httpClient = baseHttpClient.pipe(HttpClient.filterStatusOk);
 
@@ -109,19 +117,22 @@ export const make = Effect.gen(function* () {
     checkedAt: null,
     message: disabledReason,
   };
-  const stateRef = yield* Ref.make<DesktopPayloadUpdateState>(initialState);
+  // SubscriptionRef so the aggregator (DesktopUpdates) can re-broadcast the
+  // merged update state whenever the payload side changes. This service no
+  // longer emits to the renderer directly — DesktopUpdates owns the single
+  // UPDATE_STATE_CHANNEL the UI listens to.
+  const stateRef = yield* SubscriptionRef.make<DesktopPayloadUpdateState>(initialState);
   const checkInFlightRef = yield* Ref.make(false);
-
-  const emitState = Ref.get(stateRef).pipe(
-    Effect.flatMap((state) =>
-      electronWindow.sendAll(IpcChannels.PAYLOAD_UPDATE_STATE_CHANNEL, state),
-    ),
-  );
+  const actionInFlightRef = yield* Ref.make(false);
+  // A staged payload sits on disk fully verified but is NOT activated: we only
+  // write the `pending` pointer (which promotes on the next backend start) when
+  // the user explicitly applies it. So a background auto-download never causes
+  // an unattended update — a plain app restart won't pick it up.
+  const stagedPointerRef = yield* Ref.make<Option.Option<PayloadPointer>>(Option.none());
 
   const setState = (
     f: (state: DesktopPayloadUpdateState) => DesktopPayloadUpdateState,
-  ): Effect.Effect<DesktopPayloadUpdateState> =>
-    Ref.updateAndGet(stateRef, f).pipe(Effect.tap(() => emitState));
+  ): Effect.Effect<DesktopPayloadUpdateState> => SubscriptionRef.updateAndGet(stateRef, f);
 
   // payloadLayout effects read DesktopEnvironment/FileSystem from context; discharge
   // those requirements with the services already resolved in this scope so the
@@ -200,20 +211,11 @@ export const make = Effect.gen(function* () {
         .pipe(Effect.mapError((cause) => `Failed to finalize payload directory: ${String(cause)}`));
     });
 
-  const applyImmediatelyIfConfigured = Effect.gen(function* () {
-    if (!config.restartBackendOnPayloadStage) {
-      return;
-    }
-    yield* logPayloadInfo("restarting backend to apply staged payload");
-    // Payloads apply to the primary (local/Windows) backend; the pool's
-    // primary instance is always registered, so a stop/start re-spawns it
-    // against the freshly-staged payload entry path.
-    const primaryBackend = yield* backendPool.primary;
-    yield* primaryBackend.stop({ timeout: Duration.seconds(5) });
-    yield* primaryBackend.start;
-  });
-
-  const downloadAndStage = (
+  // Download + verify + extract a payload to its version dir and remember its
+  // pointer in memory. Does NOT write the on-disk `pending` pointer — that
+  // happens only in `applyImpl`, so staged-but-unapplied payloads never activate
+  // on a normal restart.
+  const stageManifest = (
     manifest: DesktopPayloadManifest,
   ): Effect.Effect<DesktopPayloadUpdateState> =>
     Effect.gen(function* () {
@@ -227,18 +229,19 @@ export const make = Effect.gen(function* () {
       yield* verifyArchive(manifest, bytes);
       yield* extractToVersionDir(manifest, bytes);
       const stagedAt = yield* currentIsoTimestamp;
-      yield* provideEnv(
-        writePayloadPointer(environment.pendingPayloadPointerPath, {
+      yield* Ref.set(
+        stagedPointerRef,
+        Option.some<PayloadPointer>({
           version: manifest.version,
           minShellVersion: manifest.minShellVersion,
           sha256: manifest.sha256,
           stagedAt,
         }),
       );
-      yield* logPayloadInfo("payload staged; will apply on next backend start", {
+      yield* logPayloadInfo("payload downloaded and staged; click to apply", {
         version: manifest.version,
       });
-      const next = yield* setState((state) => ({
+      return yield* setState((state) => ({
         ...state,
         status: "staged",
         stagedVersion: manifest.version,
@@ -246,8 +249,6 @@ export const make = Effect.gen(function* () {
         downloadPercent: 100,
         message: null,
       }));
-      yield* applyImmediatelyIfConfigured;
-      return next;
     }).pipe(
       Effect.scoped,
       Effect.catch((error) => {
@@ -290,6 +291,7 @@ export const make = Effect.gen(function* () {
           message: `Payload ${manifest.version} requires app ${manifest.minShellVersion}; install the full update.`,
         }));
       }
+      yield* logPayloadInfo("payload update available", { version: manifest.version });
       yield* setState((state) => ({
         ...state,
         status: "available",
@@ -297,17 +299,26 @@ export const make = Effect.gen(function* () {
         availableVersion: manifest.version,
         message: null,
       }));
-      yield* logPayloadInfo("payload update available", { version: manifest.version });
-      return yield* downloadAndStage(manifest);
+      // Auto-download in the background so the update is staged and ready; the
+      // user still applies it explicitly via the button (a one-click restart).
+      // Skip if it is already staged, or a user action is mid-flight.
+      const alreadyStaged = yield* Ref.get(stagedPointerRef);
+      if (
+        (Option.isSome(alreadyStaged) && alreadyStaged.value.version === manifest.version) ||
+        (yield* Ref.get(actionInFlightRef))
+      ) {
+        return yield* SubscriptionRef.get(stateRef);
+      }
+      return yield* stageManifest(manifest);
     });
 
   const performCheck = (reason: string): Effect.Effect<DesktopPayloadUpdateState> =>
     Effect.gen(function* () {
       if (!enabled) {
-        return yield* Ref.get(stateRef);
+        return yield* SubscriptionRef.get(stateRef);
       }
       if (yield* Ref.get(checkInFlightRef)) {
-        return yield* Ref.get(stateRef);
+        return yield* SubscriptionRef.get(stateRef);
       }
       yield* Ref.set(checkInFlightRef, true);
       return yield* Effect.gen(function* () {
@@ -337,6 +348,102 @@ export const make = Effect.gen(function* () {
       }).pipe(Effect.ensuring(Ref.set(checkInFlightRef, false)));
     });
 
+  // Re-fetch the manifest and stage the newest compatible payload. Used only by
+  // explicit user actions, never by the background poller.
+  const downloadImpl: Effect.Effect<DesktopPayloadUpdateState> = Effect.gen(function* () {
+    if (!enabled) {
+      return yield* SubscriptionRef.get(stateRef);
+    }
+    const currentVersion = yield* runningServerVersion;
+    return yield* fetchManifest.pipe(
+      Effect.flatMap((manifest) =>
+        Effect.gen(function* () {
+          const incompatible =
+            compareSemverVersions(manifest.version, currentVersion) <= 0 ||
+            !shellSatisfiesPayload(shellVersion, manifest.minShellVersion);
+          if (incompatible) {
+            const checkedAt = yield* currentIsoTimestamp;
+            return yield* setState((state) => ({
+              ...state,
+              status: "up-to-date",
+              checkedAt,
+              availableVersion: null,
+            }));
+          }
+          return yield* stageManifest(manifest);
+        }),
+      ),
+      Effect.catch((message) =>
+        currentIsoTimestamp.pipe(
+          Effect.flatMap((checkedAt) =>
+            setState((state) => ({ ...state, status: "error", checkedAt, message })),
+          ),
+        ),
+      ),
+    );
+  });
+
+  // Apply a staged payload by restarting the primary backend. The pool's
+  // primary instance is always registered, so stop/start re-spawns it against
+  // the freshly-promoted payload entry path (see payloadLayout.promotePendingPayload).
+  const applyImpl: Effect.Effect<DesktopPayloadUpdateState> = Effect.gen(function* () {
+    const staged = yield* Ref.get(stagedPointerRef);
+    if (Option.isNone(staged)) {
+      return yield* SubscriptionRef.get(stateRef);
+    }
+    const pointer = staged.value;
+    yield* logPayloadInfo("applying staged payload via backend restart", {
+      version: pointer.version,
+    });
+    // Write the pending pointer now (not at download time) so the staged payload
+    // is promoted to active on the very next backend start — the restart below.
+    yield* provideEnv(writePayloadPointer(environment.pendingPayloadPointerPath, pointer));
+    const primary = yield* backendPool.primary;
+    yield* primary.stop({ timeout: Duration.seconds(5) });
+    yield* primary.start;
+    yield* primary.waitForReady(Duration.minutes(1));
+    yield* Ref.set(stagedPointerRef, Option.none());
+    const activeVersion = yield* runningServerVersion;
+    const checkedAt = yield* currentIsoTimestamp;
+    yield* logPayloadInfo("payload applied", { version: activeVersion });
+    return yield* setState((state) => ({
+      ...state,
+      status: "up-to-date",
+      currentPayloadVersion: activeVersion === shellVersion ? null : activeVersion,
+      stagedVersion: null,
+      availableVersion: null,
+      downloadPercent: null,
+      checkedAt,
+      message: null,
+    }));
+  }).pipe(
+    Effect.catchCause((cause) =>
+      Cause.hasInterruptsOnly(cause)
+        ? Effect.failCause(cause)
+        : logPayloadError("payload apply failed", { cause: Cause.pretty(cause) }).pipe(
+            Effect.andThen(
+              setState((state) => ({
+                ...state,
+                status: "error",
+                message: "Failed to apply the payload update by restarting the backend.",
+              })),
+            ),
+          ),
+    ),
+  );
+
+  // Serialize user-initiated actions so a download and an apply never overlap.
+  const runExclusive = (
+    effect: Effect.Effect<DesktopPayloadUpdateState>,
+  ): Effect.Effect<DesktopPayloadUpdateState> =>
+    Effect.gen(function* () {
+      if (yield* Ref.get(actionInFlightRef)) {
+        return yield* SubscriptionRef.get(stateRef);
+      }
+      yield* Ref.set(actionInFlightRef, true);
+      return yield* effect.pipe(Effect.ensuring(Ref.set(actionInFlightRef, false)));
+    });
+
   const startPollers: Effect.Effect<void, never, Scope.Scope> = Effect.gen(function* () {
     yield* Effect.sleep(STARTUP_DELAY).pipe(
       Effect.andThen(performCheck("startup")),
@@ -360,8 +467,20 @@ export const make = Effect.gen(function* () {
   });
 
   return DesktopPayloadUpdates.of({
-    getState: Ref.get(stateRef),
+    getState: SubscriptionRef.get(stateRef),
+    changes: SubscriptionRef.changes(stateRef),
     check: performCheck,
+    download: runExclusive(downloadImpl),
+    apply: runExclusive(applyImpl),
+    update: runExclusive(
+      Effect.gen(function* () {
+        const staged = yield* downloadImpl;
+        if (staged.status !== "staged") {
+          return staged;
+        }
+        return yield* applyImpl;
+      }),
+    ),
     configure: Effect.gen(function* () {
       const currentVersion = yield* runningServerVersion;
       yield* setState((state) => ({

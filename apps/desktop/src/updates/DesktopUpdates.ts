@@ -17,6 +17,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
@@ -27,7 +28,9 @@ import * as ElectronUpdater from "../electron/ElectronUpdater.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
+import * as DesktopPayloadUpdates from "./DesktopPayloadUpdates.ts";
 import { resolveDefaultDesktopUpdateChannel } from "./updateChannels.ts";
+import { mergeDesktopUpdateState } from "./updateMerge.ts";
 import {
   createInitialDesktopUpdateState,
   reduceDesktopUpdateStateOnCheckFailure,
@@ -248,6 +251,7 @@ export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const desktopSettings = yield* DesktopAppSettings.DesktopAppSettings;
+  const payloadUpdates = yield* DesktopPayloadUpdates.DesktopPayloadUpdates;
 
   const appUpdateYmlConfigRef = yield* Ref.make<Option.Option<AppUpdateYmlConfig>>(Option.none());
   const updateCheckInFlightRef = yield* Ref.make(false);
@@ -263,7 +267,16 @@ export const make = Effect.gen(function* () {
     ),
   );
 
-  const emitState = Ref.get(updateStateRef).pipe(
+  // The renderer consumes a single update state. We merge the electron-installer
+  // state held in `updateStateRef` with the in-place payload state, preferring
+  // the lightweight payload update when one is on offer (see updateMerge.ts).
+  const getMergedState: Effect.Effect<DesktopUpdateState> = Effect.gen(function* () {
+    const installer = yield* Ref.get(updateStateRef);
+    const payload = yield* payloadUpdates.getState;
+    return mergeDesktopUpdateState(installer, payload);
+  });
+
+  const emitState = getMergedState.pipe(
     Effect.flatMap((state) => electronWindow.sendAll(IpcChannels.UPDATE_STATE_CHANNEL, state)),
   );
 
@@ -693,7 +706,7 @@ export const make = Effect.gen(function* () {
   });
 
   return DesktopUpdates.of({
-    getState: Ref.get(updateStateRef),
+    getState: getMergedState,
     emitState,
     disabledReason: resolveDisabledReason,
     configure: Effect.gen(function* () {
@@ -701,6 +714,14 @@ export const make = Effect.gen(function* () {
       const runEffect = (effect: Effect.Effect<void>) => {
         void Effect.runPromiseWith(context)(effect);
       };
+
+      // Re-broadcast the merged state whenever the in-place payload side
+      // changes, so the button reflects payload availability/progress without
+      // the payload service emitting to the renderer itself.
+      yield* payloadUpdates.changes.pipe(
+        Stream.runForEach(() => emitState),
+        Effect.forkScoped,
+      );
 
       const appUpdateYmlConfig = yield* readAppUpdateYml;
       yield* Ref.set(appUpdateYmlConfigRef, appUpdateYmlConfig);
@@ -772,7 +793,7 @@ export const make = Effect.gen(function* () {
 
       const state = yield* Ref.get(updateStateRef);
       if (nextChannel === state.channel) {
-        return state;
+        return yield* getMergedState;
       }
 
       yield* desktopSettings
@@ -787,7 +808,7 @@ export const make = Effect.gen(function* () {
       yield* setState(createBaseUpdateState(nextChannel, enabled, environment));
 
       if (!enabled || !(yield* Ref.get(updaterConfiguredRef))) {
-        return yield* Ref.get(updateStateRef);
+        return yield* getMergedState;
       }
 
       yield* applyAutoUpdaterChannel(nextChannel);
@@ -796,43 +817,65 @@ export const make = Effect.gen(function* () {
       yield* checkForUpdates("channel-change").pipe(
         Effect.ensuring(electronUpdater.setAllowDowngrade(allowDowngrade).pipe(Effect.ignore)),
       );
-      return yield* Ref.get(updateStateRef);
+      return yield* getMergedState;
     }),
     check: Effect.fn("desktop.updates.check")(function* (reason: string) {
       yield* Effect.annotateCurrentSpan({ reason });
+      // A manual check refreshes both channels so the in-place payload update is
+      // detected on demand, not only by the background poller.
+      const payloadChecked = yield* payloadUpdates.check(reason).pipe(Effect.as(true));
       if (!(yield* Ref.get(updaterConfiguredRef))) {
         return {
-          checked: false,
-          state: yield* Ref.get(updateStateRef),
+          checked: payloadChecked,
+          state: yield* getMergedState,
         };
       }
       const checked = yield* checkForUpdates(reason);
       return {
-        checked,
-        state: yield* Ref.get(updateStateRef),
+        checked: checked || payloadChecked,
+        state: yield* getMergedState,
       };
     }),
     download: Effect.gen(function* () {
+      // In-place updates auto-download in the background; a manual "download"
+      // (only surfaced on a failed attempt) re-stages and applies in one go.
+      if ((yield* getMergedState).kind === "in-place") {
+        yield* payloadUpdates.update;
+        return { accepted: true, completed: true, state: yield* getMergedState };
+      }
       const result = yield* downloadAvailableUpdate;
       return {
         accepted: result.accepted,
         completed: result.completed,
-        state: yield* Ref.get(updateStateRef),
+        state: yield* getMergedState,
       };
     }).pipe(Effect.withSpan("desktop.updates.download")),
     install: Effect.gen(function* () {
+      // Single-click in-place apply (VSCode-style): the payload is already
+      // staged, so just restart the primary backend; fall back to a full
+      // download+apply if it somehow is not staged yet.
+      if ((yield* getMergedState).kind === "in-place") {
+        const payload = yield* payloadUpdates.getState;
+        const applied =
+          payload.status === "staged" ? yield* payloadUpdates.apply : yield* payloadUpdates.update;
+        return {
+          accepted: true,
+          completed: applied.status === "up-to-date",
+          state: yield* getMergedState,
+        };
+      }
       if (yield* Ref.get(desktopState.quitting)) {
         return {
           accepted: false,
           completed: false,
-          state: yield* Ref.get(updateStateRef),
+          state: yield* getMergedState,
         };
       }
       const result = yield* installDownloadedUpdate;
       return {
         accepted: result.accepted,
         completed: result.completed,
-        state: yield* Ref.get(updateStateRef),
+        state: yield* getMergedState,
       };
     }).pipe(Effect.withSpan("desktop.updates.install")),
   });

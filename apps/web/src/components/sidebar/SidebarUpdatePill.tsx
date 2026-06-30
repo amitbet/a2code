@@ -70,11 +70,25 @@ export function SidebarUpdatePill() {
     }
 
     if (action === "install") {
-      const confirmed = window.confirm(getDesktopUpdateInstallConfirmationMessage(state));
-      if (!confirmed) return;
+      // In-place updates apply with a single click and no confirmation popup
+      // (VSCode-style): the payload is already downloaded, so this just restarts
+      // the backend. The full installer keeps its confirmation since it relaunches
+      // the whole app and interrupts everything.
+      if (state.kind !== "in-place") {
+        const confirmed = window.confirm(getDesktopUpdateInstallConfirmationMessage(state));
+        if (!confirmed) return;
+      }
       void bridge
         .installUpdate()
         .then((result) => {
+          if (state.kind === "in-place" && result.completed) {
+            toastManager.add({
+              type: "success",
+              title: "Update applied",
+              description: "The backend was restarted on the new version.",
+            });
+            return;
+          }
           if (!shouldToastDesktopUpdateActionResult(result)) return;
           const actionError = getDesktopUpdateActionError(result);
           if (!actionError) return;

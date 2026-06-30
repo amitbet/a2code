@@ -58,7 +58,6 @@ export const DesktopConfig = Config.all({
   payloadManifestUrl: trimmedString("T3CODE_PAYLOAD_MANIFEST_URL"),
   payloadPublicKeyOverride: trimmedString("T3CODE_PAYLOAD_PUBLIC_KEY"),
   allowUnsignedPayload: optionalBoolean("T3CODE_PAYLOAD_ALLOW_UNSIGNED"),
-  restartBackendOnPayloadStage: optionalBoolean("T3CODE_PAYLOAD_RESTART_ON_STAGE"),
 });
 
 export const layerTest = (env: Readonly<Record<string, string | undefined>>) =>

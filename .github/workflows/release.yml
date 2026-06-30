@@ -126,6 +126,11 @@ jobs:
       - name: Build unsigned desktop artifact
         shell: bash
         run: |
+          # macOS runners default to a 256 open-file soft limit. electron-builder
+          # opens many files at once while (ad-hoc) signing the fully-unpacked
+          # node_modules tree (asarUnpack includes **/node_modules/** for the WSL
+          # backend), which overruns it with EMFILE. Raise the limit for the build.
+          ulimit -n 65536
           vp run dist:desktop:artifact \
             --platform mac \
             --target dmg \
@@ -187,6 +192,9 @@ jobs:
       - name: Build unsigned desktop artifact
         shell: bash
         run: |
+          # See the arm64 job: raise the macOS open-file limit so electron-builder
+          # doesn't hit EMFILE while signing the unpacked node_modules tree.
+          ulimit -n 65536
           vp run dist:desktop:artifact \
             --platform mac \
             --target dmg \
