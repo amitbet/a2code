@@ -13,6 +13,25 @@ const isServerEnvironmentIdPersistenceError = Schema.is(
   ServerEnvironment.ServerEnvironmentIdPersistenceError,
 );
 
+it("resolveServerVersion prefers a non-empty T3CODE_SERVER_VERSION override", () => {
+  expect(ServerEnvironment.resolveServerVersion({ T3CODE_SERVER_VERSION: "1.2.3" }, "0.0.0")).toBe(
+    "1.2.3",
+  );
+  expect(
+    ServerEnvironment.resolveServerVersion({ T3CODE_SERVER_VERSION: "  9.9.9  " }, "0.0.0"),
+  ).toBe("9.9.9");
+});
+
+it("resolveServerVersion falls back to the bundled version when the override is absent or blank", () => {
+  expect(ServerEnvironment.resolveServerVersion({}, "0.0.0")).toBe("0.0.0");
+  expect(ServerEnvironment.resolveServerVersion({ T3CODE_SERVER_VERSION: "   " }, "0.0.0")).toBe(
+    "0.0.0",
+  );
+  expect(
+    ServerEnvironment.resolveServerVersion({ T3CODE_SERVER_VERSION: undefined }, "0.0.0"),
+  ).toBe("0.0.0");
+});
+
 const makeServerEnvironmentLayer = (baseDir: string) =>
   ServerEnvironment.layer.pipe(Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir)));
 

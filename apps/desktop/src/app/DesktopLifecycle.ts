@@ -85,8 +85,14 @@ function handleBeforeQuit(
   runEffect: <A, E>(effect: Effect.Effect<A, E, DesktopLifecycleRuntimeServices>) => Promise<A>,
   allowQuit: () => boolean,
   markQuitAllowed: () => void,
+  isInstallRestart: () => boolean,
 ): void {
-  if (allowQuit()) {
+  // Let the quit proceed without intercepting it when either we have already
+  // run the graceful shutdown (allowQuit) or an update install is restarting
+  // the app: in the install case the backends are already stopped and
+  // quitAndInstall is driving the quit, so vetoing it here and re-running
+  // shutdown would only break electron-updater's install/relaunch handshake.
+  if (allowQuit() || isInstallRestart()) {
     void runEffect(
       Effect.gen(function* () {
         const state = yield* DesktopState.DesktopState;
@@ -167,6 +173,7 @@ export const make = DesktopLifecycle.of({
     const electronApp = yield* ElectronApp.ElectronApp;
     const electronTheme = yield* ElectronTheme.ElectronTheme;
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
+    const desktopState = yield* DesktopState.DesktopState;
     const context = yield* Effect.context<DesktopLifecycleRuntimeServices>();
     const runEffect = Effect.runPromiseWith(context);
     let quitAllowed = false;
@@ -183,6 +190,7 @@ export const make = DesktopLifecycle.of({
         () => {
           quitAllowed = true;
         },
+        desktopState.isInstallRestart,
       );
     });
     yield* electronApp.on("activate", () => {

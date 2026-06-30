@@ -341,6 +341,13 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
     // Prefer an applied hot-update payload's backend over the shell-bundled one;
     // falls back to the bundle when no payload is staged/active or one is corrupt.
     const entryPath = yield* DesktopPayloadLayout.resolveActiveBackendEntryPath;
+    // The version the launched backend should advertise: the active payload's
+    // version when one is applied, else the shell version. This is the same
+    // value the update-button comparison uses (readActivePayloadVersion), so the
+    // server's reported `serverVersion` — and therefore the About screen — tracks
+    // the running payload instead of the version baked into the bundle at build.
+    const activePayloadVersion = yield* DesktopPayloadLayout.readActivePayloadVersion;
+    const serverVersion = Option.getOrElse(activePayloadVersion, () => environment.appVersion);
 
     const bootstrap = {
       mode: "desktop" as const,
@@ -365,6 +372,9 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       env: {
         ...backendChildEnvPatch(),
         ELECTRON_RUN_AS_NODE: "1",
+        // Read by the server's ServerEnvironment (resolveServerVersion) so its
+        // advertised version reflects the applied payload, not the bundled one.
+        T3CODE_SERVER_VERSION: serverVersion,
       },
       // Primary wants process.env (PATH, dev-runner's T3CODE_HOME, etc.).
       extendEnv: true,

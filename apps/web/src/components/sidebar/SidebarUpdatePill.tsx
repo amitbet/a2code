@@ -7,7 +7,6 @@ import {
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
   getDesktopUpdateButtonTooltip,
-  getDesktopUpdateInstallConfirmationMessage,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
   shouldShowArm64IntelBuildWarning,
@@ -70,14 +69,10 @@ export function SidebarUpdatePill() {
     }
 
     if (action === "install") {
-      // In-place updates apply with a single click and no confirmation popup
-      // (VSCode-style): the payload is already downloaded, so this just restarts
-      // the backend. The full installer keeps its confirmation since it relaunches
-      // the whole app and interrupts everything.
-      if (state.kind !== "in-place") {
-        const confirmed = window.confirm(getDesktopUpdateInstallConfirmationMessage(state));
-        if (!confirmed) return;
-      }
+      // Updates apply with a single click and no confirmation popup (VSCode-style).
+      // The update is already downloaded in the background by the time this button
+      // appears, so the click just restarts: the backend for in-place payloads, or
+      // the whole app for the full installer.
       void bridge
         .installUpdate()
         .then((result) => {

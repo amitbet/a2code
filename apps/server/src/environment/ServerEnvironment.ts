@@ -60,6 +60,19 @@ function platformArch(
   }
 }
 
+/**
+ * The version the server advertises in its environment descriptor. The desktop
+ * sets `T3CODE_SERVER_VERSION` when launching a backend so a hot-update payload
+ * reports the payload's version (the value the desktop's update-button
+ * comparison uses) rather than the version baked into the bundle at build time.
+ * Any other backend (remote/web) has no override and falls back to the bundled
+ * `package.json` version.
+ */
+export const resolveServerVersion = (env: NodeJS.ProcessEnv, bundledVersion: string): string => {
+  const override = env.T3CODE_SERVER_VERSION?.trim();
+  return override !== undefined && override.length > 0 ? override : bundledVersion;
+};
+
 export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -132,7 +145,7 @@ export const make = Effect.gen(function* () {
       os: platformOs(hostPlatform),
       arch: platformArch(hostArchitecture),
     },
-    serverVersion: packageJson.version,
+    serverVersion: resolveServerVersion(process.env, packageJson.version),
     capabilities: {
       repositoryIdentity: true,
     },

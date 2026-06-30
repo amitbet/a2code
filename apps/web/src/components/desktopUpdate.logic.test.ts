@@ -7,7 +7,6 @@ import {
   getDesktopUpdateActionError,
   getDesktopUpdateButtonTooltip,
   getDesktopUpdateInstallConfirmationMessage,
-  isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
   shouldShowArm64IntelBuildWarning,
   shouldShowDesktopUpdateButton,
@@ -33,14 +32,14 @@ const baseState: DesktopUpdateState = {
 };
 
 describe("desktop update button state", () => {
-  it("shows a download action when an update is available", () => {
+  it("hides the button while an installer update auto-downloads in the background", () => {
     const state: DesktopUpdateState = {
       ...baseState,
       status: "available",
       availableVersion: "1.1.0",
     };
-    expect(shouldShowDesktopUpdateButton(state)).toBe(true);
-    expect(resolveDesktopUpdateButtonAction(state)).toBe("download");
+    expect(shouldShowDesktopUpdateButton(state)).toBe(false);
+    expect(resolveDesktopUpdateButtonAction(state)).toBe("none");
   });
 
   it("keeps retry action available after a download error", () => {
@@ -94,15 +93,16 @@ describe("desktop update button state", () => {
     expect(resolveDesktopUpdateButtonAction(state)).toBe("none");
   });
 
-  it("disables the button while downloading", () => {
+  it("hides the button while an installer update is downloading", () => {
     const state: DesktopUpdateState = {
       ...baseState,
       status: "downloading",
       availableVersion: "1.1.0",
       downloadPercent: 42.5,
     };
-    expect(shouldShowDesktopUpdateButton(state)).toBe(true);
-    expect(isDesktopUpdateButtonDisabled(state)).toBe(true);
+    expect(shouldShowDesktopUpdateButton(state)).toBe(false);
+    expect(resolveDesktopUpdateButtonAction(state)).toBe("none");
+    // Progress is still reported for any surface that surfaces it (e.g. tooltips).
     expect(getDesktopUpdateButtonTooltip(state)).toContain("42%");
   });
 });
@@ -236,17 +236,18 @@ describe("desktop update UI helpers", () => {
     expect(getArm64IntelBuildWarningDescription(state)).toContain("Intel build");
   });
 
-  it("changes the warning copy when a native build update is ready to download", () => {
+  it("changes the warning copy once the native build update is downloaded and ready", () => {
     const state: DesktopUpdateState = {
       ...baseState,
       hostArch: "arm64",
       appArch: "x64",
       runningUnderArm64Translation: true,
-      status: "available",
+      status: "downloaded",
       availableVersion: "1.1.0",
+      downloadedVersion: "1.1.0",
     };
 
-    expect(getArm64IntelBuildWarningDescription(state)).toContain("Download the available update");
+    expect(getArm64IntelBuildWarningDescription(state)).toContain("Restart to install");
   });
 
   it("includes the downloaded version in the install confirmation copy", () => {

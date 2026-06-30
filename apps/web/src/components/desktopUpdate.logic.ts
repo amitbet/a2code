@@ -16,16 +16,14 @@ export function resolveDesktopUpdateButtonAction(
     }
     return "none";
   }
+  // Installer updates also auto-download in the background (VSCode-style), so the
+  // primary action is the one-click apply once downloaded. A "download" action is
+  // only offered as a retry when the background download itself failed.
   if (state.downloadedVersion) {
     return "install";
   }
-  if (state.status === "available") {
+  if (state.status === "error" && state.errorContext === "download" && state.availableVersion) {
     return "download";
-  }
-  if (state.status === "error") {
-    if (state.errorContext === "download" && state.availableVersion) {
-      return "download";
-    }
   }
   return "none";
 }
@@ -34,11 +32,9 @@ export function shouldShowDesktopUpdateButton(state: DesktopUpdateState | null):
   if (!state || !state.enabled) {
     return false;
   }
-  if (state.status === "downloading") {
-    // In-place updates download silently in the background (VSCode-style); the
-    // button only appears once the update is staged and ready to apply.
-    return state.kind !== "in-place";
-  }
+  // Both installer and in-place updates download silently in the background
+  // (VSCode-style); the button only appears once there is an actionable state —
+  // a downloaded update ready to apply, or a failed download to retry.
   return resolveDesktopUpdateButtonAction(state) !== "none";
 }
 

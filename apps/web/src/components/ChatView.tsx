@@ -336,6 +336,19 @@ function formatOutgoingPrompt(params: {
   return applyClaudePromptEffortPrefix(params.text, promptEffort);
 }
 
+/**
+ * Locally-tracked queued prompt rendered in the composer queue before the
+ * server echoes the authoritative `thread.prompt-queued` event. Reconciled
+ * away once the prompt appears in the thread's server-confirmed queue (or has
+ * already drained into a turn).
+ */
+type OptimisticQueuedPrompt = {
+  readonly messageId: MessageId;
+  readonly text: string;
+  readonly attachments: ReadonlyArray<unknown>;
+  readonly createdAt: string;
+};
+
 function formatQueuedPromptPreview(prompt: {
   readonly text: string;
   readonly attachments: ReadonlyArray<unknown>;
@@ -1126,6 +1139,9 @@ function ChatViewContent(props: ChatViewProps) {
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
   const optimisticUserMessagesRef = useRef(optimisticUserMessages);
   optimisticUserMessagesRef.current = optimisticUserMessages;
+  const [optimisticQueuedPrompts, setOptimisticQueuedPrompts] = useState<OptimisticQueuedPrompt[]>(
+    [],
+  );
   const [localDraftErrorsByDraftId, setLocalDraftErrorsByDraftId] = useState<
     Record<string, string | null>
   >({});
@@ -1269,7 +1285,29 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const isServerThread = routeKind === "server" && serverThread !== null;
   const activeThread = isServerThread ? serverThread : localDraftThread;
-  const queuedPrompts = activeThread?.queuedPrompts ?? [];
+  const serverQueuedPrompts = activeThread?.queuedPrompts ?? [];
+  // Merge the server-confirmed queue with locally-pending prompts so a queued
+  // message renders instantly, without waiting for the server echo. Pending
+  // entries are reconciled away once the server confirms them (see effect
+  // below) and cannot be steered/removed until then.
+  const displayedQueuedPrompts = useMemo(() => {
+    const serverIds = new Set(serverQueuedPrompts.map((prompt) => prompt.messageId));
+    const pending = optimisticQueuedPrompts.filter((prompt) => !serverIds.has(prompt.messageId));
+    return [
+      ...serverQueuedPrompts.map((prompt) => ({
+        messageId: prompt.messageId,
+        text: prompt.text,
+        attachments: prompt.attachments as ReadonlyArray<unknown>,
+        pending: false,
+      })),
+      ...pending.map((prompt) => ({
+        messageId: prompt.messageId,
+        text: prompt.text,
+        attachments: prompt.attachments,
+        pending: true,
+      })),
+    ];
+  }, [serverQueuedPrompts, optimisticQueuedPrompts]);
   // Full server-side error (local override wins over the persistent session
   // error), before applying the user's dismissal.
   const rawServerError = isServerThread
@@ -3417,6 +3455,20 @@ function ChatViewContent(props: ChatViewProps) {
     };
   }, [activeThread?.id, activeThread?.messages, handoffAttachmentPreviews, optimisticUserMessages]);
 
+  // Drop optimistic queued prompts once the server confirms them (now present
+  // in the authoritative queue) or once they drain into a real turn message.
+  useEffect(() => {
+    if (optimisticQueuedPrompts.length === 0) return;
+    const serverQueueIds = new Set(serverQueuedPrompts.map((prompt) => prompt.messageId));
+    const messageIds = new Set((activeThread?.messages ?? []).map((message) => message.id));
+    setOptimisticQueuedPrompts((existing) => {
+      const next = existing.filter(
+        (prompt) => !serverQueueIds.has(prompt.messageId) && !messageIds.has(prompt.messageId),
+      );
+      return next.length === existing.length ? existing : next;
+    });
+  }, [serverQueuedPrompts, activeThread?.messages, optimisticQueuedPrompts.length]);
+
   useEffect(() => {
     setOptimisticUserMessages((existing) => {
       for (const message of existing) {
@@ -3424,6 +3476,7 @@ function ChatViewContent(props: ChatViewProps) {
       }
       return [];
     });
+    setOptimisticQueuedPrompts([]);
     resetLocalDispatch();
     setExpandedImage(null);
   }, [draftId, resetLocalDispatch, threadId]);
@@ -3913,23 +3966,37 @@ function ChatViewContent(props: ChatViewProps) {
     isAtEndRef.current = true;
     showScrollDebouncer.current.cancel();
     setShowScrollToBottom(false);
-    setTimelineAnchor({
-      threadKey: scopedThreadKey(scopeThreadRef(activeThread.environmentId, threadIdForSend)),
-      messageId: messageIdForSend,
-    });
-    setOptimisticUserMessages((existing) => [
-      ...existing,
-      {
-        id: messageIdForSend,
-        role: "user",
-        text: outgoingMessageText,
-        ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
-        turnId: null,
-        createdAt: messageCreatedAt,
-        updatedAt: messageCreatedAt,
-        streaming: false,
-      },
-    ]);
+    if (shouldQueuePrompt) {
+      // Queued prompts surface in the composer queue, not the conversation
+      // timeline. Track them optimistically so they appear immediately.
+      setOptimisticQueuedPrompts((existing) => [
+        ...existing.filter((prompt) => prompt.messageId !== messageIdForSend),
+        {
+          messageId: messageIdForSend,
+          text: outgoingMessageText,
+          attachments: optimisticAttachments,
+          createdAt: messageCreatedAt,
+        },
+      ]);
+    } else {
+      setTimelineAnchor({
+        threadKey: scopedThreadKey(scopeThreadRef(activeThread.environmentId, threadIdForSend)),
+        messageId: messageIdForSend,
+      });
+      setOptimisticUserMessages((existing) => [
+        ...existing,
+        {
+          id: messageIdForSend,
+          role: "user",
+          text: outgoingMessageText,
+          ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
+          turnId: null,
+          createdAt: messageCreatedAt,
+          updatedAt: messageCreatedAt,
+          streaming: false,
+        },
+      ]);
+    }
     setThreadError(threadIdForSend, null);
     if (expiredTerminalContextCount > 0) {
       const toastCopy = buildExpiredTerminalContextToastCopy(
@@ -4031,10 +4098,8 @@ function ChatViewContent(props: ChatViewProps) {
           failure = queueResult;
         } else {
           turnStartSucceeded = true;
-          setOptimisticUserMessages((existing) => {
-            const next = existing.filter((message) => message.id !== messageIdForSend);
-            return next.length === existing.length ? existing : next;
-          });
+          // The optimistic queue entry stays until the server echoes the
+          // confirmed prompt (reconciled by the effect above).
           resetLocalDispatch();
         }
       } else {
@@ -4112,6 +4177,10 @@ function ChatViewContent(props: ChatViewProps) {
             revokeUserMessagePreviewUrls(message);
           }
           const next = existing.filter((message) => message.id !== messageIdForSend);
+          return next.length === existing.length ? existing : next;
+        });
+        setOptimisticQueuedPrompts((existing) => {
+          const next = existing.filter((prompt) => prompt.messageId !== messageIdForSend);
           return next.length === existing.length ? existing : next;
         });
         promptRef.current = promptForSend;
@@ -5052,15 +5121,15 @@ function ChatViewContent(props: ChatViewProps) {
                 <div className="pointer-events-auto relative z-10 isolate">
                   <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
                   <div className="relative z-10">
-                    {queuedPrompts.length > 0 ? (
+                    {displayedQueuedPrompts.length > 0 ? (
                       <div className="mx-auto mb-2 w-full max-w-208 rounded-lg border border-border/70 bg-card/95 p-2 shadow-sm">
                         <div className="mb-1.5 flex items-center justify-between gap-3 px-1">
                           <span className="font-medium text-muted-foreground text-xs">
-                            Queue ({queuedPrompts.length})
+                            Queue ({displayedQueuedPrompts.length})
                           </span>
                         </div>
                         <div className="flex flex-col gap-1.5">
-                          {queuedPrompts.map((prompt) => (
+                          {displayedQueuedPrompts.map((prompt) => (
                             <div
                               key={prompt.messageId}
                               className="flex min-h-8 items-center gap-2 rounded-md bg-muted/45 px-2 py-1.5"
@@ -5071,6 +5140,7 @@ function ChatViewContent(props: ChatViewProps) {
                               <Button
                                 size="xs"
                                 variant="outline"
+                                disabled={prompt.pending}
                                 onClick={() => {
                                   void onSteerQueuedPrompt(prompt.messageId);
                                 }}
@@ -5082,6 +5152,7 @@ function ChatViewContent(props: ChatViewProps) {
                                 aria-label="Remove queued prompt"
                                 size="icon-xs"
                                 variant="ghost"
+                                disabled={prompt.pending}
                                 onClick={() => {
                                   void onRemoveQueuedPrompt(prompt.messageId);
                                 }}

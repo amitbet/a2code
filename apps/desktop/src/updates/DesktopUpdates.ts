@@ -453,7 +453,11 @@ export const make = Effect.gen(function* () {
   }).pipe(Effect.withSpan("desktop.updates.downloadAvailableUpdate"));
 
   const resetInstallAction = Effect.all(
-    [Ref.set(updateInstallInFlightRef, false), Ref.set(desktopState.quitting, false)],
+    [
+      Ref.set(updateInstallInFlightRef, false),
+      Ref.set(desktopState.quitting, false),
+      desktopState.clearInstallRestart,
+    ],
     { discard: true },
   );
 
@@ -484,7 +488,18 @@ export const make = Effect.gen(function* () {
         (instance) => instance.stop({ timeout: Duration.seconds(5) }),
         { concurrency: "unbounded" },
       );
-      yield* electronWindow.destroyAll;
+      // Mirror VSCode's order: do the graceful teardown first (backends are now
+      // stopped), then hand off to quitAndInstall. Marking the install restart
+      // tells the before-quit handler to let quitAndInstall's app.quit() pass
+      // through instead of vetoing it and re-running shutdown — that veto/replay
+      // is what previously stalled the quit and left the app running headless.
+      yield* desktopState.markInstallRestart;
+      // Do NOT destroy the windows here. quitAndInstall drives app.quit(), and
+      // the before-quit teardown closes the windows as part of the normal quit.
+      // Tearing them down first means that if quitAndInstall no-ops or throws
+      // (e.g. an unsigned/dev build on macOS), the app is left alive with no UI —
+      // the user just sees the window vanish and has to quit by hand. Leaving
+      // the windows up keeps the failure visible and recoverable.
       yield* electronUpdater.quitAndInstall({
         isSilent: true,
         isForceRunAfter: true,
@@ -619,6 +634,7 @@ export const make = Effect.gen(function* () {
     if (yield* Ref.get(updateInstallInFlightRef)) {
       yield* Ref.set(updateInstallInFlightRef, false);
       yield* Ref.set(desktopState.quitting, false);
+      yield* desktopState.clearInstallRestart;
       yield* updateState((current) =>
         reduceDesktopUpdateStateOnInstallFailure(current, error.message),
       );
@@ -741,7 +757,12 @@ export const make = Effect.gen(function* () {
       }
       yield* Ref.set(updaterConfiguredRef, true);
 
-      yield* electronUpdater.setAutoDownload(false);
+      // Download updates in the background as soon as one is found (VSCode-style):
+      // the renderer keeps the button hidden until the update is downloaded, then
+      // offers a single-click "Restart to update". autoInstallOnAppQuit stays off
+      // so a downloaded update only installs via that explicit click, never on an
+      // ordinary quit.
+      yield* electronUpdater.setAutoDownload(true);
       yield* electronUpdater.setAutoInstallOnAppQuit(false);
       yield* applyAutoUpdaterChannel(settings.updateChannel);
       yield* electronUpdater.setDisableDifferentialDownload(
