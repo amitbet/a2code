@@ -426,6 +426,67 @@ useAccountRateLimitSnapshot(selectedInstanceId)` (NOT a per-thread
   `Extract<…, { type: "image" }>`, the web layer has been reverted again —
   re-apply the web pieces above.
 
+## 2026-06-30 upstream merge (parallel WSL backends + Legend List + preview) — notes
+
+The `upstream/main` merge on 2026-06-30 (up to `a9b1190a1`, "Desktop: parallel WSL +
+Windows backends with mode picker") brought a desktop backend-service refactor, a
+Legend List scroll upgrade, and a `vite-plus` major bump. Fork-feature touch points:
+
+- **`DesktopBackendManager` Context.Service was removed** in favor of
+  `DesktopBackendPool` (multi-instance). `apps/desktop/src/updates/DesktopPayloadUpdates.ts`
+  (payload hot-update) was ported: it now acquires `DesktopBackendPool.DesktopBackendPool`
+  and restarts via `pool.primary` → `instance.stop({timeout}) ; instance.start`
+  instead of the old `backendManager.stop/start`. If a future merge reshapes the pool
+  API, keep the payload restart pointed at the **primary** instance.
+- **Payload-aware backend entry resolution** moved into upstream's
+  `resolvePrimaryStartConfig` (`DesktopBackendConfiguration.ts`). The fork's
+  `entryPath = resolveActiveBackendEntryPath` is fed into upstream's new
+  `args: [entryPath, "--bootstrap-fd", "3"]` **and** `entryPath`. Because the
+  resolver reads the staged-payload pointer from disk, `buildWindowsPrimaryConfig`
+  must `provideService(FileSystem.FileSystem, fileSystem)` — keep that provision.
+- **`DesktopBackendOutputLog.{ts,test.ts}` were deleted upstream**; the logging
+  service now lives in `DesktopObservability.ts` as `DesktopBackendOutputLogFactory`.
+  The fork's `.a2code`/`A2 Code` log-path branding is env-derived (DesktopEnvironment)
+  and covered by `DesktopEnvironment.test.ts`, so dropping the standalone test is safe.
+- **Legend List upgrade vs in-chat find / work-log overflow.** Upstream's
+  `MessagesTimeline.tsx` gained `getItemType`, `anchoredEndSpace`,
+  `contentInsetEndAdjustment`, and moved work-log overflow expansion to a data-driven
+  `work-toggle` row (dropping `WorkGroupSection`'s inline expand state). The fork's
+  search wiring (host div + `{searchBar}` + `TimelineSearchCtx`, `data-chat-scroll-container`)
+  was re-applied around the upgraded list; `searchExpanded` now only flows to
+  `SimpleWorkEntryRow`. **`chatSearch.ts.getRowSearchText` must handle the new
+  `work-toggle` row kind** (returns `""`) or its switch goes non-exhaustive.
+- **Queued-prompt steering vs composer overlay.** Upstream rewrapped the composer
+  in a `chat-composer-horizontal-inset` + shared-blur overlay and **removed**
+  `shouldAutoScrollRef` / `scheduleStickToBottom` from `ChatComposer`. Re-inject the
+  queue UI inside the new wrapper (before `<ChatComposer>`) and do **not** pass the
+  removed props.
+
+### Mobile vitest toolchain (`apps/mobile`, vite-plus version pairing)
+
+- **The fork added `apps/mobile/src/vitest.d.ts`** (`declare module "vitest" { export
+  * from "vite-plus/test"; }`) and pinned a `vitest` catalog alias to
+  `@voidzero-dev/vite-plus-test`. This worked while `vite-plus` ≤ 0.1.24, where
+  `vite-plus/test` had concrete exports. **`vite-plus@0.2.x` made `vite-plus/test`
+  do `export * from 'vitest'`**, so the shim became a **circular re-export**
+  (`vitest` → `vite-plus/test` → `vitest`) that collapses every test helper
+  (`describe`/`it`/`expect`/`vi`) to nothing — ~270 `TS2305/TS2349` errors across
+  every mobile `*.test.ts` under mobile's `tsc` + `customConditions: ["react-native"]`
+  (apps/web is unaffected because tsgo resolves without that condition).
+- **Fix applied (2026-06-30):** deleted `apps/mobile/src/vitest.d.ts` (vite-plus@0.2.1
+  bundles real `vitest@4.1.9`, so no shim is needed) and pinned
+  `apps/mobile/package.json` → `"vitest": "4.1.9"` (the version `vite-plus@0.2.1`
+  ships, so they dedupe). `pnpm-workspace.yaml` is kept **byte-identical to upstream**
+  — no `vitest` catalog entry, no `vitest` override/peer rules. (Upstream dropped all
+  of those precisely because 0.2.x self-provides vitest.)
+- **Merge guard:** if a future merge re-bumps `vite-plus` and you see mobile test
+  files reporting *"Module 'vite-plus/test' has no exported member 'describe'"*, check
+  (1) `apps/mobile/src/vitest.d.ts` did not come back, and (2) `apps/mobile`'s pinned
+  `vitest` matches the `vitest` version inside the new `vite-plus`
+  (`grep '"vitest"' node_modules/.pnpm/vite-plus@*/node_modules/vite-plus/package.json`).
+  The mobile tests pass at runtime regardless (`cd apps/mobile && bunx vitest run`); this
+  seam is purely tsc type resolution.
+
 ## Recurring merge seams
 
 ### CI / release workflows (`.github/workflows/`)

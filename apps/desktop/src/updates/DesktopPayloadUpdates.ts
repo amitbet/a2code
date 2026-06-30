@@ -18,7 +18,7 @@ import * as Scope from "effect/Scope";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 
-import * as DesktopBackendManager from "../backend/DesktopBackendManager.ts";
+import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
@@ -68,7 +68,7 @@ export const make = Effect.gen(function* () {
   const config = yield* DesktopConfig.DesktopConfig;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
-  const backendManager = yield* DesktopBackendManager.DesktopBackendManager;
+  const backendPool = yield* DesktopBackendPool.DesktopBackendPool;
   const electronWindow = yield* ElectronWindow.ElectronWindow;
   const baseHttpClient = yield* HttpClient.HttpClient;
   const httpClient = baseHttpClient.pipe(HttpClient.filterStatusOk);
@@ -205,8 +205,12 @@ export const make = Effect.gen(function* () {
       return;
     }
     yield* logPayloadInfo("restarting backend to apply staged payload");
-    yield* backendManager.stop({ timeout: Duration.seconds(5) });
-    yield* backendManager.start;
+    // Payloads apply to the primary (local/Windows) backend; the pool's
+    // primary instance is always registered, so a stop/start re-spawns it
+    // against the freshly-staged payload entry path.
+    const primaryBackend = yield* backendPool.primary;
+    yield* primaryBackend.stop({ timeout: Duration.seconds(5) });
+    yield* primaryBackend.start;
   });
 
   const downloadAndStage = (

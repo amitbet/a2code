@@ -50,6 +50,8 @@ export function getRowSearchText(row: MessagesTimelineRow): string {
       }
       return parts.join("\n");
     }
+    case "work-toggle":
+      return "";
     case "working":
       return "";
   }
