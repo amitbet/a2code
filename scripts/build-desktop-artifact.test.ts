@@ -413,6 +413,37 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
+  it.effect("unpacks the full node_modules tree only for the Windows WSL backend", () =>
+    Effect.gen(function* () {
+      const win = (yield* createBuildConfig(
+        "win",
+        "nsis",
+        "1.2.3",
+        false,
+        false,
+        undefined,
+        undefined,
+      )).asarUnpack as readonly string[];
+      const mac = (yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "1.2.3",
+        false,
+        false,
+        undefined,
+        undefined,
+      )).asarUnpack as readonly string[];
+
+      assert.ok(win.includes("**/node_modules/**"));
+      // macOS would otherwise sign tens of thousands of unpacked files and hit
+      // EMFILE; the asar-aware primary reads node_modules from inside the asar,
+      // so only node-pty's native binary needs unpacking on the real filesystem.
+      assert.ok(!mac.includes("**/node_modules/**"));
+      assert.ok(mac.includes("**/node_modules/node-pty/**"));
+      assert.ok(mac.includes("apps/server/dist/**"));
+    }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
+
   it.effect("keeps executable resource editing enabled for unsigned Windows builds", () =>
     Effect.gen(function* () {
       const config = yield* createBuildConfig(

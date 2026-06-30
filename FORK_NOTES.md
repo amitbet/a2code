@@ -432,19 +432,28 @@ The `upstream/main` merge on 2026-06-30 (up to `a9b1190a1`, "Desktop: parallel W
 Windows backends with mode picker") brought a desktop backend-service refactor, a
 Legend List scroll upgrade, and a `vite-plus` major bump. Fork-feature touch points:
 
-- **macOS desktop build EMFILE (CI fix, not byte-identical to fork tip).** Upstream's
+- **macOS desktop build EMFILE — now fixed structurally in `asarUnpack`.** Upstream's
   WSL change made `scripts/build-desktop-artifact.ts` `asarUnpack` include
-  `"**/node_modules/**"` (the WSL Linux Node reads node_modules off the real FS, not
-  from asar). That unpacks the *entire* node_modules tree on **every** platform. On
+  `"**/node_modules/**"` (the WSL Linux Node reads node*modules off the real FS, not
+  from asar). That unpacks the \_entire* node_modules tree on **every** platform. On
   macOS, electron-builder's (ad-hoc, unsigned) signing walk opens far more files than
-  the runner's default 256-fd soft limit → `EMFILE: too many open files` (seen on a
-  `core-js` file). **Fix:** both mac build steps (arm64 + x64) in **`ci.yml` and
-  `release.yml`** now run `ulimit -n 65536` before `vp run dist:desktop:artifact`.
-  This is the **only** intentional deviation of the fork workflows from the fork tip —
-  when the merge checklist says "workflows byte-identical to fork tip", expect exactly
-  these four `ulimit` lines as the diff, and preserve them. (A narrower alternative —
-  gating `**/node_modules/**` to the Windows target only — was rejected as risky: the
-  mac/linux ESM server bundle may rely on the unpacked node_modules at runtime.)
+  the runner's default 256-fd soft limit → `EMFILE: too many open files` (seen on
+  `core-js` and `react-native` files). The earlier `ulimit -n 65536` band-aid in the
+  mac CI steps proved **unreliable** — macOS clamps the soft limit to the per-process
+  hard cap (`kern.maxfilesperproc`), so a react-native-sized unpacked tree still
+  EMFILE'd. **Fix (current):** `createBuildConfig` now scopes `"**/node_modules/**"`
+  to the **Windows** target only; mac/linux unpack just `DESKTOP_ASAR_UNPACK` (fff) +
+  `apps/server/dist/**` + `**/node_modules/node-pty/**` (the only native module the
+  primary loads off the real FS). This was previously feared risky ("mac/linux server
+  bundle may rely on unpacked node_modules at runtime"), but that concern is unfounded:
+  the primary backend runs via `ELECTRON_RUN_AS_NODE` (asar-aware) on **every** platform
+  and resolves effect/@effect/\* straight out of `app.asar` — only the Windows WSL backend
+  (`wsl.exe -- node`, can't read asar) needs the full tree on disk. See the comment on
+  `asarUnpack` in `build-desktop-artifact.ts` and the test
+  "unpacks the full node_modules tree only for the Windows WSL backend". The redundant
+  `ulimit -n 65536` lines remain in `ci.yml`/`release.yml` mac steps (arm64 + x64) as a
+  harmless defensive safety net — they are the only intentional deviation of the fork
+  workflows from the fork tip; preserve them.
 - **`DesktopBackendManager` Context.Service was removed** in favor of
   `DesktopBackendPool` (multi-instance). `apps/desktop/src/updates/DesktopPayloadUpdates.ts`
   (payload hot-update) was ported: it now acquires `DesktopBackendPool.DesktopBackendPool`
@@ -478,14 +487,11 @@ Legend List scroll upgrade, and a `vite-plus` major bump. Fork-feature touch poi
 ### Mobile vitest toolchain (`apps/mobile`, vite-plus version pairing)
 
 - **The fork added `apps/mobile/src/vitest.d.ts`** (`declare module "vitest" { export
-  * from "vite-plus/test"; }`) and pinned a `vitest` catalog alias to
-  `@voidzero-dev/vite-plus-test`. This worked while `vite-plus` ≤ 0.1.24, where
-  `vite-plus/test` had concrete exports. **`vite-plus@0.2.x` made `vite-plus/test`
-  do `export * from 'vitest'`**, so the shim became a **circular re-export**
-  (`vitest` → `vite-plus/test` → `vitest`) that collapses every test helper
-  (`describe`/`it`/`expect`/`vi`) to nothing — ~270 `TS2305/TS2349` errors across
-  every mobile `*.test.ts` under mobile's `tsc` + `customConditions: ["react-native"]`
-  (apps/web is unaffected because tsgo resolves without that condition).
+  - from "vite-plus/test"; }`) and pinned a `vitest`catalog alias to`@voidzero-dev/vite-plus-test`. This worked while `vite-plus`≤ 0.1.24, where`vite-plus/test` had concrete exports. **`vite-plus@0.2.x`made`vite-plus/test`do`export _ from 'vitest'`**, so the shim became a **circular re-export**
+(`vitest`→`vite-plus/test`→`vitest`) that collapses every test helper
+(`describe`/`it`/`expect`/`vi`) to nothing — ~270 `TS2305/TS2349`errors across
+every mobile`_.test.ts`under mobile's`tsc`+`customConditions: ["react-native"]`
+    (apps/web is unaffected because tsgo resolves without that condition).
 - **Fix applied (2026-06-30):** deleted `apps/mobile/src/vitest.d.ts` (vite-plus@0.2.1
   bundles real `vitest@4.1.9`, so no shim is needed) and pinned
   `apps/mobile/package.json` → `"vitest": "4.1.9"` (the version `vite-plus@0.2.1`
@@ -493,7 +499,7 @@ Legend List scroll upgrade, and a `vite-plus` major bump. Fork-feature touch poi
   — no `vitest` catalog entry, no `vitest` override/peer rules. (Upstream dropped all
   of those precisely because 0.2.x self-provides vitest.)
 - **Merge guard:** if a future merge re-bumps `vite-plus` and you see mobile test
-  files reporting *"Module 'vite-plus/test' has no exported member 'describe'"*, check
+  files reporting _"Module 'vite-plus/test' has no exported member 'describe'"_, check
   (1) `apps/mobile/src/vitest.d.ts` did not come back, and (2) `apps/mobile`'s pinned
   `vitest` matches the `vitest` version inside the new `vite-plus`
   (`grep '"vitest"' node_modules/.pnpm/vite-plus@*/node_modules/vite-plus/package.json`).
@@ -631,7 +637,7 @@ table_info`), so re-running after a renumber is safe.
 
 ### Payload hot-update channel (desktop JS-only updates)
 
-- **What it is.** A second desktop update path that ships *only* the JS payload
+- **What it is.** A second desktop update path that ships _only_ the JS payload
   (`apps/server/dist` — the bundled server `bin.mjs` + chunks + the web `client/`
   it serves) as a GitHub release asset, so the app can swap front-end **and**
   back-end without replacing the signed/notarized `.app` shell via
@@ -658,7 +664,7 @@ table_info`), so re-running after a renumber is safe.
   `DesktopPayloadUpdates`' `stagedPointerRef`. Resolution stays fault-tolerant:
   a missing/corrupt payload falls back to the shell-bundled backend, so a bad
   payload can't brick the app. (Replaces the old "promote on next backend start
-  + `T3CODE_PAYLOAD_RESTART_ON_STAGE`" model, which auto-applied without consent.)
+  - `T3CODE_PAYLOAD_RESTART_ON_STAGE`" model, which auto-applied without consent.)
 - **Security.** The app embeds an Ed25519 public key
   (`PAYLOAD_SIGNING_PUBLIC_KEY` in `payloadSigning.ts`, **filled in for the
   fork**); the release build signs with the `T3CODE_PAYLOAD_SIGNING_KEY` CI

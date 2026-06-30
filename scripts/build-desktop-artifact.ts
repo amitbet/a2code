@@ -1359,20 +1359,25 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     directories: {
       buildResources: "apps/desktop/resources",
     },
-    // The Windows primary backend runs the server bundle through
-    // ELECTRON_RUN_AS_NODE (asar-aware), so it reads bin.mjs straight out of
-    // app.asar. The WSL backend instead launches plain `wsl.exe -- node`, which
-    // cannot read inside an asar archive, so everything it loads must be on the
-    // real filesystem. The server bundle externalizes its runtime dependencies
-    // (effect, @effect/*, node-pty, ...) to node_modules rather than inlining
-    // them, so unpacking just the bundle + node-pty isn't enough — the Linux Node
-    // fails with ERR_MODULE_NOT_FOUND (e.g. "Cannot find package 'effect'") before
-    // it even reaches node-pty. Unpack the server bundle AND the whole
-    // node_modules tree so every import resolves (this also covers the fff native
-    // binaries in DESKTOP_ASAR_UNPACK). The Windows primary keeps reading the same
-    // files through the asar (transparently redirected to the unpacked copy), so
-    // there's no duplication.
-    asarUnpack: [...DESKTOP_ASAR_UNPACK, "apps/server/dist/**", "**/node_modules/**"],
+    // The primary backend (every platform) runs the server bundle through
+    // ELECTRON_RUN_AS_NODE (asar-aware), so it reads bin.mjs and resolves its
+    // externalized deps (effect, @effect/*, ...) straight out of app.asar — no
+    // unpacking required. node-pty is the exception: its native pty.node can't be
+    // loaded from inside an asar, so it must live on the real filesystem (the fff
+    // native binaries are covered by DESKTOP_ASAR_UNPACK for the same reason).
+    //
+    // Only the Windows WSL backend needs the whole tree unpacked: it launches
+    // plain `wsl.exe -- node`, which cannot read inside an asar archive, so every
+    // import must resolve on the real filesystem (without it the Linux Node fails
+    // with ERR_MODULE_NOT_FOUND, e.g. "Cannot find package 'effect'", before it
+    // even reaches node-pty). Scope that broad unpack to Windows — unpacking the
+    // full node_modules tree on mac/linux ships needless mobile deps (react-native
+    // et al.) and, on macOS, makes ad-hoc code signing walk tens of thousands of
+    // unpacked files and exhaust the open-file limit (EMFILE).
+    asarUnpack:
+      platform === "win"
+        ? [...DESKTOP_ASAR_UNPACK, "apps/server/dist/**", "**/node_modules/**"]
+        : [...DESKTOP_ASAR_UNPACK, "apps/server/dist/**", "**/node_modules/node-pty/**"],
   };
   const updateChannel = resolveDesktopUpdateChannel(version);
   const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);

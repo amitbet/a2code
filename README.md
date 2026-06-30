@@ -34,6 +34,11 @@ upstream app.
     attachment under `attachments/` — via the thread right-click **Export
     thread (zip)** action, so the context can move to another checkout,
     machine, or external agent.
+- **Queued prompt steering** — sending while a thread is running **queues** the
+  prompt instead of interrupting; each queued prompt can be removed or promoted
+  with **Steer** to send it to the active agent mid-flight. When the session goes
+  idle, queued prompts drain FIFO as normal next turns. Provider-neutral across
+  Codex, Claude, Cursor, Grok, and OpenCode.
 - **In-chat find (`Cmd/Ctrl+F`)** — a browser-style find toolbar over the chat
   timeline that searches the underlying row data (the timeline is virtualized,
   so native find-in-page can't see it), scrolls matches into view, and
