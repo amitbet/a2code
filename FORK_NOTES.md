@@ -452,8 +452,19 @@ Legend List scroll upgrade, and a `vite-plus` major bump. Fork-feature touch poi
   `asarUnpack` in `build-desktop-artifact.ts` and the test
   "unpacks the full node_modules tree only for the Windows WSL backend". The redundant
   `ulimit -n 65536` lines remain in `ci.yml`/`release.yml` mac steps (arm64 + x64) as a
-  harmless defensive safety net — they are the only intentional deviation of the fork
-  workflows from the fork tip; preserve them.
+  harmless defensive safety net; preserve them.
+- **Electron download cache (`ci.yml` + `release.yml`).** Every desktop build job
+  (mac arm64/x64, linux x64, windows x64) has an `actions/cache@v4` "Cache Electron
+  download" step before the build, caching the per-OS Electron + electron-builder
+  download dirs (`~/Library/Caches/{electron,electron-builder}` on mac,
+  `~/.cache/{electron,electron-builder}` on linux,
+  `~/AppData/Local/{electron/Cache,electron-builder/Cache}` on windows), keyed
+  `electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}`
+  with an `electron-<os>-<arch>-` restore-key fallback. Added because a transient
+  GitHub release-CDN **502** while fetching `electron-v<ver>-darwin-x64.zip` failed a
+  build; the cache makes the download a cold-start-only cost. These cache steps plus
+  the `ulimit` lines are the intentional deviations of the fork workflows from the fork
+  tip; preserve them.
 - **`DesktopBackendManager` Context.Service was removed** in favor of
   `DesktopBackendPool` (multi-instance). `apps/desktop/src/updates/DesktopPayloadUpdates.ts`
   (payload hot-update) was ported: it now acquires `DesktopBackendPool.DesktopBackendPool`
@@ -535,13 +546,17 @@ every mobile`_.test.ts`under mobile's`tsc`+`customConditions: ["react-native"]`
   or typecheck, so CI does not gate on tests/typecheck. Run those locally before
   merging (see the Merge checklist below). If we ever want CI gating, add a
   dedicated workflow rather than re-adopting upstream's `ci.yml` test job.
-- Both `ci.yml` and `release.yml` run **`ulimit -n 65536`** before the macOS
-  `vp run dist:desktop:artifact` steps (arm64 + x64) — required since the
-  `asarUnpack: "**/node_modules/**"` (WSL backend) makes electron-builder's signing
-  walk overrun the macOS 256-fd default with `EMFILE`. Preserve these four lines.
+- Both `ci.yml` and `release.yml` carry two fork-local additions to the desktop
+  build jobs (see the macOS EMFILE note above for the full rationale):
+  - a **"Cache Electron download"** `actions/cache@v4` step before every desktop
+    build (mac arm64/x64, linux x64, windows x64), hardening against transient
+    GitHub release-CDN 502s; and
+  - **`ulimit -n 65536`** before the two macOS `vp run dist:desktop:artifact` steps
+    — now a defensive safety net rather than the primary EMFILE fix (that moved into
+    `asarUnpack` scoping in `build-desktop-artifact.ts`).
 - After resolving, confirm `git diff <fork-tip> HEAD -- .github/workflows` shows
-  **only** the four `ulimit -n 65536` additions above (nothing else changed) and that
-  no upstream-only workflow files were pulled in.
+  **only** those cache + `ulimit` additions (nothing else changed) and that no
+  upstream-only workflow files were pulled in.
 - 2026-06-24 merge note: upstream relay/deploy tests may assert release workflow
   relay tracing propagation (`relay-client-tracing-config`, `--github-env-file`
   env artifacts). Preserve the fork-trimmed `release.yml`; adjust those tests to
