@@ -19,6 +19,7 @@ const baseState: DesktopUpdateState = {
   kind: "installer",
   channel: "latest",
   currentVersion: "1.0.0",
+  shellVersion: "1.0.0",
   hostArch: "x64",
   appArch: "x64",
   runningUnderArm64Translation: false,

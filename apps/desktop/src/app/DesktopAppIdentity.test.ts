@@ -192,8 +192,10 @@ describe("DesktopAppIdentity", () => {
 
         assert.deepEqual(calls.setName, ["A2 Code"]);
         assert.equal(calls.setAboutPanelOptions[0]?.applicationName, "A2 Code");
+        // No payload applied in the test env, so the running content version is
+        // the shell version; the build line carries the shell version + commit.
         assert.equal(calls.setAboutPanelOptions[0]?.applicationVersion, "1.2.3");
-        assert.equal(calls.setAboutPanelOptions[0]?.version, "0123456789ab");
+        assert.equal(calls.setAboutPanelOptions[0]?.version, "app 1.2.3 · 0123456789ab");
         assert.deepEqual(calls.setDockIcon, ["/icon.png"]);
       }),
       {

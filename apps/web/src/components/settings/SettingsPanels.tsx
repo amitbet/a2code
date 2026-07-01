@@ -154,11 +154,24 @@ function ProviderLastChecked({ lastCheckedAt }: { lastCheckedAt: string | null }
   );
 }
 
-function AboutVersionTitle() {
+function AboutVersionTitle({
+  content,
+  shell,
+}: {
+  content?: string | undefined;
+  shell?: string | null | undefined;
+} = {}) {
+  // `content` is the running server/payload version; `shell` is the native app
+  // version. On desktop both are shown so a hot-updated content version is
+  // distinguishable from the installed shell; the hosted/web build has no shell.
+  const contentVersion = content ?? APP_VERSION;
   return (
     <span className="inline-flex items-center gap-2">
       <span>Version</span>
-      <code className="text-[11px] font-medium text-muted-foreground">{APP_VERSION}</code>
+      <code className="text-[11px] font-medium text-muted-foreground">{contentVersion}</code>
+      {shell ? (
+        <span className="text-[11px] font-medium text-muted-foreground">· app {shell}</span>
+      ) : null}
     </span>
   );
 }
@@ -288,7 +301,12 @@ function AboutVersionSection() {
   return (
     <>
       <SettingsRow
-        title={<AboutVersionTitle />}
+        title={
+          <AboutVersionTitle
+            content={updateState?.currentVersion}
+            shell={updateState?.shellVersion}
+          />
+        }
         description={description}
         control={
           <Tooltip>

@@ -218,7 +218,10 @@ export interface DesktopUpdateState {
   status: DesktopUpdateStatus;
   kind: DesktopUpdateKind;
   channel: DesktopUpdateChannel;
+  /** The running server version: the active payload if applied, else the shell. */
   currentVersion: string;
+  /** The native shell (installer/.app) version, independent of any payload. */
+  shellVersion: string;
   hostArch: DesktopRuntimeArch;
   appArch: DesktopRuntimeArch;
   runningUnderArm64Translation: boolean;
@@ -237,6 +240,7 @@ export const DesktopUpdateStateSchema = Schema.Struct({
   kind: DesktopUpdateKindSchema,
   channel: DesktopUpdateChannelSchema,
   currentVersion: Schema.String,
+  shellVersion: Schema.String,
   hostArch: DesktopRuntimeArchSchema,
   appArch: DesktopRuntimeArchSchema,
   runningUnderArm64Translation: Schema.Boolean,

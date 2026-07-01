@@ -726,12 +726,25 @@ table_info`), so re-running after a renumber is safe.
   updates only via a fresh manual install of the `.app`/installer (see signing
   note above). `setChannel` still persists the `latest`/`nightly` preference but
   no longer reconfigures any feed (the payload manifest URL is channel-agnostic).
+- **Dual version display (fork, 2026-07-01).** Because the payload swaps the
+  running content independently of the signed shell, both versions are surfaced:
+  `DesktopUpdateState` gained a `shellVersion` field (native `.app` version)
+  alongside `currentVersion` (running content = active payload, else shell). The
+  in-app **Settings → About** row shows `Version <content> · app <shell>`, and the
+  native OS About panel (`DesktopAppIdentity.setAboutPanelOptions`) sets
+  `applicationVersion` = content version and folds the shell version + commit into
+  the build line (`app <shell> · <commit>`). The panel reads the active payload at
+  startup via `DesktopPayloadLayout.readActivePayloadVersion`; since applying a
+  payload relaunches, that stays accurate. **Merge note:** `shellVersion` is a
+  required field on `DesktopUpdateState` — keep it populated in
+  `payloadUpdateState.ts` and in any `DesktopUpdateState` test fixtures.
 - **Files (fork-added unless noted):**
   - `packages/shared/src/payloadArchive.ts` (+ `./payloadArchive` export) —
     dependency-free `.tar.gz` codec used by both the build script and the app.
   - `packages/contracts/src/ipc.ts` — **modified**: `DesktopPayloadManifest` +
-    `DesktopPayloadUpdateState` schemas, and `kind: "installer" | "in-place"` on
-    `DesktopUpdateState` (drives the merged button behavior).
+    `DesktopPayloadUpdateState` schemas, plus `kind: "installer" | "in-place"`,
+    `currentVersion` (running content), and `shellVersion` (native shell) on
+    `DesktopUpdateState`.
   - `apps/desktop/src/updates/DesktopPayloadUpdates.ts` — the updater service
     (poll → check → **auto-download** → verify → stage; `download`/`apply`/`update`
     methods; `SubscriptionRef` state consumed by `DesktopUpdates`). Detection +

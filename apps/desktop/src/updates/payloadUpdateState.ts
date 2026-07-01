@@ -35,6 +35,8 @@ export function payloadUpdateStateToDesktopUpdateState(
     // The running server version is the active payload when one is applied,
     // otherwise the shell-bundled payload.
     currentVersion: payload.currentPayloadVersion ?? payload.shellVersion,
+    // The native shell version, independent of any applied payload.
+    shellVersion: payload.shellVersion,
     hostArch: info.runtimeInfo.hostArch,
     appArch: info.runtimeInfo.appArch,
     runningUnderArm64Translation: info.runtimeInfo.runningUnderArm64Translation,

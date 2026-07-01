@@ -7,6 +7,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 
 import * as ElectronApp from "../electron/ElectronApp.ts";
+import * as DesktopPayloadLayout from "../updates/payloadLayout.ts";
 import * as DesktopAssets from "./DesktopAssets.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 
@@ -111,11 +112,25 @@ export const make = Effect.gen(function* () {
 
   const configure = Effect.gen(function* () {
     const commitHash = yield* resolveAboutCommitHash;
+    // The About panel shows both the running content version (an applied JS
+    // payload, else the shell) as the headline and the native shell version +
+    // commit in the build line, so a hot-updated content version is
+    // distinguishable from the installed `.app`. The active payload is read at
+    // startup; applying a payload relaunches the app, so this stays accurate.
+    const activePayloadVersion = yield* DesktopPayloadLayout.readActivePayloadVersion.pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
+    );
+    const contentVersion = Option.getOrElse(activePayloadVersion, () => environment.appVersion);
+    const buildLabel = [
+      `app ${environment.appVersion}`,
+      ...(Option.isSome(commitHash) ? [commitHash.value] : []),
+    ].join(" · ");
     yield* electronApp.setName(environment.displayName);
     yield* electronApp.setAboutPanelOptions({
       applicationName: environment.displayName,
-      applicationVersion: environment.appVersion,
-      version: Option.getOrElse(commitHash, () => "unknown"),
+      applicationVersion: contentVersion,
+      version: buildLabel,
     });
 
     if (environment.platform === "win32") {
