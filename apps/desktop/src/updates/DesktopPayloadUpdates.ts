@@ -79,7 +79,11 @@ export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
   const baseHttpClient = yield* HttpClient.HttpClient;
-  const httpClient = baseHttpClient.pipe(HttpClient.filterStatusOk);
+  // GitHub's `releases/latest/download/<asset>` endpoint answers with a 302 to
+  // the actual asset host (objects.githubusercontent.com), so the client must
+  // follow redirects before `filterStatusOk` validates the final 2xx — this
+  // applies to both the manifest fetch and the payload archive download.
+  const httpClient = baseHttpClient.pipe(HttpClient.followRedirects(), HttpClient.filterStatusOk);
 
   const shellVersion = environment.appVersion;
   const manifestUrl = Option.getOrElse(
