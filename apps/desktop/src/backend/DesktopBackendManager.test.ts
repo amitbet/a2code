@@ -47,6 +47,7 @@ const baseConfig: DesktopBackendManager.DesktopBackendStartConfig = {
   httpBaseUrl: new URL("http://127.0.0.1:3773"),
   captureOutput: true,
   preflightFailure: Option.none(),
+  payloadVersion: Option.none(),
 };
 
 const configWithObservability: DesktopBackendBootstrapValue = {
@@ -111,6 +112,9 @@ interface MakeInstanceInput {
   readonly onPreflightFailed?: (
     failure: DesktopBackendManager.PreflightFailure,
   ) => Effect.Effect<boolean>;
+  readonly onStartupFailed?: (
+    failure: DesktopBackendManager.BackendStartupFailure,
+  ) => Effect.Effect<boolean>;
   readonly config?: DesktopBackendManager.DesktopBackendStartConfig;
   readonly configResolve?: Effect.Effect<DesktopBackendManager.DesktopBackendStartConfig>;
 }
@@ -144,6 +148,7 @@ function makeTestInstance(input: MakeInstanceInput) {
     ...(input.onReady ? { onReady: () => input.onReady! } : {}),
     ...(input.onShutdown ? { onShutdown: () => input.onShutdown! } : {}),
     ...(input.onPreflightFailed ? { onPreflightFailed: input.onPreflightFailed } : {}),
+    ...(input.onStartupFailed ? { onStartupFailed: input.onStartupFailed } : {}),
   });
 
   return instance.pipe(Effect.provide(servicesLayer));
@@ -417,6 +422,61 @@ describe("DesktopBackendManager", () => {
         assert.equal(yield* Queue.size(starts), 0);
         yield* TestClock.adjust(Duration.millis(1));
         assert.equal(yield* Queue.take(starts), 3);
+      }).pipe(Effect.provide(TestClock.layer())),
+    ),
+  );
+
+  it.effect("lets startup failure recovery change config before the next restart", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const usePayload = yield* Ref.make(true);
+        const starts = yield* Queue.unbounded<string>();
+        const failures: string[] = [];
+        let startCount = 0;
+
+        const spawnerLayer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make((command) =>
+            Effect.sync(() => {
+              startCount += 1;
+              const entryPath = command._tag === "StandardCommand" ? (command.args[0] ?? "") : "";
+              const exitCode = Queue.offer(starts, entryPath).pipe(
+                Effect.andThen(
+                  startCount === 1 ? Effect.succeed(ChildProcessSpawner.ExitCode(1)) : Effect.never,
+                ),
+              );
+              return makeProcess({
+                exitCode,
+              });
+            }),
+          ),
+        );
+
+        const instance = yield* makeTestInstance({
+          spawnerLayer,
+          httpClientLayer: httpClientLayer(() => Effect.never),
+          configResolve: Ref.get(usePayload).pipe(
+            Effect.map((enabled) => ({
+              ...baseConfig,
+              args: [enabled ? "/payload/bin.mjs" : "/server/bin.mjs", "--bootstrap-fd", "3"],
+              entryPath: enabled ? "/payload/bin.mjs" : "/server/bin.mjs",
+              payloadVersion: enabled ? Option.some("0.0.59") : Option.none<string>(),
+            })),
+          ),
+          onStartupFailed: (failure) =>
+            Effect.sync(() => {
+              failures.push(
+                `${Option.getOrElse(failure.config.payloadVersion, () => "shell")}:${failure.reason}:${failure.attempt}`,
+              );
+            }).pipe(Effect.andThen(Ref.set(usePayload, false)), Effect.as(true)),
+        });
+
+        yield* instance.start;
+        assert.equal(yield* Queue.take(starts), "/payload/bin.mjs");
+
+        yield* TestClock.adjust(Duration.millis(500));
+        assert.equal(yield* Queue.take(starts), "/server/bin.mjs");
+        assert.deepEqual(failures, ["0.0.59:code=1:1"]);
       }).pipe(Effect.provide(TestClock.layer())),
     ),
   );

@@ -4,15 +4,33 @@ import { defineConfig, mergeConfig } from "vite-plus";
 import baseConfig from "../../vite.config.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 
-const bundledPackagePrefixes = [
-  "@pierre/diffs",
-  "@t3tools/",
-  "effect-acp",
-  "effect-codex-app-server",
-];
+const externalRuntimePackages = new Set(["@ff-labs/fff-node", "ffi-rs", "node-pty"]);
+const externalRuntimePackagePrefixes = ["@ff-labs/fff-bin-"];
+
+function packageNameFromSpecifier(id: string): string | null {
+  if (id.length === 0 || id.startsWith(".") || id.startsWith("/") || id.startsWith("node:")) {
+    return null;
+  }
+
+  const parts = id.split("/");
+  if (id.startsWith("@")) {
+    const [scope, name] = parts;
+    return scope && name ? `${scope}/${name}` : null;
+  }
+
+  return parts[0] ?? null;
+}
 
 export function shouldBundleCliDependency(id: string): boolean {
-  return bundledPackagePrefixes.some((prefix) => id.startsWith(prefix));
+  const packageName = packageNameFromSpecifier(id);
+  if (packageName === null) {
+    return false;
+  }
+
+  return (
+    !externalRuntimePackages.has(packageName) &&
+    !externalRuntimePackagePrefixes.some((prefix) => packageName.startsWith(prefix))
+  );
 }
 
 const repoEnv = loadRepoEnv();

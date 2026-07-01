@@ -1,4 +1,4 @@
-import { FileFinder, type MixedItem, type MixedSearchResult } from "@ff-labs/fff-node";
+import type { FileFinder, MixedItem, MixedSearchResult } from "@ff-labs/fff-node";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -170,9 +170,18 @@ function withDirectoryAncestors(entries: ReadonlyArray<ProjectEntry>): ProjectEn
 }
 
 const createFinder = Effect.fn("WorkspaceSearchIndex.createFinder")(function* (cwd: string) {
+  const fffNode = yield* Effect.tryPromise({
+    try: () => import("@ff-labs/fff-node"),
+    catch: (cause) =>
+      new WorkspaceSearchIndexCreateFailed({
+        cwd,
+        reason: "Failed to load the native workspace search index module.",
+        cause,
+      }),
+  });
   const result = yield* Effect.try({
     try: () =>
-      FileFinder.create({
+      fffNode.FileFinder.create({
         basePath: cwd,
         disableMmapCache: true,
         disableContentIndexing: true,

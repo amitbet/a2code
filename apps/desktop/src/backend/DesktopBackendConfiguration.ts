@@ -61,6 +61,7 @@ export class DesktopBackendConfiguration extends Context.Service<
     // fall-back to Windows), so the env switcher can't show "WSL" for a
     // backend that actually resolved to Windows.
     readonly resolvePrimaryLabel: Effect.Effect<string>;
+    readonly clearActivePayload: Effect.Effect<Option.Option<DesktopPayloadLayout.PayloadPointer>>;
   }
 >()("@t3tools/desktop/backend/DesktopBackendConfiguration") {}
 
@@ -383,6 +384,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       httpBaseUrl: backendExposure.httpBaseUrl,
       captureOutput: true,
       preflightFailure: Option.none(),
+      payloadVersion: activePayloadVersion,
     } satisfies DesktopBackendManager.DesktopBackendStartConfig;
   },
 );
@@ -518,6 +520,7 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     bootstrapDelivery: "stdin" as const,
     httpBaseUrl,
     captureOutput: true,
+    payloadVersion: Option.none(),
     ...(runningDistro !== null ? { runningDistro } : {}),
   };
 
@@ -689,6 +692,11 @@ export const make = Effect.gen(function* () {
       }
       return distro ? `WSL (${distro})` : "WSL";
     }).pipe(Effect.withSpan("desktop.backendConfiguration.resolvePrimaryLabel")),
+    clearActivePayload: DesktopPayloadLayout.clearActivePayload.pipe(
+      Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.withSpan("desktop.backendConfiguration.clearActivePayload"),
+    ),
     resolveWsl: (input) =>
       Effect.gen(function* () {
         const shared = yield* sharedInputs;

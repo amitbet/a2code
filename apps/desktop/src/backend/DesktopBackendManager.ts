@@ -87,6 +87,7 @@ export interface DesktopBackendStartConfig {
   readonly httpBaseUrl: URL;
   readonly captureOutput: boolean;
   readonly preflightFailure: Option.Option<PreflightFailure>;
+  readonly payloadVersion: Option.Option<string>;
   // Present for a WSL run after the configured/default distro has been
   // resolved to the concrete distro passed to wsl.exe.
   readonly runningDistro?: string;
@@ -101,6 +102,12 @@ export interface PreflightFailure {
   readonly reason: string;
   readonly fatal: boolean;
   readonly retryLimit?: number;
+}
+
+export interface BackendStartupFailure {
+  readonly config: DesktopBackendStartConfig;
+  readonly reason: string;
+  readonly attempt: number;
 }
 
 interface BackendProcessExit {
@@ -218,6 +225,9 @@ export interface BackendInstanceSpec {
   // retries. Returns true when the callback changed configuration and the
   // manager should resolve once more; false stops the failed instance.
   readonly onPreflightFailed?: (failure: PreflightFailure) => Effect.Effect<boolean>;
+  // Fired when a spawned backend exits before readiness. Returns true when the
+  // callback changed configuration and the manager should resolve once more.
+  readonly onStartupFailed?: (failure: BackendStartupFailure) => Effect.Effect<boolean>;
 }
 
 interface ActiveBackendRun {
@@ -571,7 +581,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
         ) {
           yield* mutex.withPermits(1)(
             Effect.gen(function* () {
-              const { isCurrentRun, nextState, pid } = yield* Ref.modify(
+              const { isCurrentRun, nextState, pid, wasReady } = yield* Ref.modify(
                 state,
                 (
                   latest,
@@ -580,6 +590,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
                     readonly isCurrentRun: boolean;
                     readonly nextState: BackendManagerState;
                     readonly pid: Option.Option<number>;
+                    readonly wasReady: boolean;
                   },
                   BackendManagerState,
                 ] => {
@@ -590,11 +601,13 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
                         isCurrentRun: false,
                         nextState: latest,
                         pid: Option.none<number>(),
+                        wasReady: false,
                       },
                       latest,
                     ] as const;
                   }
 
+                  const wasReady = latest.ready;
                   const next = {
                     ...latest,
                     active: Option.none<ActiveBackendRun>(),
@@ -605,6 +618,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
                       isCurrentRun: true,
                       nextState: next,
                       pid: currentRun.pid,
+                      wasReady,
                     },
                     next,
                   ] as const;
@@ -622,6 +636,19 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               }
 
               if (isCurrentRun && nextState.desiredRunning) {
+                if (!wasReady) {
+                  const recovered = yield* (
+                    spec.onStartupFailed?.({
+                      config: config.value,
+                      reason,
+                      attempt: nextState.restartAttempt + 1,
+                    }) ?? Effect.succeed(false)
+                  );
+                  if (recovered) {
+                    yield* scheduleRestart(`recovered from startup failure: ${reason}`);
+                    return;
+                  }
+                }
                 yield* scheduleRestart(reason);
               }
             }),

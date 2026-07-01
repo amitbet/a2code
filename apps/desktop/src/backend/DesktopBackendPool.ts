@@ -273,6 +273,26 @@ export const layer = Layer.effect(
       },
     );
 
+    const handlePrimaryStartupFailure = Effect.fn("desktop.backendPool.primaryStartupFailed")(
+      function* (failure: DesktopBackendManager.BackendStartupFailure) {
+        const payloadVersion = failure.config.payloadVersion;
+        if (Option.isNone(payloadVersion)) {
+          return false;
+        }
+
+        yield* logBackendPoolWarning(
+          "active payload failed before backend readiness; rolling back to bundled backend",
+          {
+            version: payloadVersion.value,
+            reason: failure.reason,
+            attempt: failure.attempt,
+          },
+        );
+        const cleared = yield* configuration.clearActivePayload;
+        return Option.isSome(cleared);
+      },
+    );
+
     const primary = yield* DesktopBackendManager.makeBackendInstance({
       id: DesktopBackendManager.PRIMARY_INSTANCE_ID,
       // Keep this lazy. The pool layer is initialized before startup loads
@@ -297,6 +317,7 @@ export const layer = Layer.effect(
         ),
       onShutdown: () => desktopWindow.handleBackendNotReady,
       onPreflightFailed: handlePrimaryPreflightFailure,
+      onStartupFailed: handlePrimaryStartupFailure,
     });
 
     const instancesRef = yield* SynchronizedRef.make<

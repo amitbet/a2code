@@ -80,6 +80,17 @@ const removePointer = (pointerPath: string): Effect.Effect<void, never, FileSyst
     yield* fileSystem.remove(pointerPath).pipe(Effect.ignore);
   });
 
+export const clearActivePayload: Effect.Effect<
+  Option.Option<PayloadPointer>,
+  never,
+  FileSystem.FileSystem | DesktopEnvironment.DesktopEnvironment
+> = Effect.gen(function* () {
+  const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  const active = yield* readPayloadPointer(environment.activePayloadPointerPath);
+  yield* removePointer(environment.activePayloadPointerPath);
+  return active;
+});
+
 /** True when the running shell is new enough to run a payload's `minShellVersion`. */
 export function shellSatisfiesPayload(shellVersion: string, minShellVersion: string): boolean {
   return compareSemverVersions(shellVersion, minShellVersion) >= 0;
