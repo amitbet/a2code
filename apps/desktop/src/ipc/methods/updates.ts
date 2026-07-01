@@ -7,6 +7,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
+import * as DesktopLifecycle from "../../app/DesktopLifecycle.ts";
 import * as DesktopUpdates from "../../updates/DesktopUpdates.ts";
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
@@ -37,7 +38,12 @@ export const downloadUpdate = DesktopIpc.makeIpcMethod({
   result: DesktopUpdateActionResultSchema,
   handler: Effect.fn("desktop.ipc.updates.download")(function* () {
     const updates = yield* DesktopUpdates.DesktopUpdates;
-    return yield* updates.download;
+    const lifecycle = yield* DesktopLifecycle.DesktopLifecycle;
+    const result = yield* updates.download;
+    if (result.requiresRelaunch) {
+      yield* lifecycle.relaunch("apply-payload-update");
+    }
+    return result;
   }),
 });
 
@@ -47,7 +53,16 @@ export const installUpdate = DesktopIpc.makeIpcMethod({
   result: DesktopUpdateActionResultSchema,
   handler: Effect.fn("desktop.ipc.updates.install")(function* () {
     const updates = yield* DesktopUpdates.DesktopUpdates;
-    return yield* updates.install;
+    const lifecycle = yield* DesktopLifecycle.DesktopLifecycle;
+    const result = yield* updates.install;
+    // In-place payload updates take effect on a clean process restart: the
+    // pending pointer is armed, so relaunch and let the fresh launch promote it.
+    // relaunch() forks the shutdown/relaunch, so this returns to the renderer
+    // before the app goes down.
+    if (result.requiresRelaunch) {
+      yield* lifecycle.relaunch("apply-payload-update");
+    }
+    return result;
   }),
 });
 

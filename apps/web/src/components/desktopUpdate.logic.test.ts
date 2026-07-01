@@ -153,6 +153,7 @@ describe("getDesktopUpdateActionError", () => {
     const result: DesktopUpdateActionResult = {
       accepted: true,
       completed: false,
+      requiresRelaunch: false,
       state: {
         ...baseState,
         status: "available",
@@ -169,6 +170,7 @@ describe("getDesktopUpdateActionError", () => {
     const result: DesktopUpdateActionResult = {
       accepted: false,
       completed: false,
+      requiresRelaunch: false,
       state: {
         ...baseState,
         status: "error",
@@ -184,6 +186,7 @@ describe("getDesktopUpdateActionError", () => {
     const result: DesktopUpdateActionResult = {
       accepted: true,
       completed: true,
+      requiresRelaunch: false,
       state: {
         ...baseState,
         status: "downloaded",
@@ -204,6 +207,7 @@ describe("desktop update UI helpers", () => {
       shouldToastDesktopUpdateActionResult({
         accepted: true,
         completed: false,
+        requiresRelaunch: false,
         state: { ...baseState, message: "checksum mismatch" },
       }),
     ).toBe(true);
@@ -211,6 +215,7 @@ describe("desktop update UI helpers", () => {
       shouldToastDesktopUpdateActionResult({
         accepted: true,
         completed: false,
+        requiresRelaunch: false,
         state: { ...baseState, message: null },
       }),
     ).toBe(false);
@@ -218,6 +223,7 @@ describe("desktop update UI helpers", () => {
       shouldToastDesktopUpdateActionResult({
         accepted: true,
         completed: true,
+        requiresRelaunch: false,
         state: { ...baseState, message: "checksum mismatch" },
       }),
     ).toBe(false);

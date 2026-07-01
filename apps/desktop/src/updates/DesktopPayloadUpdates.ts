@@ -8,7 +8,6 @@ import { compareSemverVersions } from "@t3tools/shared/semver";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -20,7 +19,6 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as HttpClient from "effect/unstable/http/HttpClient";
 import * as HttpClientResponse from "effect/unstable/http/HttpClientResponse";
 
-import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
@@ -66,9 +64,12 @@ export class DesktopPayloadUpdates extends Context.Service<
     readonly check: (reason: string) => Effect.Effect<DesktopPayloadUpdateState>;
     /** Download + verify + stage the newest compatible payload (no apply). */
     readonly download: Effect.Effect<DesktopPayloadUpdateState>;
-    /** Apply a staged payload by restarting the primary backend. */
+    /**
+     * Arm a staged payload by writing the `pending` pointer so the next backend
+     * start promotes it. The caller triggers the full app relaunch.
+     */
     readonly apply: Effect.Effect<DesktopPayloadUpdateState>;
-    /** One-click user-initiated update: download then apply. */
+    /** One-click user-initiated update: download then arm for relaunch. */
     readonly update: Effect.Effect<DesktopPayloadUpdateState>;
   }
 >()("@t3tools/desktop/updates/DesktopPayloadUpdates") {}
@@ -77,7 +78,6 @@ export const make = Effect.gen(function* () {
   const config = yield* DesktopConfig.DesktopConfig;
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const fileSystem = yield* FileSystem.FileSystem;
-  const backendPool = yield* DesktopBackendPool.DesktopBackendPool;
   const baseHttpClient = yield* HttpClient.HttpClient;
   const httpClient = baseHttpClient.pipe(HttpClient.filterStatusOk);
 
@@ -383,49 +383,39 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  // Apply a staged payload by restarting the primary backend. The pool's
-  // primary instance is always registered, so stop/start re-spawns it against
-  // the freshly-promoted payload entry path (see payloadLayout.promotePendingPayload).
+  // Arm a staged payload to activate on the next backend start by writing the
+  // on-disk `pending` pointer. The caller (DesktopUpdates → IPC) then triggers a
+  // full app relaunch; `promotePendingPayload` activates the payload on the
+  // fresh launch (see payloadLayout.ts).
+  //
+  // We intentionally do NOT hot-restart the primary backend in place here. That
+  // stop/start swap raced the loopback port against an in-flight session: if the
+  // old process had not released :PORT before the new one tried to bind, the new
+  // backend crash-looped and the renderer was stranded "Reconnecting…" forever.
+  // A clean relaunch rebinds from a fresh process. The pending pointer is a
+  // no-op on the next start if the relaunch never happens, so arming is safe.
   const applyImpl: Effect.Effect<DesktopPayloadUpdateState> = Effect.gen(function* () {
     const staged = yield* Ref.get(stagedPointerRef);
     if (Option.isNone(staged)) {
       return yield* SubscriptionRef.get(stateRef);
     }
     const pointer = staged.value;
-    yield* logPayloadInfo("applying staged payload via backend restart", {
+    yield* logPayloadInfo("arming staged payload for relaunch", {
       version: pointer.version,
     });
-    // Write the pending pointer now (not at download time) so the staged payload
-    // is promoted to active on the very next backend start — the restart below.
     yield* provideEnv(writePayloadPointer(environment.pendingPayloadPointerPath, pointer));
-    const primary = yield* backendPool.primary;
-    yield* primary.stop({ timeout: Duration.seconds(5) });
-    yield* primary.start;
-    yield* primary.waitForReady(Duration.minutes(1));
-    yield* Ref.set(stagedPointerRef, Option.none());
-    const activeVersion = yield* runningServerVersion;
-    const checkedAt = yield* currentIsoTimestamp;
-    yield* logPayloadInfo("payload applied", { version: activeVersion });
-    return yield* setState((state) => ({
-      ...state,
-      status: "up-to-date",
-      currentPayloadVersion: activeVersion === shellVersion ? null : activeVersion,
-      stagedVersion: null,
-      availableVersion: null,
-      downloadPercent: null,
-      checkedAt,
-      message: null,
-    }));
+    yield* logPayloadInfo("payload armed; awaiting relaunch", { version: pointer.version });
+    return yield* SubscriptionRef.get(stateRef);
   }).pipe(
     Effect.catchCause((cause) =>
       Cause.hasInterruptsOnly(cause)
         ? Effect.failCause(cause)
-        : logPayloadError("payload apply failed", { cause: Cause.pretty(cause) }).pipe(
+        : logPayloadError("payload arm failed", { cause: Cause.pretty(cause) }).pipe(
             Effect.andThen(
               setState((state) => ({
                 ...state,
                 status: "error",
-                message: "Failed to apply the payload update by restarting the backend.",
+                message: "Failed to stage the payload update for restart.",
               })),
             ),
           ),

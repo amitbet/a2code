@@ -467,10 +467,18 @@ Legend List scroll upgrade, and a `vite-plus` major bump. Fork-feature touch poi
   tip; preserve them.
 - **`DesktopBackendManager` Context.Service was removed** in favor of
   `DesktopBackendPool` (multi-instance). `apps/desktop/src/updates/DesktopPayloadUpdates.ts`
-  (payload hot-update) was ported: it now acquires `DesktopBackendPool.DesktopBackendPool`
-  and restarts via `pool.primary` → `instance.stop({timeout}) ; instance.start`
-  instead of the old `backendManager.stop/start`. If a future merge reshapes the pool
-  API, keep the payload restart pointed at the **primary** instance.
+  (payload hot-update) no longer restarts the backend in place: `apply`/`update` now
+  only **arm** the staged payload by writing the `pending` pointer, and the IPC layer
+  (`apps/desktop/src/ipc/methods/updates.ts`) triggers a full `DesktopLifecycle.relaunch`
+  so the fresh launch promotes it. The old `pool.primary` → `instance.stop ; instance.start`
+  hot-swap raced the loopback port against an in-flight session and stranded the renderer
+  "Reconnecting…"; the payload service no longer depends on `DesktopBackendPool` at all.
+  `DesktopUpdates.install`/`download` return a `requiresRelaunch` flag (also added to the
+  `DesktopUpdateActionResult` contract) that the IPC handlers act on. If a future merge
+  reshapes the pool API, there is no payload restart to repoint — keep the
+  arm-then-relaunch split. (The electron installer path that previously restored the pool
+  via `restartBackendPool` after a failed `quitAndInstall` was removed on 2026-07-01 — the
+  payload channel is now the only in-app updater; see the payload feature section.)
 - **Payload-aware backend entry resolution** moved into upstream's
   `resolvePrimaryStartConfig` (`DesktopBackendConfiguration.ts`). The fork's
   `entryPath = resolveActiveBackendEntryPath` is fed into upstream's new
@@ -533,7 +541,7 @@ every mobile`_.test.ts`under mobile's`tsc`+`customConditions: ["react-native"]`
     **unsigned** artifact. **Drop** upstream's matrix-based Azure Trusted Signing /
     Apple code-signing flow and the ImageMagick step. A dedicated **`build_payload`**
     job (on `ubuntu-24.04`) builds the **payload hot-update asset** (`vp run
-    build:desktop` → `vp run dist:payload:asset`, using the
+build:desktop` → `vp run dist:payload:asset`, using the
     `T3CODE_PAYLOAD_SIGNING_KEY` secret) and uploads it as the `desktop-payload`
     artifact. The `release` job depends on `build_payload` (NOT the macOS build) and
     publishes `payload-*.tar.gz` + `payload-manifest.json`, so release creation is
@@ -668,8 +676,12 @@ table_info`), so re-running after a renumber is safe.
   are JavaScript only (Gatekeeper/hardened-runtime enforce signatures on native
   Mach-O, not on JS loaded at runtime). The signed shell is untouched. Anything
   that needs a new **native** binary (the `@ff-labs/fff-bin-*` addon) or a new
-  Electron/main-process build must go through the full electron-updater path
-  instead — gated by the manifest's `minShellVersion`.
+  Electron/main-process build requires installing a fresh signed shell **by
+  hand** (download the `.dmg`/`.exe`/`.AppImage` from the release) — the in-app
+  electron-updater path has been removed (see "Sole update path" below). The
+  manifest's `minShellVersion` gates payloads so an old shell stops pulling a JS
+  payload that needs a newer native ABI; when it does, the user must reinstall
+  the shell manually.
 - **Apply model (fork UX, reworked 2026-06-30).** The payload **auto-downloads
   in the background** (poll → check → download → verify size + sha256 +
   **Ed25519 signature** → extract to `payloads/<version>.partial` → atomic
@@ -695,20 +707,25 @@ table_info`), so re-running after a renumber is safe.
   older shells stop pulling JS payloads that need a newer native ABI. This is
   the single most important operational lever — get it wrong and an old shell
   can load a payload its native modules can't run.
-- **Button integration (fork, 2026-06-30).** The in-place channel is surfaced
-  through the **same** "Update available" button as the electron installer — no
-  separate preload bridge / IPC / state channel. `DesktopUpdates` is now the
-  single UI-facing aggregator: it merges the installer state with the payload
-  state via the pure `mergeDesktopUpdateState()` (`updateMerge.ts`),
-  **preferring in-place** when a compatible payload is on offer and falling back
-  to the installer otherwise. The chosen mechanism is carried on
-  `DesktopUpdateState.kind` (`"installer" | "in-place"`). UX is VSCode-style:
-  the payload downloads silently (button hidden while downloading), then the
-  button shows **"Restart to update"** → **single click, no confirmation popup**
-  → in-place apply. `DesktopUpdates.install` routes to the payload `apply`/`update`
-  when `kind === "in-place"`; the installer path keeps its confirm + `quitAndInstall`.
-  `DesktopUpdates` subscribes to `DesktopPayloadUpdates.changes` to re-broadcast
-  the merged state on the existing `UPDATE_STATE_CHANNEL`.
+- **Sole update path — electron installer removed (fork, 2026-07-01).** The
+  payload hot-update is now the **only** in-app update mechanism. The
+  electron-updater integration was deleted entirely: there is no update feed, no
+  background installer poller, no full-package auto-download, and no
+  `quitAndInstall`. `DesktopUpdates` is a thin **payload-only facade** that maps
+  the `DesktopPayloadUpdateState` onto the single renderer `DesktopUpdateState`
+  via the pure `payloadUpdateStateToDesktopUpdateState()`
+  (`payloadUpdateState.ts`). `DesktopUpdateState.kind` is therefore **always
+  `"in-place"`** (the `"installer"` variant is retained in the contract but never
+  emitted). `disabledReason` derives from the payload service's `enabled`/message.
+  UX is unchanged and VSCode-style: the payload downloads silently (button hidden
+  while downloading), then the button shows **"Restart to update"** → single
+  click, no confirmation → arm + `DesktopLifecycle.relaunch`. `DesktopUpdates`
+  subscribes to `DesktopPayloadUpdates.changes` to re-broadcast on the existing
+  `UPDATE_STATE_CHANNEL`. **Merge note:** if upstream reworks the electron
+  updater, do **not** re-wire it into `DesktopUpdates` — the fork ships shell
+  updates only via a fresh manual install of the `.app`/installer (see signing
+  note above). `setChannel` still persists the `latest`/`nightly` preference but
+  no longer reconfigures any feed (the payload manifest URL is channel-agnostic).
 - **Files (fork-added unless noted):**
   - `packages/shared/src/payloadArchive.ts` (+ `./payloadArchive` export) —
     dependency-free `.tar.gz` codec used by both the build script and the app.
@@ -720,12 +737,24 @@ table_info`), so re-running after a renumber is safe.
     methods; `SubscriptionRef` state consumed by `DesktopUpdates`). Detection +
     download are automatic; **apply is user-initiated only** (writes the pending
     pointer then restarts the primary backend).
-  - `apps/desktop/src/updates/updateMerge.ts` — **fork-added**: pure
-    `mergeDesktopUpdateState(installer, payload)` (prefer-in-place + status
-    mapping), unit-tested in `updateMerge.test.ts`.
-  - `apps/desktop/src/updates/DesktopUpdates.ts` — **modified**: depends on
-    `DesktopPayloadUpdates`, aggregates both states onto `UPDATE_STATE_CHANNEL`,
-    and routes `download`/`install` to the payload service when `kind` is in-place.
+  - `apps/desktop/src/updates/payloadUpdateState.ts` — **fork-added**: pure
+    `payloadUpdateStateToDesktopUpdateState(payload, { channel, runtimeInfo })`
+    (always `kind: "in-place"` + status mapping), unit-tested in
+    `payloadUpdateState.test.ts`. **Replaced** the old
+    `updateMerge.ts`/`mergeDesktopUpdateState` (deleted with the installer).
+  - `apps/desktop/src/updates/DesktopUpdates.ts` — **rewritten**: payload-only
+    facade over `DesktopPayloadUpdates`; maps payload state onto
+    `UPDATE_STATE_CHANNEL`, routes `download`/`install` to the payload service,
+    and reports `requiresRelaunch`. No longer depends on `ElectronUpdater`,
+    `DesktopBackendPool`, or `DesktopState`.
+  - `apps/desktop/src/electron/ElectronUpdater.ts` (+ test),
+    `apps/desktop/src/updates/updateMachine.ts` (+ test),
+    `apps/desktop/src/updates/updateMerge.ts` (+ test) — **deleted**: the
+    electron-installer wrapper and its installer-only state machine/merge are no
+    longer used. `ElectronUpdater.layer` was removed from `main.ts`.
+    (`DesktopState.markInstallRestart`/`clearInstallRestart` and the
+    `DesktopLifecycle` before-quit `isInstallRestart()` guard are now unexercised
+    but kept — they belong to the lifecycle quit handshake.)
   - `apps/web/src/components/desktopUpdate.logic.ts` +
     `apps/web/src/components/sidebar/SidebarUpdatePill.tsx` — **modified**:
     in-place is a single-click action with no confirmation popup, hidden while

@@ -71,19 +71,14 @@ export function SidebarUpdatePill() {
     if (action === "install") {
       // Updates apply with a single click and no confirmation popup (VSCode-style).
       // The update is already downloaded in the background by the time this button
-      // appears, so the click just restarts: the backend for in-place payloads, or
-      // the whole app for the full installer.
+      // appears, so the click just restarts the whole app — an in-place payload
+      // arms its pending pointer and relaunches; the full installer hands off to
+      // quitAndInstall. Either way the app goes down, so there is no success toast
+      // to show: we only surface an error if the action failed to start.
       void bridge
         .installUpdate()
         .then((result) => {
-          if (state.kind === "in-place" && result.completed) {
-            toastManager.add({
-              type: "success",
-              title: "Update applied",
-              description: "The backend was restarted on the new version.",
-            });
-            return;
-          }
+          if (result.requiresRelaunch) return;
           if (!shouldToastDesktopUpdateActionResult(result)) return;
           const actionError = getDesktopUpdateActionError(result);
           if (!actionError) return;

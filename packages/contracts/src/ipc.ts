@@ -252,12 +252,17 @@ export const DesktopUpdateStateSchema = Schema.Struct({
 export interface DesktopUpdateActionResult {
   accepted: boolean;
   completed: boolean;
+  // True when the action armed an update that takes effect on a full app
+  // relaunch (in-place payload). The IPC layer triggers the relaunch; the
+  // renderer uses this to avoid surfacing a premature "applied" toast.
+  requiresRelaunch: boolean;
   state: DesktopUpdateState;
 }
 
 export const DesktopUpdateActionResultSchema = Schema.Struct({
   accepted: Schema.Boolean,
   completed: Schema.Boolean,
+  requiresRelaunch: Schema.Boolean,
   state: DesktopUpdateStateSchema,
 });
 
