@@ -199,6 +199,41 @@ export const make = Effect.gen(function* () {
       }
     });
 
+  const downloadArchive = (
+    response: HttpClientResponse.HttpClientResponse,
+    expectedBytes: number,
+  ): Effect.Effect<Uint8Array, string> =>
+    Effect.gen(function* () {
+      const chunks: Uint8Array[] = [];
+      let downloadedBytes = 0;
+      let lastEmittedPercent = 0;
+
+      yield* Stream.runForEach(response.stream, (chunk) =>
+        Effect.gen(function* () {
+          chunks.push(chunk);
+          downloadedBytes += chunk.byteLength;
+
+          if (expectedBytes <= 0) return;
+          const percent = Math.min(99, Math.floor((downloadedBytes / expectedBytes) * 100));
+          if (percent <= lastEmittedPercent) return;
+          lastEmittedPercent = percent;
+          yield* setState((state) => ({
+            ...state,
+            status: "downloading",
+            downloadPercent: percent,
+          }));
+        }),
+      ).pipe(Effect.mapError((cause) => `Failed to download payload archive: ${String(cause)}`));
+
+      const bytes = new Uint8Array(downloadedBytes);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      return bytes;
+    });
+
   const extractToVersionDir = (
     manifest: DesktopPayloadManifest,
     bytes: Uint8Array,
@@ -242,10 +277,9 @@ export const make = Effect.gen(function* () {
       yield* setState((state) => ({ ...state, status: "downloading", downloadPercent: 0 }));
       yield* logPayloadInfo("downloading payload", { version: manifest.version });
       const assetUrl = resolveAssetUrl(manifest);
-      const buffer = yield* httpClient
+      const bytes = yield* httpClient
         .get(assetUrl)
-        .pipe(Effect.flatMap((response) => response.arrayBuffer));
-      const bytes = new Uint8Array(buffer);
+        .pipe(Effect.flatMap((response) => downloadArchive(response, manifest.sizeBytes)));
       yield* verifyArchive(manifest, bytes);
       yield* extractToVersionDir(manifest, bytes);
       const stagedAt = yield* currentIsoTimestamp;
