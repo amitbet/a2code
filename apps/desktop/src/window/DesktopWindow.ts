@@ -23,6 +23,7 @@ const TITLEBAR_COLOR = "#01000000"; // #00000000 does not work correctly on Linu
 const TITLEBAR_LIGHT_SYMBOL_COLOR = "#1f2937";
 const TITLEBAR_DARK_SYMBOL_COLOR = "#f8fafc";
 const DEVELOPMENT_LOAD_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000] as const;
+const RENDERER_GONE_RECOVERY_DELAYS_MS = [250, 1_000, 2_500, 5_000, 10_000] as const;
 const DEVELOPMENT_RETRYABLE_LOAD_ERROR_CODES = new Set([
   -2, // ERR_FAILED
   -7, // ERR_TIMED_OUT
@@ -31,6 +32,17 @@ const DEVELOPMENT_RETRYABLE_LOAD_ERROR_CODES = new Set([
   -105, // ERR_NAME_NOT_RESOLVED
   -106, // ERR_INTERNET_DISCONNECTED
   -118, // ERR_CONNECTION_TIMED_OUT
+]);
+const RECOVERABLE_RENDER_PROCESS_GONE_REASONS = new Set<
+  Electron.RenderProcessGoneDetails["reason"]
+>([
+  "abnormal-exit",
+  "killed",
+  "crashed",
+  "oom",
+  "launch-failed",
+  "integrity-failure",
+  "memory-eviction",
 ]);
 
 type WindowTitleBarOptions = Pick<
@@ -136,6 +148,12 @@ export function isRetryableDevelopmentRendererLoadFailure(input: {
       navigationUrl: input.validatedUrl,
     })
   );
+}
+
+export function isRecoverableMainRendererGoneReason(
+  reason: Electron.RenderProcessGoneDetails["reason"],
+): boolean {
+  return RECOVERABLE_RENDER_PROCESS_GONE_REASONS.has(reason);
 }
 
 function getWindowTitleBarOptions(
@@ -367,6 +385,8 @@ export const make = Effect.gen(function* () {
 
     let developmentLoadRetryIndex = 0;
     let developmentLoadRetryFiber: Fiber.Fiber<void, never> | undefined;
+    let rendererGoneRecoveryIndex = 0;
+    let rendererGoneRecoveryFiber: Fiber.Fiber<void, never> | undefined;
     const clearDevelopmentLoadRetry = () => {
       if (developmentLoadRetryFiber === undefined) {
         return;
@@ -374,6 +394,14 @@ export const make = Effect.gen(function* () {
       const retryFiber = developmentLoadRetryFiber;
       developmentLoadRetryFiber = undefined;
       runFork(Fiber.interrupt(retryFiber));
+    };
+    const clearRendererGoneRecovery = () => {
+      if (rendererGoneRecoveryFiber === undefined) {
+        return;
+      }
+      const recoveryFiber = rendererGoneRecoveryFiber;
+      rendererGoneRecoveryFiber = undefined;
+      runFork(Fiber.interrupt(recoveryFiber));
     };
     const loadApplication = () => {
       if (window.isDestroyed()) {
@@ -406,6 +434,31 @@ export const make = Effect.gen(function* () {
       );
       return retryInMs;
     };
+    const scheduleRendererGoneRecovery = () => {
+      if (rendererGoneRecoveryFiber !== undefined || window.isDestroyed()) {
+        return undefined;
+      }
+
+      const recoveryIndex = Math.min(
+        rendererGoneRecoveryIndex,
+        RENDERER_GONE_RECOVERY_DELAYS_MS.length - 1,
+      );
+      const recoverInMs = RENDERER_GONE_RECOVERY_DELAYS_MS[recoveryIndex] ?? 10_000;
+      rendererGoneRecoveryIndex += 1;
+      rendererGoneRecoveryFiber = runFork(
+        Effect.sleep(recoverInMs).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              rendererGoneRecoveryFiber = undefined;
+              if (!window.isDestroyed()) {
+                loadApplication();
+              }
+            }),
+          ),
+        ),
+      );
+      return recoverInMs;
+    };
 
     window.webContents.on("did-finish-load", () => {
       if (
@@ -418,7 +471,9 @@ export const make = Effect.gen(function* () {
         return;
       }
       clearDevelopmentLoadRetry();
+      clearRendererGoneRecovery();
       developmentLoadRetryIndex = 0;
+      rendererGoneRecoveryIndex = 0;
       window.setTitle(environment.displayName);
     });
     window.webContents.on(
@@ -448,10 +503,14 @@ export const make = Effect.gen(function* () {
       },
     );
     window.webContents.on("render-process-gone", (_event, details) => {
+      const recoverInMs = isRecoverableMainRendererGoneReason(details.reason)
+        ? scheduleRendererGoneRecovery()
+        : undefined;
       void runPromise(
         logWindowWarning("main window render process gone", {
           reason: details.reason,
           exitCode: details.exitCode,
+          ...(recoverInMs === undefined ? {} : { recoverInMs }),
         }),
       );
     });
@@ -473,6 +532,7 @@ export const make = Effect.gen(function* () {
 
     window.on("closed", () => {
       clearDevelopmentLoadRetry();
+      clearRendererGoneRecovery();
       void runPromise(electronWindow.clearMain(Option.some(window)));
     });
 
