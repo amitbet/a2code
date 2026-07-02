@@ -52,6 +52,7 @@ import {
 import { ensureLocalApi, readLocalApi } from "../../localApi";
 import {
   primaryServerObservabilityAtom,
+  primaryServerConfigAtom,
   primaryServerProvidersAtom,
   serverEnvironment,
 } from "../../state/server";
@@ -179,6 +180,8 @@ function AboutVersionTitle({
 
 function AboutVersionSection() {
   const updateState = useDesktopUpdateState();
+  const primaryServerVersion =
+    useAtomValue(primaryServerConfigAtom)?.environment.serverVersion ?? null;
   const [isChangingUpdateChannel, setIsChangingUpdateChannel] = useState(false);
 
   const hasDesktopBridge = typeof window !== "undefined" && Boolean(window.desktopBridge);
@@ -304,7 +307,7 @@ function AboutVersionSection() {
       <SettingsRow
         title={
           <AboutVersionTitle
-            content={updateState?.currentVersion}
+            content={primaryServerVersion ?? updateState?.currentVersion}
             shell={updateState?.shellVersion}
           />
         }

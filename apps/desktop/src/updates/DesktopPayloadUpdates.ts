@@ -58,6 +58,7 @@ export class DesktopPayloadUpdates extends Context.Service<
   DesktopPayloadUpdates,
   {
     readonly getState: Effect.Effect<DesktopPayloadUpdateState>;
+    readonly refreshCurrentVersion: Effect.Effect<DesktopPayloadUpdateState>;
     /** Emits the latest payload-update state on every change (current value first). */
     readonly changes: Stream.Stream<DesktopPayloadUpdateState>;
     readonly configure: Effect.Effect<void, never, Scope.Scope>;
@@ -153,6 +154,19 @@ export const make = Effect.gen(function* () {
   const runningServerVersion = provideEnv(resolveActivePayloadVersion).pipe(
     Effect.map(Option.getOrElse(() => shellVersion)),
   );
+
+  const refreshCurrentVersion: Effect.Effect<DesktopPayloadUpdateState> = Effect.gen(function* () {
+    const currentVersion = yield* runningServerVersion;
+    const currentPayloadVersion = currentVersion === shellVersion ? null : currentVersion;
+    const state = yield* SubscriptionRef.get(stateRef);
+    if (state.currentPayloadVersion === currentPayloadVersion) {
+      return state;
+    }
+    return yield* setState((state) => ({
+      ...state,
+      currentPayloadVersion,
+    }));
+  });
 
   const resolveAssetUrl = (manifest: DesktopPayloadManifest): string =>
     new URL(manifest.fileName, manifestUrl).toString();
@@ -497,6 +511,7 @@ export const make = Effect.gen(function* () {
 
   return DesktopPayloadUpdates.of({
     getState: SubscriptionRef.get(stateRef),
+    refreshCurrentVersion,
     changes: SubscriptionRef.changes(stateRef),
     check: performCheck,
     download: runExclusive(downloadImpl),
@@ -511,11 +526,7 @@ export const make = Effect.gen(function* () {
       }),
     ),
     configure: Effect.gen(function* () {
-      const currentVersion = yield* runningServerVersion;
-      yield* setState((state) => ({
-        ...state,
-        currentPayloadVersion: currentVersion === shellVersion ? null : currentVersion,
-      }));
+      yield* refreshCurrentVersion;
       if (!enabled) {
         yield* logPayloadInfo("payload updates disabled", { reason: disabledReason ?? "" });
         return;

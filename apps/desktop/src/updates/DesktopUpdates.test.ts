@@ -34,6 +34,7 @@ const payloadState = (
 interface UpdatesHarnessOptions {
   readonly initialPayload?: DesktopPayloadUpdateState;
   readonly onCheck?: (state: DesktopPayloadUpdateState) => DesktopPayloadUpdateState;
+  readonly onRefresh?: (state: DesktopPayloadUpdateState) => DesktopPayloadUpdateState;
   readonly onUpdate?: (state: DesktopPayloadUpdateState) => DesktopPayloadUpdateState;
   readonly onApply?: (state: DesktopPayloadUpdateState) => DesktopPayloadUpdateState;
   readonly setUpdateChannelError?: DesktopAppSettings.DesktopSettingsWriteError;
@@ -56,6 +57,7 @@ const makeHarness = (options: UpdatesHarnessOptions = {}) =>
 
     const payloadLayer = Layer.succeed(DesktopPayloadUpdates.DesktopPayloadUpdates, {
       getState: SubscriptionRef.get(payloadRef),
+      refreshCurrentVersion: transition(options.onRefresh),
       changes: SubscriptionRef.changes(payloadRef),
       configure: Effect.void,
       check: () =>
@@ -173,6 +175,20 @@ describe("DesktopUpdates", () => {
         assert.equal(state.kind, "in-place");
         assert.equal(state.status, "downloaded");
         assert.equal(state.downloadedVersion, "1.3.0");
+      }).pipe(Effect.scoped, Effect.provide(harness.layer));
+    }),
+  );
+
+  it.effect("refreshes the running content version before returning update state", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        onRefresh: (state) => ({ ...state, currentPayloadVersion: "1.2.4" }),
+      });
+      yield* Effect.gen(function* () {
+        const updates = yield* DesktopUpdates.DesktopUpdates;
+        const state = yield* updates.getState;
+
+        assert.equal(state.currentVersion, "1.2.4");
       }).pipe(Effect.scoped, Effect.provide(harness.layer));
     }),
   );

@@ -84,7 +84,7 @@ export const make = Effect.gen(function* () {
   // The renderer consumes a single update state, always the in-place payload
   // mechanism (there is no installer state to merge in).
   const getState: Effect.Effect<DesktopUpdateState> = Effect.gen(function* () {
-    const payload = yield* payloadUpdates.getState;
+    const payload = yield* payloadUpdates.refreshCurrentVersion;
     const channel = yield* Ref.get(channelRef);
     return payloadUpdateStateToDesktopUpdateState(payload, {
       channel,
