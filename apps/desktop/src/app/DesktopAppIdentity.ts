@@ -35,6 +35,7 @@ export class DesktopAppIdentity extends Context.Service<
   DesktopAppIdentity,
   {
     readonly resolveUserDataPath: Effect.Effect<string, DesktopUserDataPathResolutionError>;
+    readonly configureAboutPanel: (contentVersion?: string) => Effect.Effect<void>;
     readonly configure: Effect.Effect<void>;
   }
 >()("@t3tools/desktop/app/DesktopAppIdentity") {}
@@ -110,8 +111,7 @@ export const make = Effect.gen(function* () {
       : environment.path.join(environment.appDataDirectory, environment.userDataDirName);
   }).pipe(Effect.withSpan("desktop.appIdentity.resolveUserDataPath"));
 
-  const configure = Effect.gen(function* () {
-    const commitHash = yield* resolveAboutCommitHash;
+  const resolveActiveContentVersion = Effect.gen(function* () {
     // The About panel shows both the running content version (an applied JS
     // payload, else the shell) as the headline and the native shell version +
     // commit in the build line, so a hot-updated content version is
@@ -122,17 +122,28 @@ export const make = Effect.gen(function* () {
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
     );
-    const contentVersion = Option.getOrElse(activePayloadVersion, () => environment.appVersion);
+    return Option.getOrElse(activePayloadVersion, () => environment.appVersion);
+  });
+
+  const configureAboutPanel = Effect.fn("desktop.appIdentity.configureAboutPanel")(function* (
+    contentVersionOverride?: string,
+  ) {
+    const commitHash = yield* resolveAboutCommitHash;
+    const contentVersion = contentVersionOverride ?? (yield* resolveActiveContentVersion);
     const buildLabel = [
       `shell ${environment.appVersion}`,
       ...(Option.isSome(commitHash) ? [commitHash.value] : []),
     ].join(" · ");
-    yield* electronApp.setName(environment.displayName);
     yield* electronApp.setAboutPanelOptions({
       applicationName: environment.displayName,
       applicationVersion: `content ${contentVersion}`,
       version: buildLabel,
     });
+  });
+
+  const configure = Effect.gen(function* () {
+    yield* electronApp.setName(environment.displayName);
+    yield* configureAboutPanel();
 
     if (environment.platform === "win32") {
       yield* electronApp.setAppUserModelId(environment.appUserModelId);
@@ -153,6 +164,7 @@ export const make = Effect.gen(function* () {
 
   return DesktopAppIdentity.of({
     resolveUserDataPath,
+    configureAboutPanel,
     configure,
   });
 });

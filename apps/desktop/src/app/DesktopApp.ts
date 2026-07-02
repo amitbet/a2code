@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 
 import * as NetService from "@t3tools/shared/Net";
 import * as Crypto from "effect/Crypto";
@@ -251,6 +252,17 @@ const startup = Effect.gen(function* () {
   yield* applicationMenu.configure;
   yield* updates.configure;
   yield* payloadUpdates.configure;
+  yield* payloadUpdates.getState.pipe(
+    Effect.flatMap((state) =>
+      appIdentity.configureAboutPanel(state.currentPayloadVersion ?? state.shellVersion),
+    ),
+  );
+  yield* payloadUpdates.changes.pipe(
+    Stream.runForEach((state) =>
+      appIdentity.configureAboutPanel(state.currentPayloadVersion ?? state.shellVersion),
+    ),
+    Effect.forkScoped,
+  );
   yield* bootstrap.pipe(Effect.catchCause((cause) => fatalStartupCause("bootstrap", cause)));
 }).pipe(Effect.withSpan("desktop.startup"));
 

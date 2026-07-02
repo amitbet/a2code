@@ -262,4 +262,27 @@ describe("DesktopAppIdentity", () => {
       },
     );
   });
+
+  it.effect("refreshes the macOS About panel from the supplied running content version", () => {
+    const calls: ElectronAppCalls = {
+      setAboutPanelOptions: [],
+      setDockIcon: [],
+      setName: [],
+    };
+
+    return withIdentity(
+      Effect.gen(function* () {
+        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
+        yield* identity.configure;
+        yield* identity.configureAboutPanel("1.2.5");
+
+        assert.equal(calls.setAboutPanelOptions[0]?.applicationVersion, "content 1.2.3");
+        assert.equal(calls.setAboutPanelOptions[1]?.applicationVersion, "content 1.2.5");
+        assert.equal(calls.setAboutPanelOptions[1]?.version, "shell 1.2.3 · abcdef123456");
+      }),
+      {
+        calls,
+      },
+    );
+  });
 });
