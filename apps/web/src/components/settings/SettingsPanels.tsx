@@ -168,9 +168,10 @@ function AboutVersionTitle({
   return (
     <span className="inline-flex items-center gap-2">
       <span>Version</span>
+      <span className="text-[11px] font-medium text-muted-foreground">content</span>
       <code className="text-[11px] font-medium text-muted-foreground">{contentVersion}</code>
       {shell ? (
-        <span className="text-[11px] font-medium text-muted-foreground">· app {shell}</span>
+        <span className="text-[11px] font-medium text-muted-foreground">· shell {shell}</span>
       ) : null}
     </span>
   );

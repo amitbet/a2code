@@ -150,6 +150,16 @@ export const resolveActiveBackendEntryPath: Effect.Effect<
   return environment.bundledBackendEntryPath;
 });
 
+/** The payload version selected for this launch, after promoting pending updates. */
+export const resolveActivePayloadVersion: Effect.Effect<
+  Option.Option<string>,
+  never,
+  FileSystem.FileSystem | DesktopEnvironment.DesktopEnvironment
+> = Effect.gen(function* () {
+  yield* promotePendingPayload;
+  return yield* readActivePayloadVersion;
+});
+
 /** The applied payload version (none when running the shell-bundled backend). */
 export const readActivePayloadVersion: Effect.Effect<
   Option.Option<string>,

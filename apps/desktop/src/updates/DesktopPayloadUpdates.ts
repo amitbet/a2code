@@ -25,7 +25,7 @@ import * as DesktopObservability from "../app/DesktopObservability.ts";
 import {
   type PayloadPointer,
   payloadVersionDir,
-  readActivePayloadVersion,
+  resolveActivePayloadVersion,
   shellSatisfiesPayload,
   writePayloadPointer,
 } from "./payloadLayout.ts";
@@ -110,11 +110,21 @@ export const make = Effect.gen(function* () {
   })();
   const enabled = disabledReason === null;
 
+  // payloadLayout effects read DesktopEnvironment/FileSystem from context; discharge
+  // those requirements with the services already resolved in this scope so the
+  // public service surface stays requirement-free.
+  const provideEnv = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
+    );
+
+  const initialActivePayloadVersion = yield* provideEnv(resolveActivePayloadVersion);
   const initialState: DesktopPayloadUpdateState = {
     enabled,
     status: enabled ? "idle" : "disabled",
     shellVersion,
-    currentPayloadVersion: null,
+    currentPayloadVersion: Option.getOrNull(initialActivePayloadVersion),
     availableVersion: null,
     stagedVersion: null,
     downloadPercent: null,
@@ -139,17 +149,8 @@ export const make = Effect.gen(function* () {
     f: (state: DesktopPayloadUpdateState) => DesktopPayloadUpdateState,
   ): Effect.Effect<DesktopPayloadUpdateState> => SubscriptionRef.updateAndGet(stateRef, f);
 
-  // payloadLayout effects read DesktopEnvironment/FileSystem from context; discharge
-  // those requirements with the services already resolved in this scope so the
-  // public service surface stays requirement-free.
-  const provideEnv = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-    effect.pipe(
-      Effect.provideService(FileSystem.FileSystem, fileSystem),
-      Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
-    );
-
   /** The version of the server actually running: the active payload, else the shell. */
-  const runningServerVersion = provideEnv(readActivePayloadVersion).pipe(
+  const runningServerVersion = provideEnv(resolveActivePayloadVersion).pipe(
     Effect.map(Option.getOrElse(() => shellVersion)),
   );
 

@@ -115,21 +115,22 @@ export const make = Effect.gen(function* () {
     // The About panel shows both the running content version (an applied JS
     // payload, else the shell) as the headline and the native shell version +
     // commit in the build line, so a hot-updated content version is
-    // distinguishable from the installed `.app`. The active payload is read at
-    // startup; applying a payload relaunches the app, so this stays accurate.
-    const activePayloadVersion = yield* DesktopPayloadLayout.readActivePayloadVersion.pipe(
+    // distinguishable from the installed `.app`. Resolve with the same pending
+    // promotion the backend launch uses so macOS About matches the in-app About
+    // immediately after a payload-update relaunch.
+    const activePayloadVersion = yield* DesktopPayloadLayout.resolveActivePayloadVersion.pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
     );
     const contentVersion = Option.getOrElse(activePayloadVersion, () => environment.appVersion);
     const buildLabel = [
-      `app ${environment.appVersion}`,
+      `shell ${environment.appVersion}`,
       ...(Option.isSome(commitHash) ? [commitHash.value] : []),
     ].join(" · ");
     yield* electronApp.setName(environment.displayName);
     yield* electronApp.setAboutPanelOptions({
       applicationName: environment.displayName,
-      applicationVersion: contentVersion,
+      applicationVersion: `content ${contentVersion}`,
       version: buildLabel,
     });
 

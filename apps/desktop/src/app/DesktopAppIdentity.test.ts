@@ -108,6 +108,7 @@ const withIdentity = <A, E, R>(
     readonly legacyPathExists?: boolean;
     readonly legacyPathProbeError?: PlatformError.PlatformError;
     readonly packageJson?: string;
+    readonly payloadFiles?: Readonly<Record<string, string>>;
     readonly pngIconPath?: Option.Option<string>;
   } = {},
 ) => {
@@ -125,9 +126,28 @@ const withIdentity = <A, E, R>(
             exists: (path) =>
               input.legacyPathProbeError
                 ? Effect.fail(input.legacyPathProbeError)
-                : Effect.succeed(input.legacyPathExists === true && path.includes("A2 Code")),
-            readFileString: () =>
-              Effect.succeed(input.packageJson ?? '{"t3codeCommitHash":"abcdef1234567890"}'),
+                : Effect.succeed(
+                    (input.legacyPathExists === true && path.includes("A2 Code")) ||
+                      input.payloadFiles?.[path] !== undefined,
+                  ),
+            readFileString: (path) => {
+              if (input.payloadFiles?.[path] !== undefined) {
+                return Effect.succeed(input.payloadFiles[path]);
+              }
+              return Effect.succeed(input.packageJson ?? '{"t3codeCommitHash":"abcdef1234567890"}');
+            },
+            writeFileString: (path, content) =>
+              Effect.sync(() => {
+                if (input.payloadFiles) {
+                  (input.payloadFiles as Record<string, string>)[path] = content;
+                }
+              }),
+            remove: (path) =>
+              Effect.sync(() => {
+                if (input.payloadFiles) {
+                  delete (input.payloadFiles as Record<string, string>)[path];
+                }
+              }),
           }),
         ),
         Layer.provideMerge(makeAssetsLayer(input.pngIconPath ?? Option.none())),
@@ -194,8 +214,8 @@ describe("DesktopAppIdentity", () => {
         assert.equal(calls.setAboutPanelOptions[0]?.applicationName, "A2 Code");
         // No payload applied in the test env, so the running content version is
         // the shell version; the build line carries the shell version + commit.
-        assert.equal(calls.setAboutPanelOptions[0]?.applicationVersion, "1.2.3");
-        assert.equal(calls.setAboutPanelOptions[0]?.version, "app 1.2.3 · 0123456789ab");
+        assert.equal(calls.setAboutPanelOptions[0]?.applicationVersion, "content 1.2.3");
+        assert.equal(calls.setAboutPanelOptions[0]?.version, "shell 1.2.3 · 0123456789ab");
         assert.deepEqual(calls.setDockIcon, ["/icon.png"]);
       }),
       {
@@ -206,6 +226,39 @@ describe("DesktopAppIdentity", () => {
           },
         },
         pngIconPath: Option.some("/icon.png"),
+      },
+    );
+  });
+
+  it.effect("configures the macOS About panel from a pending payload selected for launch", () => {
+    const calls: ElectronAppCalls = {
+      setAboutPanelOptions: [],
+      setDockIcon: [],
+      setName: [],
+    };
+    const payloadFiles: Record<string, string> = {
+      "/Users/alice/.a2code/userdata/payloads/pending.json": JSON.stringify({
+        version: "1.2.4",
+        minShellVersion: "1.2.3",
+        sha256: "abc",
+        stagedAt: "2026-07-02T00:00:00.000Z",
+      }),
+      "/Users/alice/.a2code/userdata/payloads/1.2.4/bin.mjs": "",
+    };
+
+    return withIdentity(
+      Effect.gen(function* () {
+        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
+        yield* identity.configure;
+
+        assert.equal(calls.setAboutPanelOptions[0]?.applicationVersion, "content 1.2.4");
+        assert.equal(calls.setAboutPanelOptions[0]?.version, "shell 1.2.3 · abcdef123456");
+        assert.property(payloadFiles, "/Users/alice/.a2code/userdata/payloads/active.json");
+        assert.notProperty(payloadFiles, "/Users/alice/.a2code/userdata/payloads/pending.json");
+      }),
+      {
+        calls,
+        payloadFiles,
       },
     );
   });
