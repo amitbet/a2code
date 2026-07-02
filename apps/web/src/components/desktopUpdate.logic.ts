@@ -32,9 +32,13 @@ export function shouldShowDesktopUpdateButton(state: DesktopUpdateState | null):
   if (!state || !state.enabled) {
     return false;
   }
-  // Both installer and in-place updates download silently in the background
-  // (VSCode-style); the button only appears once there is an actionable state —
-  // a downloaded update ready to apply, or a failed download to retry.
+  // Show the pill while an update is actively being prepared so a manual check
+  // has visible feedback before the restart action becomes available.
+  if (state.status === "downloading" && state.availableVersion !== null) {
+    return true;
+  }
+  // Once preparation finishes, the pill remains only for actionable states: a
+  // downloaded update ready to apply, or a failed download/install to retry.
   return resolveDesktopUpdateButtonAction(state) !== "none";
 }
 

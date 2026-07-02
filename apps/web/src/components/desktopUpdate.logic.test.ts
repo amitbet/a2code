@@ -94,14 +94,14 @@ describe("desktop update button state", () => {
     expect(resolveDesktopUpdateButtonAction(state)).toBe("none");
   });
 
-  it("hides the button while an installer update is downloading", () => {
+  it("shows disabled progress while an installer update is downloading", () => {
     const state: DesktopUpdateState = {
       ...baseState,
       status: "downloading",
       availableVersion: "1.1.0",
       downloadPercent: 42.5,
     };
-    expect(shouldShowDesktopUpdateButton(state)).toBe(false);
+    expect(shouldShowDesktopUpdateButton(state)).toBe(true);
     expect(resolveDesktopUpdateButtonAction(state)).toBe("none");
     // Progress is still reported for any surface that surfaces it (e.g. tooltips).
     expect(getDesktopUpdateButtonTooltip(state)).toContain("42%");
@@ -109,7 +109,7 @@ describe("desktop update button state", () => {
 });
 
 describe("in-place (payload) update button state", () => {
-  it("hides the button while the payload auto-downloads in the background", () => {
+  it("shows disabled progress while the payload auto-downloads in the background", () => {
     const state: DesktopUpdateState = {
       ...baseState,
       kind: "in-place",
@@ -117,7 +117,7 @@ describe("in-place (payload) update button state", () => {
       availableVersion: "1.1.0",
       downloadPercent: 30,
     };
-    expect(shouldShowDesktopUpdateButton(state)).toBe(false);
+    expect(shouldShowDesktopUpdateButton(state)).toBe(true);
     expect(resolveDesktopUpdateButtonAction(state)).toBe("none");
   });
 

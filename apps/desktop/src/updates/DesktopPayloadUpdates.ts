@@ -128,6 +128,7 @@ export const make = Effect.gen(function* () {
   const stateRef = yield* SubscriptionRef.make<DesktopPayloadUpdateState>(initialState);
   const checkInFlightRef = yield* Ref.make(false);
   const actionInFlightRef = yield* Ref.make(false);
+  const backgroundStageInFlightRef = yield* Ref.make<Option.Option<string>>(Option.none());
   // A staged payload sits on disk fully verified but is NOT activated: we only
   // write the `pending` pointer (which promotes on the next backend start) when
   // the user explicitly applies it. So a background auto-download never causes
@@ -263,6 +264,30 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  const stageManifestInBackground = (manifest: DesktopPayloadManifest): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      const inFlightVersion = yield* Ref.get(backgroundStageInFlightRef);
+      if (Option.isSome(inFlightVersion) && inFlightVersion.value === manifest.version) {
+        return;
+      }
+
+      yield* Ref.set(backgroundStageInFlightRef, Option.some(manifest.version));
+      yield* stageManifest(manifest).pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : logPayloadError("background payload stage failed", { cause: Cause.pretty(cause) }),
+        ),
+        Effect.ensuring(
+          Ref.update(backgroundStageInFlightRef, (current) =>
+            Option.isSome(current) && current.value === manifest.version ? Option.none() : current,
+          ),
+        ),
+        Effect.forkDetach,
+        Effect.asVoid,
+      );
+    });
+
   const fetchManifest: Effect.Effect<DesktopPayloadManifest, string> = httpClient
     .get(manifestUrl)
     .pipe(
@@ -296,7 +321,23 @@ export const make = Effect.gen(function* () {
         }));
       }
       yield* logPayloadInfo("payload update available", { version: manifest.version });
-      yield* setState((state) => ({
+      const alreadyStaged = yield* Ref.get(stagedPointerRef);
+      if (Option.isSome(alreadyStaged) && alreadyStaged.value.version === manifest.version) {
+        return yield* setState((state) => ({
+          ...state,
+          status: "staged",
+          checkedAt,
+          stagedVersion: manifest.version,
+          availableVersion: manifest.version,
+          downloadPercent: 100,
+          message: null,
+        }));
+      }
+      if (yield* Ref.get(actionInFlightRef)) {
+        return yield* SubscriptionRef.get(stateRef);
+      }
+
+      const availableState = yield* setState((state) => ({
         ...state,
         status: "available",
         checkedAt,
@@ -305,15 +346,8 @@ export const make = Effect.gen(function* () {
       }));
       // Auto-download in the background so the update is staged and ready; the
       // user still applies it explicitly via the button (a one-click restart).
-      // Skip if it is already staged, or a user action is mid-flight.
-      const alreadyStaged = yield* Ref.get(stagedPointerRef);
-      if (
-        (Option.isSome(alreadyStaged) && alreadyStaged.value.version === manifest.version) ||
-        (yield* Ref.get(actionInFlightRef))
-      ) {
-        return yield* SubscriptionRef.get(stateRef);
-      }
-      return yield* stageManifest(manifest);
+      yield* stageManifestInBackground(manifest);
+      return availableState;
     });
 
   const performCheck = (reason: string): Effect.Effect<DesktopPayloadUpdateState> =>
