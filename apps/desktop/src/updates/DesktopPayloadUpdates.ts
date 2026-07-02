@@ -274,7 +274,7 @@ export const make = Effect.gen(function* () {
     manifest: DesktopPayloadManifest,
   ): Effect.Effect<DesktopPayloadUpdateState> =>
     Effect.gen(function* () {
-      yield* setState((state) => ({ ...state, status: "downloading", downloadPercent: 0 }));
+      yield* setState((state) => ({ ...state, status: "downloading", downloadPercent: null }));
       yield* logPayloadInfo("downloading payload", { version: manifest.version });
       const assetUrl = resolveAssetUrl(manifest);
       const bytes = yield* httpClient

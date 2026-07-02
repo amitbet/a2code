@@ -4,6 +4,7 @@ import { isElectron } from "../../env";
 import { useDesktopUpdateState } from "../../state/desktopUpdate";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import {
+  formatDesktopUpdateDownloadProgress,
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
   getDesktopUpdateButtonTooltip,
@@ -24,6 +25,7 @@ export function SidebarUpdatePill() {
   const tooltip = state ? getDesktopUpdateButtonTooltip(state) : "Update available";
   const disabled = isDesktopUpdateButtonDisabled(state);
   const action = state ? resolveDesktopUpdateButtonAction(state) : "none";
+  const downloadProgress = state ? formatDesktopUpdateDownloadProgress(state) : null;
 
   const showArm64Warning = isElectron && shouldShowArm64IntelBuildWarning(state);
   const arm64Description =
@@ -141,9 +143,7 @@ export function SidebarUpdatePill() {
                       <DownloadIcon className="size-3.5" />
                       <span>
                         Downloading
-                        {typeof state.downloadPercent === "number"
-                          ? ` (${Math.floor(state.downloadPercent)}%)`
-                          : "…"}
+                        {downloadProgress ? ` (${downloadProgress})` : "…"}
                       </span>
                     </>
                   ) : (

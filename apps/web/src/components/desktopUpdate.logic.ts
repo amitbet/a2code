@@ -65,13 +65,21 @@ export function getArm64IntelBuildWarningDescription(state: DesktopUpdateState):
   return "This Mac has Apple Silicon, but A2 Code is still running the Intel build under Rosetta. The next app update will replace it with the native Apple Silicon build.";
 }
 
+export function formatDesktopUpdateDownloadProgress(state: DesktopUpdateState): string | null {
+  const percent = state.downloadPercent;
+  if (typeof percent !== "number" || percent <= 0) {
+    return null;
+  }
+  return `${Math.min(99, Math.floor(percent))}%`;
+}
+
 export function getDesktopUpdateButtonTooltip(state: DesktopUpdateState): string {
   if (state.status === "available") {
     return `Update ${state.availableVersion ?? "available"} ready to download`;
   }
   if (state.status === "downloading") {
-    const progress =
-      typeof state.downloadPercent === "number" ? ` (${Math.floor(state.downloadPercent)}%)` : "";
+    const formattedProgress = formatDesktopUpdateDownloadProgress(state);
+    const progress = formattedProgress ? ` (${formattedProgress})` : "";
     return `Downloading update${progress}`;
   }
   if (state.status === "downloaded") {

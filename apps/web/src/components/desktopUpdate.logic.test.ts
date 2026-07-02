@@ -3,6 +3,7 @@ import type { DesktopUpdateActionResult, DesktopUpdateState } from "@t3tools/con
 
 import {
   canCheckForUpdate,
+  formatDesktopUpdateDownloadProgress,
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
   getDesktopUpdateButtonTooltip,
@@ -105,6 +106,36 @@ describe("desktop update button state", () => {
     expect(resolveDesktopUpdateButtonAction(state)).toBe("none");
     // Progress is still reported for any surface that surfaces it (e.g. tooltips).
     expect(getDesktopUpdateButtonTooltip(state)).toContain("42%");
+  });
+
+  it("treats zero download progress as indeterminate", () => {
+    const state: DesktopUpdateState = {
+      ...baseState,
+      status: "downloading",
+      availableVersion: "1.1.0",
+      downloadPercent: 0,
+    };
+    expect(formatDesktopUpdateDownloadProgress(state)).toBeNull();
+    expect(getDesktopUpdateButtonTooltip(state)).toBe("Downloading update");
+  });
+
+  it("formats positive download progress and caps it below completion", () => {
+    expect(
+      formatDesktopUpdateDownloadProgress({
+        ...baseState,
+        status: "downloading",
+        availableVersion: "1.1.0",
+        downloadPercent: 42.5,
+      }),
+    ).toBe("42%");
+    expect(
+      formatDesktopUpdateDownloadProgress({
+        ...baseState,
+        status: "downloading",
+        availableVersion: "1.1.0",
+        downloadPercent: 100,
+      }),
+    ).toBe("99%");
   });
 });
 
