@@ -75,6 +75,9 @@ export function useThreadActions() {
   const unarchiveThreadMutation = useAtomCommand(threadEnvironment.unarchive, {
     reportFailure: false,
   });
+  const updateThreadMetadataMutation = useAtomCommand(threadEnvironment.updateMetadata, {
+    reportFailure: false,
+  });
   const deleteThreadMutation = useAtomCommand(threadEnvironment.delete, {
     reportFailure: false,
   });
@@ -174,6 +177,18 @@ export function useThreadActions() {
       return result;
     },
     [unarchiveThreadMutation],
+  );
+
+  const setThreadPinned = useCallback(
+    async (target: ScopedThreadRef, pinned: boolean) =>
+      updateThreadMetadataMutation({
+        environmentId: target.environmentId,
+        input: {
+          threadId: target.threadId,
+          pinnedAt: pinned ? new Date().toISOString() : null,
+        },
+      }),
+    [updateThreadMetadataMutation],
   );
 
   const deleteThread = useCallback(
@@ -443,7 +458,15 @@ export function useThreadActions() {
       deleteThread,
       confirmAndDeleteThread,
       forkThread,
+      setThreadPinned,
     }),
-    [archiveThread, confirmAndDeleteThread, deleteThread, forkThread, unarchiveThread],
+    [
+      archiveThread,
+      confirmAndDeleteThread,
+      deleteThread,
+      forkThread,
+      setThreadPinned,
+      unarchiveThread,
+    ],
   );
 }

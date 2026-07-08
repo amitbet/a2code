@@ -7,6 +7,7 @@ import {
   FolderPlusIcon,
   Globe2Icon,
   LoaderIcon,
+  PinIcon,
   SearchIcon,
   SettingsIcon,
   SquarePenIcon,
@@ -712,6 +713,21 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
             </Tooltip>
           )}
           {threadStatus && <ThreadStatusLabel status={threadStatus} />}
+          {thread.pinnedAt ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span
+                    aria-label="Pinned thread"
+                    className="inline-flex shrink-0 items-center justify-center text-muted-foreground/70"
+                  />
+                }
+              >
+                <PinIcon className="size-3" />
+              </TooltipTrigger>
+              <TooltipPopup side="top">Pinned</TooltipPopup>
+            </Tooltip>
+          ) : null}
           {renamingThreadKey === threadKey ? (
             <input
               ref={handleRenameInputRef}
@@ -1073,6 +1089,7 @@ interface SidebarProjectItemProps {
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
   deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
   forkThread: ReturnType<typeof useThreadActions>["forkThread"];
+  setThreadPinned: ReturnType<typeof useThreadActions>["setThreadPinned"];
   threadJumpLabelByKey: ReadonlyMap<string, string>;
   attachThreadListAutoAnimateRef: (node: HTMLElement | null) => void;
   expandThreadListForProject: (projectKey: string) => void;
@@ -1094,6 +1111,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     archiveThread,
     deleteThread,
     forkThread,
+    setThreadPinned,
     threadJumpLabelByKey,
     attachThreadListAutoAnimateRef,
     expandThreadListForProject,
@@ -2152,6 +2170,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         [
           { id: "rename", label: "Rename thread" },
           { id: "fork", label: "Fork thread" },
+          {
+            id: thread.pinnedAt ? "unpin" : "pin",
+            label: thread.pinnedAt ? "Unpin thread" : "Pin thread",
+          },
           { id: "mark-unread", label: "Mark unread" },
           { id: "copy-path", label: "Copy Path" },
           { id: "copy-thread-id", label: "Copy Thread ID" },
@@ -2176,6 +2198,21 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
               type: "error",
               title: "Fork failed",
               description: error instanceof Error ? error.message : "Could not fork this thread.",
+            }),
+          );
+        }
+        return;
+      }
+
+      if (clicked === "pin" || clicked === "unpin") {
+        const result = await setThreadPinned(threadRef, clicked === "pin");
+        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: clicked === "pin" ? "Failed to pin thread" : "Failed to unpin thread",
+              description: error instanceof Error ? error.message : "An error occurred.",
             }),
           );
         }
@@ -2277,6 +2314,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       markThreadUnread,
       memberProjectByScopedKey,
       project.workspaceRoot,
+      setThreadPinned,
       startThreadRename,
     ],
   );
@@ -2943,6 +2981,7 @@ interface SidebarProjectsContentProps {
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
   deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
   forkThread: ReturnType<typeof useThreadActions>["forkThread"];
+  setThreadPinned: ReturnType<typeof useThreadActions>["setThreadPinned"];
   sortedProjects: readonly SidebarProjectSnapshot[];
   expandedThreadListsByProject: ReadonlySet<string>;
   activeRouteProjectKey: string | null;
@@ -2985,6 +3024,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     archiveThread,
     deleteThread,
     forkThread,
+    setThreadPinned,
     sortedProjects,
     expandedThreadListsByProject,
     activeRouteProjectKey,
@@ -3139,6 +3179,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                         archiveThread={archiveThread}
                         deleteThread={deleteThread}
                         forkThread={forkThread}
+                        setThreadPinned={setThreadPinned}
                         threadJumpLabelByKey={threadJumpLabelByKey}
                         attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
                         expandThreadListForProject={expandThreadListForProject}
@@ -3172,6 +3213,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                 archiveThread={archiveThread}
                 deleteThread={deleteThread}
                 forkThread={forkThread}
+                setThreadPinned={setThreadPinned}
                 threadJumpLabelByKey={threadJumpLabelByKey}
                 attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
                 expandThreadListForProject={expandThreadListForProject}
@@ -3212,7 +3254,7 @@ export default function Sidebar() {
   const sidebarThreadPreviewCount = useClientSettings((s) => s.sidebarThreadPreviewCount);
   const updateSettings = useUpdateClientSettings();
   const handleNewThread = useNewThreadHandler();
-  const { archiveThread, deleteThread, forkThread } = useThreadActions();
+  const { archiveThread, deleteThread, forkThread, setThreadPinned } = useThreadActions();
   const { isMobile, setOpenMobile } = useSidebar();
   const routeThreadRef = useParams({
     strict: false,
@@ -3820,6 +3862,7 @@ export default function Sidebar() {
             archiveThread={archiveThread}
             deleteThread={deleteThread}
             forkThread={forkThread}
+            setThreadPinned={setThreadPinned}
             sortedProjects={sortedProjects}
             expandedThreadListsByProject={expandedThreadListsByProject}
             activeRouteProjectKey={activeRouteProjectKey}

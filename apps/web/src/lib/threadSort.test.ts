@@ -27,6 +27,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     queuedPrompts: [],
     createdAt: "2026-03-09T10:00:00.000Z",
     archivedAt: null,
+    pinnedAt: null,
     deletedAt: null,
     updatedAt: "2026-03-09T10:00:00.000Z",
     latestTurn: null,
@@ -187,6 +188,50 @@ describe("sortThreads", () => {
     expect(sorted.map((thread) => thread.id)).toEqual([
       ThreadId.make("thread-1"),
       ThreadId.make("thread-2"),
+    ]);
+  });
+
+  it("keeps pinned threads above unpinned threads", () => {
+    const sorted = sortThreads(
+      [
+        makeThread({
+          id: ThreadId.make("thread-newer-unpinned"),
+          updatedAt: "2026-03-09T10:20:00.000Z",
+          pinnedAt: null,
+        }),
+        makeThread({
+          id: ThreadId.make("thread-older-pinned"),
+          updatedAt: "2026-03-09T10:00:00.000Z",
+          pinnedAt: "2026-03-09T10:05:00.000Z",
+        }),
+      ],
+      "updated_at",
+    );
+
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      ThreadId.make("thread-older-pinned"),
+      ThreadId.make("thread-newer-unpinned"),
+    ]);
+  });
+
+  it("orders pinned threads by the most recent pin time", () => {
+    const sorted = sortThreads(
+      [
+        makeThread({
+          id: ThreadId.make("thread-pinned-first"),
+          pinnedAt: "2026-03-09T10:05:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.make("thread-pinned-second"),
+          pinnedAt: "2026-03-09T10:10:00.000Z",
+        }),
+      ],
+      "updated_at",
+    );
+
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      ThreadId.make("thread-pinned-second"),
+      ThreadId.make("thread-pinned-first"),
     ]);
   });
 

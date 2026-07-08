@@ -38,6 +38,7 @@ function makeThread(
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
     ...input,
+    pinnedAt: input.pinnedAt ?? null,
   };
 }
 

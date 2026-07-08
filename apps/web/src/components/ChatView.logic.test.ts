@@ -43,6 +43,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     createdAt: now,
     updatedAt: now,
     archivedAt: null,
+    pinnedAt: null,
     deletedAt: null,
     latestTurn: null,
     branch: null,
