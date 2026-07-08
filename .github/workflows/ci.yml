@@ -2,6 +2,11 @@ name: Build Artifacts
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing release tag to attach the Android preview APK to (optional, for example v1.2.3)"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -11,7 +16,9 @@ jobs:
     name: Build Android preview APK
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    continue-on-error: true
+    continue-on-error: ${{ inputs.release_tag == '' }}
+    permissions:
+      contents: write
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
@@ -66,6 +73,30 @@ jobs:
           path: apps/mobile/android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 7
+
+      - name: Verify target release
+        if: ${{ success() && inputs.release_tag != '' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+
+      - name: Upload Android APK to release
+        if: ${{ success() && inputs.release_tag != '' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(apps/mobile/android/app/build/outputs/apk/debug/*.apk)
+          if (( ${#files[@]} == 0 )); then
+            echo "Android preview APK was not found." >&2
+            exit 1
+          fi
+          gh release upload "$RELEASE_TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
 
   build_macos_arm64:
     name: Build macOS arm64
