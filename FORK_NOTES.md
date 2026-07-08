@@ -231,6 +231,38 @@ the next merge; the per-feature sections below were updated to match.
     `apps/web/src/composer-logic.ts` — **modified**: `/fork` slash command
     (`"fork"` added to `ComposerSlashCommand`) and its handler.
 
+### Pinned project threads
+
+- Adds a persisted per-thread `pinnedAt` metadata field. Pinned threads stay at
+  the top of their project's thread list, ordered by most recent pin time before
+  falling back to the existing sidebar thread sort. The sidebar renders a pin
+  icon immediately to the left of pinned thread titles.
+- Entry point: sidebar thread context menu, **Pin thread** / **Unpin thread**.
+- Merge note: migration `035_ProjectionThreadsPinnedAt` is fork-added. Renumber
+  or reconcile if upstream adds a migration with id `35`.
+- Files:
+  - `packages/contracts/src/orchestration.ts` — **modified**: optional
+    `pinnedAt` on thread detail/shell schemas and thread metadata update command
+    / event payload.
+  - `packages/client-runtime/src/state/threadSort.ts` — **modified**: pinned
+    threads sort before unpinned threads.
+  - `packages/client-runtime/src/state/threadReducer.ts` — **modified**:
+    carries `pinnedAt` through thread metadata updates.
+  - `apps/server/src/orchestration/{decider,projector}.ts` — **modified**:
+    accepts pin/unpin metadata updates and projects them into the read model.
+  - `apps/server/src/orchestration/Layers/{ProjectionPipeline,ProjectionSnapshotQuery}.ts`
+    — **modified**: persists and reads `pinnedAt` for thread rows and snapshots.
+  - `apps/server/src/persistence/Services/ProjectionThreads.ts` +
+    `Layers/ProjectionThreads.ts` — **modified**: `pinnedAt` field +
+    `pinned_at` column in INSERT / ON CONFLICT / SELECTs.
+  - `apps/server/src/persistence/Migrations/035_ProjectionThreadsPinnedAt.ts` —
+    **fork-added**: adds nullable `pinned_at` to `projection_threads`;
+    registered in `apps/server/src/persistence/Migrations.ts` as id `35`.
+  - `apps/web/src/hooks/useThreadActions.ts` — **modified**: `setThreadPinned`
+    dispatches through `thread.meta.update`.
+  - `apps/web/src/components/Sidebar.tsx` — **modified**: context-menu actions
+    and pin icon beside thread titles.
+
 ### Thread references (`@thread_ref:<id>`)
 
 - A second consumer of the thread-artifact primitive: an inline
@@ -551,6 +583,8 @@ build:desktop` → `vp run dist:payload:asset`, using the
     resolving — see the "Payload hot-update channel" feature above.
   - `mobile-eas-preview.yml` — **deleted in the fork** (the Android build lives in
     `ci.yml`). On a modify/delete conflict, keep it deleted (`git rm`).
+  - `mobile-eas-production.yml` — **deleted in the fork** (upstream-added in the
+    2026-07-08 merge window). Keep it deleted alongside `mobile-eas-preview.yml`.
   - Upstream-only workflows the fork does **not** carry: `deploy-relay.yml`,
     `issue-labels.yml`, `pr-size.yml`, `pr-vouch.yml`. Don't add them unless
     deliberately adopting them.

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { EventId, type OrchestrationThreadActivity } from "@t3tools/contracts";
 import {
   RATE_LIMIT_STALE_AFTER_MS,

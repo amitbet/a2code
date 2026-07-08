@@ -104,7 +104,7 @@ const readClaudeOAuthToken = (homePath: string | undefined): Effect.Effect<strin
       NodeFSP.readFile(NodePath.join(configDir, ".credentials.json"), "utf-8"),
     ).pipe(
       Effect.map(parseStoredOAuth),
-      Effect.catch(() => Effect.succeed(null)),
+      Effect.orElseSucceed(() => null),
     );
     const hostPlatform = yield* HostProcessPlatform;
 
@@ -122,7 +122,7 @@ const readClaudeOAuthToken = (homePath: string | undefined): Effect.Effect<strin
             ]),
           ).pipe(
             Effect.map((result) => parseStoredOAuth(result.stdout)),
-            Effect.catch(() => Effect.succeed(null)),
+            Effect.orElseSucceed(() => null),
           )
         : null);
 
@@ -151,7 +151,7 @@ const fetchUtilization = (
     return yield* httpClient.execute(request).pipe(
       Effect.flatMap(HttpClientResponse.filterStatusOk),
       Effect.flatMap(HttpClientResponse.schemaBodyJson(UtilizationSchema)),
-      Effect.catch(() => Effect.succeed(null)),
+      Effect.orElseSucceed(() => null),
     );
   });
 
