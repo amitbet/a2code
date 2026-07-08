@@ -370,6 +370,18 @@ export const make = Effect.gen(function* () {
         }));
       }
       yield* logPayloadInfo("payload update available", { version: manifest.version });
+      const currentState = yield* SubscriptionRef.get(stateRef);
+      if (currentState.stagedVersion === manifest.version) {
+        return yield* setState((state) => ({
+          ...state,
+          status: "staged",
+          checkedAt,
+          stagedVersion: manifest.version,
+          availableVersion: manifest.version,
+          downloadPercent: 100,
+          message: null,
+        }));
+      }
       const alreadyStaged = yield* Ref.get(stagedPointerRef);
       if (Option.isSome(alreadyStaged) && alreadyStaged.value.version === manifest.version) {
         return yield* setState((state) => ({
@@ -382,6 +394,16 @@ export const make = Effect.gen(function* () {
           message: null,
         }));
       }
+      const stagingVersion = yield* Ref.get(backgroundStageInFlightRef);
+      if (Option.isSome(stagingVersion) && stagingVersion.value === manifest.version) {
+        return yield* setState((state) => ({
+          ...state,
+          status: state.status === "downloading" ? "downloading" : "available",
+          checkedAt,
+          availableVersion: manifest.version,
+          message: null,
+        }));
+      }
       if (yield* Ref.get(actionInFlightRef)) {
         return yield* SubscriptionRef.get(stateRef);
       }
@@ -391,6 +413,7 @@ export const make = Effect.gen(function* () {
         status: "available",
         checkedAt,
         availableVersion: manifest.version,
+        downloadPercent: null,
         message: null,
       }));
       // Auto-download in the background so the update is staged and ready; the

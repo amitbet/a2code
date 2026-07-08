@@ -60,7 +60,9 @@ export function payloadUpdateStateToDesktopUpdateState(
       return { ...base, status: "up-to-date", availableVersion: null };
     case "available":
       // Detected; the background auto-download is starting — show as busy.
-      return { ...base, status: "downloading", downloadPercent: payload.downloadPercent };
+      // Progress belongs only to a real download event. Keeping stale staged
+      // progress here makes a freshly rechecked update render as "99%".
+      return { ...base, status: "downloading", downloadPercent: null };
     case "downloading":
       return { ...base, status: "downloading", downloadPercent: payload.downloadPercent };
     case "staged":

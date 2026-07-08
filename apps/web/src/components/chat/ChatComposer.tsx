@@ -1075,9 +1075,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
   const isComposerApprovalState = activePendingApproval !== null;
   const activePendingUserInput = pendingUserInputs[0] ?? null;
+  const activePendingUserInputRequestId = activePendingUserInput?.requestId ?? null;
+  const [pendingUserInputPanelState, setPendingUserInputPanelState] = useState<{
+    requestId: ApprovalRequestId;
+    mode: "collapsed" | "dismissed";
+  } | null>(null);
+  const pendingUserInputPanelMode =
+    pendingUserInputPanelState?.requestId === activePendingUserInputRequestId
+      ? pendingUserInputPanelState.mode
+      : "expanded";
+  const showPendingUserInputPanel =
+    pendingUserInputs.length > 0 && pendingUserInputPanelMode !== "dismissed";
+  const isPendingUserInputPanelCollapsed = pendingUserInputPanelMode === "collapsed";
   const hasComposerHeader =
     isComposerApprovalState ||
-    pendingUserInputs.length > 0 ||
+    showPendingUserInputPanel ||
     (showPlanFollowUpPrompt && activeProposedPlan !== null);
   const showCollapsedMobilePromptRow =
     isComposerCollapsedMobile && !isComposerApprovalState && pendingUserInputs.length === 0;
@@ -1177,7 +1189,38 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const collapsedComposerPrimaryActionLabel =
     phase === "running" ? "Queue message" : "Send message";
   const showMobilePendingAnswerActions =
-    isMobileViewport && !isComposerCollapsedMobile && pendingPrimaryAction !== null;
+    isMobileViewport &&
+    !isComposerCollapsedMobile &&
+    pendingPrimaryAction !== null &&
+    pendingUserInputPanelMode !== "dismissed";
+
+  useEffect(() => {
+    setPendingUserInputPanelState((current) =>
+      current !== null && current.requestId === activePendingUserInputRequestId ? current : null,
+    );
+  }, [activePendingUserInputRequestId]);
+
+  const collapsePendingUserInputPanel = useCallback(() => {
+    if (!activePendingUserInputRequestId) return;
+    setPendingUserInputPanelState({
+      requestId: activePendingUserInputRequestId,
+      mode: "collapsed",
+    });
+  }, [activePendingUserInputRequestId]);
+
+  const expandPendingUserInputPanel = useCallback(() => {
+    setPendingUserInputPanelState((current) =>
+      current !== null && current.requestId === activePendingUserInputRequestId ? null : current,
+    );
+  }, [activePendingUserInputRequestId]);
+
+  const dismissPendingUserInputPanel = useCallback(() => {
+    if (!activePendingUserInputRequestId) return;
+    setPendingUserInputPanelState({
+      requestId: activePendingUserInputRequestId,
+      mode: "dismissed",
+    });
+  }, [activePendingUserInputRequestId]);
 
   // ------------------------------------------------------------------
   // Prompt helpers
@@ -2159,15 +2202,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   pendingCount={pendingApprovals.length}
                 />
               </div>
-            ) : pendingUserInputs.length > 0 ? (
+            ) : showPendingUserInputPanel ? (
               <div className="rounded-t-[19px] border-b border-border/65 bg-muted/20">
                 <ComposerPendingUserInputPanel
                   pendingUserInputs={pendingUserInputs}
                   respondingRequestIds={respondingRequestIds}
                   answers={activePendingDraftAnswers}
                   questionIndex={activePendingQuestionIndex}
+                  collapsed={isPendingUserInputPanelCollapsed}
                   onToggleOption={onSelectActivePendingUserInputOption}
                   onAdvance={onAdvanceActivePendingUserInput}
+                  onCollapse={collapsePendingUserInputPanel}
+                  onExpand={expandPendingUserInputPanel}
+                  onDismiss={dismissPendingUserInputPanel}
                 />
               </div>
             ) : showPlanFollowUpPrompt && activeProposedPlan ? (
@@ -2196,7 +2243,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 />
               </div>
             </div>
-          ) : isComposerCollapsedMobile && pendingUserInputs.length > 0 ? (
+          ) : isComposerCollapsedMobile && showPendingUserInputPanel ? (
             <div
               className="rounded-t-[19px] border-b border-border/65 bg-muted/20"
               data-chat-composer-collapsed-controls="true"
@@ -2206,8 +2253,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 respondingRequestIds={respondingRequestIds}
                 answers={activePendingDraftAnswers}
                 questionIndex={activePendingQuestionIndex}
+                collapsed={isPendingUserInputPanelCollapsed}
                 onToggleOption={onSelectActivePendingUserInputOption}
                 onAdvance={onAdvanceActivePendingUserInput}
+                onCollapse={collapsePendingUserInputPanel}
+                onExpand={expandPendingUserInputPanel}
+                onDismiss={dismissPendingUserInputPanel}
               />
               <div className="px-3 pb-3 sm:px-4">
                 <div
@@ -2537,12 +2588,23 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               data-chat-composer-footer-compact={isComposerFooterCompact ? "true" : "false"}
               className={cn(
                 "flex min-w-0 flex-nowrap items-center justify-between gap-2 overflow-visible px-2.5 pb-2.5 sm:px-3 sm:pb-3",
-                pendingUserInputs.length > 0 && "pt-2",
+                showPendingUserInputPanel && "pt-2",
                 isComposerFooterCompact ? "gap-1.5" : "gap-2 sm:gap-0",
                 showMobilePendingAnswerActions && "hidden sm:flex",
               )}
             >
               <div className="-m-1 flex min-w-0 flex-1 items-center gap-1 overflow-x-auto p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {pendingUserInputPanelMode === "dismissed" && activePendingUserInputRequestId ? (
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    className="shrink-0"
+                    onClick={expandPendingUserInputPanel}
+                  >
+                    <ListTodoIcon className="size-3.5" />
+                    Questions
+                  </Button>
+                ) : null}
                 <ProviderModelPicker
                   compact={isComposerFooterCompact}
                   activeInstanceId={selectedInstanceId}

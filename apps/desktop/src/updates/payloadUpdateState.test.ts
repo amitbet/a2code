@@ -69,6 +69,16 @@ describe("payloadUpdateStateToDesktopUpdateState", () => {
     );
     expect(state.status).toBe("downloading");
     expect(state.availableVersion).toBe("1.5.0");
+    expect(state.downloadPercent).toBeNull();
+  });
+
+  it("does not reuse stale staged progress for a newly available payload", () => {
+    const state = payloadUpdateStateToDesktopUpdateState(
+      payloadState({ status: "available", availableVersion: "1.6.0", downloadPercent: 100 }),
+      staticInfo,
+    );
+    expect(state.status).toBe("downloading");
+    expect(state.downloadPercent).toBeNull();
   });
 
   it("maps payload downloading to a busy state with progress", () => {

@@ -130,6 +130,43 @@ const makePayloadHttpClientLayer = (input: {
     }),
   );
 
+const makeMutablePayloadHttpClientLayer = (input: {
+  readonly manifestUrl: string;
+  readonly current: {
+    manifest: DesktopPayloadManifest;
+    archiveBytes: Uint8Array;
+  };
+}) =>
+  Layer.succeed(
+    HttpClient.HttpClient,
+    HttpClient.make((request) => {
+      const manifest = input.current.manifest;
+      const archiveUrl = new URL(manifest.fileName, input.manifestUrl).toString();
+      const body =
+        request.url === input.manifestUrl
+          ? JSON.stringify(manifest)
+          : request.url === archiveUrl
+            ? makeChunkedResponse(input.current.archiveBytes)
+            : "not found";
+      const status = request.url === input.manifestUrl || request.url === archiveUrl ? 200 : 404;
+      return Effect.succeed(HttpClientResponse.fromWeb(request, new Response(body, { status })));
+    }),
+  );
+
+const makeManifest = (input: {
+  readonly version: string;
+  readonly archiveBytes: Uint8Array;
+}): DesktopPayloadManifest => ({
+  schemaVersion: 1,
+  version: input.version,
+  minShellVersion: "1.2.3",
+  fileName: `payload-${input.version}.tar.gz`,
+  sizeBytes: input.archiveBytes.byteLength,
+  sha256: computeSha256Hex(input.archiveBytes),
+  signature: "",
+  createdAt: "2026-07-02T00:00:00.000Z",
+});
+
 describe("DesktopPayloadUpdates", () => {
   it.effect("initializes currentPayloadVersion from the launch-selected pending payload", () => {
     const payloadFiles: Record<string, string> = {
@@ -200,6 +237,49 @@ describe("DesktopPayloadUpdates", () => {
             T3CODE_PAYLOAD_MANIFEST_URL: manifestUrl,
           },
           httpClientLayer: makePayloadHttpClientLayer({ manifestUrl, archiveBytes, manifest }),
+        }),
+      ),
+    );
+  });
+
+  it.effect("does not carry staged progress into a newer available payload", () => {
+    const payloadFiles: Record<string, string> = {};
+    const archiveBytes = createPayloadArchive([
+      { path: "bin.mjs", data: new TextEncoder().encode("console.log('server')\n") },
+      { path: "client/index.html", data: new TextEncoder().encode("<!doctype html>") },
+    ]);
+    const nextArchiveBytes = createPayloadArchive([
+      { path: "bin.mjs", data: new TextEncoder().encode("console.log('new server')\n") },
+      { path: "client/index.html", data: new TextEncoder().encode("<!doctype html>") },
+    ]);
+    const manifestUrl = "https://updates.test/payload-manifest.json";
+    const current = {
+      manifest: makeManifest({ version: "1.2.4", archiveBytes }),
+      archiveBytes,
+    };
+
+    return Effect.gen(function* () {
+      const payloadUpdates = yield* DesktopPayloadUpdates.DesktopPayloadUpdates;
+
+      const staged = yield* payloadUpdates.download;
+      assert.equal(staged.status, "staged");
+      assert.equal(staged.downloadPercent, 100);
+
+      current.manifest = makeManifest({ version: "1.2.5", archiveBytes: nextArchiveBytes });
+      current.archiveBytes = nextArchiveBytes;
+
+      const checked = yield* payloadUpdates.check("manual");
+      assert.equal(checked.status, "available");
+      assert.equal(checked.availableVersion, "1.2.5");
+      assert.equal(checked.downloadPercent, null);
+    }).pipe(
+      Effect.provide(
+        makePayloadLayer(payloadFiles, {
+          config: {
+            T3CODE_PAYLOAD_ALLOW_UNSIGNED: "true",
+            T3CODE_PAYLOAD_MANIFEST_URL: manifestUrl,
+          },
+          httpClientLayer: makeMutablePayloadHttpClientLayer({ manifestUrl, current }),
         }),
       ),
     );
