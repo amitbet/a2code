@@ -1044,6 +1044,8 @@ function UserTimelineRow({
                     <img
                       src={image.previewUrl}
                       alt={image.name}
+                      loading="lazy"
+                      decoding="async"
                       className="block h-auto max-h-[220px] w-full object-cover"
                     />
                   </button>
@@ -1517,6 +1519,8 @@ function UserMessagePreviewAnnotationCard(props: {
           <img
             src={props.image.previewUrl}
             alt="Annotated preview crop"
+            loading="lazy"
+            decoding="async"
             className="size-full object-cover"
           />
         </button>
