@@ -2529,6 +2529,128 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
   ),
 );
 
+it.layer(BaseTestLayer)("OrchestrationProjectionPipeline pending turn cleanup", (it) => {
+  it.effect("clears pending turn-start placeholders when an interrupt has no provider turn", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("thread-pending-interrupt");
+      const messageId = MessageId.make("message-pending-interrupt");
+      const requestedAt = "2026-02-26T15:00:00.000Z";
+      const interruptedAt = "2026-02-26T15:00:05.000Z";
+      const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
+        eventStore
+          .append(event)
+          .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+
+      yield* appendAndProject({
+        type: "thread.turn-start-requested",
+        eventId: EventId.make("evt-pending-interrupt-1"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: requestedAt,
+        commandId: CommandId.make("cmd-pending-interrupt-1"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-pending-interrupt-1"),
+        metadata: {},
+        payload: {
+          threadId,
+          messageId,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: requestedAt,
+        },
+      });
+
+      yield* appendAndProject({
+        type: "thread.turn-interrupt-requested",
+        eventId: EventId.make("evt-pending-interrupt-2"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: interruptedAt,
+        commandId: CommandId.make("cmd-pending-interrupt-2"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-pending-interrupt-2"),
+        metadata: {},
+        payload: {
+          threadId,
+          createdAt: interruptedAt,
+        },
+      });
+
+      const pendingRows = yield* sql<{ readonly count: number }>`
+          SELECT COUNT(*) AS count
+          FROM projection_turns
+          WHERE thread_id = ${threadId}
+            AND turn_id IS NULL
+            AND state = 'pending'
+        `;
+      assert.deepEqual(pendingRows, [{ count: 0 }]);
+    }),
+  );
+
+  it.effect("clears pending turn-start placeholders when a session stop is requested", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.make("thread-pending-session-stop");
+      const messageId = MessageId.make("message-pending-session-stop");
+      const requestedAt = "2026-02-26T15:10:00.000Z";
+      const stoppedAt = "2026-02-26T15:10:05.000Z";
+      const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
+        eventStore
+          .append(event)
+          .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+
+      yield* appendAndProject({
+        type: "thread.turn-start-requested",
+        eventId: EventId.make("evt-pending-session-stop-1"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: requestedAt,
+        commandId: CommandId.make("cmd-pending-session-stop-1"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-pending-session-stop-1"),
+        metadata: {},
+        payload: {
+          threadId,
+          messageId,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          createdAt: requestedAt,
+        },
+      });
+
+      yield* appendAndProject({
+        type: "thread.session-stop-requested",
+        eventId: EventId.make("evt-pending-session-stop-2"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: stoppedAt,
+        commandId: CommandId.make("cmd-pending-session-stop-2"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-pending-session-stop-2"),
+        metadata: {},
+        payload: {
+          threadId,
+          createdAt: stoppedAt,
+        },
+      });
+
+      const pendingRows = yield* sql<{ readonly count: number }>`
+          SELECT COUNT(*) AS count
+          FROM projection_turns
+          WHERE thread_id = ${threadId}
+            AND turn_id IS NULL
+            AND state = 'pending'
+        `;
+      assert.deepEqual(pendingRows, [{ count: 0 }]);
+    }),
+  );
+});
+
 const engineLayer = it.layer(
   OrchestrationEngineLive.pipe(
     Layer.provide(OrchestrationProjectionSnapshotQueryLive),

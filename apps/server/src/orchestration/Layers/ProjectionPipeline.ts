@@ -1126,6 +1126,16 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         case "thread.session-set": {
           const turnId = event.payload.session.activeTurnId;
           if (turnId === null || event.payload.session.status !== "running") {
+            if (
+              event.payload.session.status === "stopped" ||
+              event.payload.session.status === "interrupted" ||
+              event.payload.session.status === "error"
+            ) {
+              yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
+                threadId: event.payload.threadId,
+              });
+            }
+
             // Leaving the "running" session status is the turn-end signal:
             // settle still-running turns so their duration reflects the whole
             // turn rather than the last assistant message.
@@ -1312,6 +1322,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
 
         case "thread.turn-interrupt-requested": {
           if (event.payload.turnId === undefined) {
+            yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
+              threadId: event.payload.threadId,
+            });
             return;
           }
           const existingTurn = yield* projectionTurnRepository.getByTurnId({
@@ -1343,6 +1356,13 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             checkpointRef: null,
             checkpointStatus: null,
             checkpointFiles: [],
+          });
+          return;
+        }
+
+        case "thread.session-stop-requested": {
+          yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
+            threadId: event.payload.threadId,
           });
           return;
         }

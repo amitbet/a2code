@@ -1088,8 +1088,10 @@ const makeWsRpcLayer = (
               // live subscription is attached (into a scope-bound buffer) before
               // draining the catch-up replay so no event published during the
               // replay window is lost; overlapping events are deduped by sequence
-              // on the client. The full range is read (not the store's default
-              // page limit) since the shell filter runs after reading.
+              // on the client. Keep the catch-up bounded to the event store's
+              // normal default.
+              // A stale client cursor can otherwise force the backend to decode
+              // the entire global event log before filtering shell events.
               if (input.afterSequence !== undefined) {
                 const afterSequence = input.afterSequence;
                 return Stream.unwrap(
@@ -1098,21 +1100,19 @@ const makeWsRpcLayer = (
                     yield* Effect.forkScoped(
                       liveStream.pipe(Stream.runForEach((item) => Queue.offer(liveBuffer, item))),
                     );
-                    const catchUpStream = orchestrationEngine
-                      .readEvents(afterSequence, Number.MAX_SAFE_INTEGER)
-                      .pipe(
-                        Stream.mapEffect(toShellStreamEvent),
-                        Stream.flatMap((event) =>
-                          Option.isSome(event) ? Stream.succeed(event.value) : Stream.empty,
-                        ),
-                        Stream.mapError(
-                          (cause) =>
-                            new OrchestrationGetSnapshotError({
-                              message: "Failed to replay orchestration shell events",
-                              cause,
-                            }),
-                        ),
-                      );
+                    const catchUpStream = orchestrationEngine.readEvents(afterSequence).pipe(
+                      Stream.mapEffect(toShellStreamEvent),
+                      Stream.flatMap((event) =>
+                        Option.isSome(event) ? Stream.succeed(event.value) : Stream.empty,
+                      ),
+                      Stream.mapError(
+                        (cause) =>
+                          new OrchestrationGetSnapshotError({
+                            message: "Failed to replay orchestration shell events",
+                            cause,
+                          }),
+                      ),
+                    );
                     return Stream.concat(catchUpStream, Stream.fromQueue(liveBuffer));
                   }),
                 );
@@ -1188,10 +1188,12 @@ const makeWsRpcLayer = (
               // catch-up followed by the buffered/ongoing live events. Overlapping
               // events are deduped by sequence on the client.
               //
-              // Read the full range after the cursor (not the store's default
-              // page-bounded limit): the range is normally tiny (a fresh HTTP
-              // snapshot sequence) and the per-thread filter runs after reading,
-              // so a global cap could otherwise omit this thread's events.
+              // Keep the catch-up bounded to the event store's normal default.
+              // A stale client cursor can otherwise force the backend to decode
+              // the entire global event log before filtering this thread's
+              // events. Missing older catch-up events are preferable to taking
+              // down the backend; fresh snapshots remain available for cold
+              // loads.
               if (input.afterSequence !== undefined) {
                 const afterSequence = input.afterSequence;
                 return Stream.unwrap(
@@ -1200,19 +1202,17 @@ const makeWsRpcLayer = (
                     yield* Effect.forkScoped(
                       liveStream.pipe(Stream.runForEach((item) => Queue.offer(liveBuffer, item))),
                     );
-                    const catchUpStream = orchestrationEngine
-                      .readEvents(afterSequence, Number.MAX_SAFE_INTEGER)
-                      .pipe(
-                        Stream.filter(isThisThreadDetailEvent),
-                        Stream.map((event) => ({ kind: "event" as const, event })),
-                        Stream.mapError(
-                          (cause) =>
-                            new OrchestrationGetSnapshotError({
-                              message: `Failed to replay thread ${input.threadId} events`,
-                              cause,
-                            }),
-                        ),
-                      );
+                    const catchUpStream = orchestrationEngine.readEvents(afterSequence).pipe(
+                      Stream.filter(isThisThreadDetailEvent),
+                      Stream.map((event) => ({ kind: "event" as const, event })),
+                      Stream.mapError(
+                        (cause) =>
+                          new OrchestrationGetSnapshotError({
+                            message: `Failed to replay thread ${input.threadId} events`,
+                            cause,
+                          }),
+                      ),
+                    );
                     return Stream.concat(catchUpStream, Stream.fromQueue(liveBuffer));
                   }),
                 );

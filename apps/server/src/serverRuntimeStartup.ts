@@ -34,6 +34,7 @@ import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ProviderSessionReaper from "./provider/Services/ProviderSessionReaper.ts";
+import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDirectory.ts";
 import {
   formatHeadlessServeOutput,
   formatHostForUrl,
@@ -249,6 +250,69 @@ export const resolveAutoBootstrapWelcomeTargets = Effect.gen(function* () {
   } as const;
 });
 
+const runtimePayloadStoppedAt = (payload: unknown): string | null => {
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    return null;
+  }
+  const lastRuntimeEvent = (payload as Record<string, unknown>).lastRuntimeEvent;
+  const lastRuntimeEventAt = (payload as Record<string, unknown>).lastRuntimeEventAt;
+  return lastRuntimeEvent === "provider.stopAll" && typeof lastRuntimeEventAt === "string"
+    ? lastRuntimeEventAt
+    : null;
+};
+
+export const reconcileStoppedProviderSessionProjections = Effect.gen(function* () {
+  const projectionReadModelQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+  const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
+  const providerSessionDirectory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
+  const crypto = yield* Crypto.Crypto;
+
+  const bindings = yield* providerSessionDirectory.listBindings();
+  let reconciledCount = 0;
+
+  for (const binding of bindings) {
+    if (binding.status !== "stopped") {
+      continue;
+    }
+
+    const thread = yield* projectionReadModelQuery
+      .getThreadShellById(binding.threadId)
+      .pipe(Effect.map(Option.getOrUndefined));
+    if (!thread?.session || thread.session.status === "stopped") {
+      continue;
+    }
+
+    const stoppedAt = runtimePayloadStoppedAt(binding.runtimePayload) ?? binding.lastSeenAt;
+    yield* orchestrationEngine.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.make(yield* crypto.randomUUIDv4),
+      threadId: binding.threadId,
+      session: {
+        threadId: binding.threadId,
+        status: "stopped",
+        providerName: thread.session.providerName ?? binding.provider,
+        ...(binding.providerInstanceId !== undefined
+          ? { providerInstanceId: binding.providerInstanceId }
+          : thread.session.providerInstanceId !== undefined
+            ? { providerInstanceId: thread.session.providerInstanceId }
+            : {}),
+        runtimeMode: binding.runtimeMode ?? thread.session.runtimeMode,
+        activeTurnId: null,
+        lastError: thread.session.lastError,
+        updatedAt: stoppedAt,
+      },
+      createdAt: stoppedAt,
+    });
+    reconciledCount += 1;
+  }
+
+  if (reconciledCount > 0) {
+    yield* Effect.logInfo("reconciled stopped provider session projections", {
+      reconciledCount,
+    });
+  }
+});
+
 const resolveStartupBrowserTarget = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig.ServerConfig;
   const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
@@ -344,6 +408,18 @@ export const make = Effect.gen(function* () {
         yield* orchestrationReactor.start().pipe(Scope.provide(reactorScope));
         yield* providerSessionReaper.start().pipe(Scope.provide(reactorScope));
       }),
+    );
+
+    yield* Effect.logDebug("startup phase: reconciling provider session projections");
+    yield* runStartupPhase(
+      "provider-sessions.reconcile",
+      reconcileStoppedProviderSessionProjections.pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("startup provider session projection reconciliation failed", {
+            cause,
+          }),
+        ),
+      ),
     );
 
     const welcomeBase = yield* resolveWelcomeBase;

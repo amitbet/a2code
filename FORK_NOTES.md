@@ -38,6 +38,42 @@ the next merge; the per-feature sections below were updated to match.
 
 ## Fork features
 
+### Desktop/backend reliability safeguards
+
+- Adds operational hardening found while debugging a local installed-app crash
+  on 2026-07-09. These changes are fork-specific until/unless upstream grows
+  equivalent replay/session safeguards.
+- **Bounded WebSocket event catch-up.** Shell/thread subscriptions previously
+  used `readEvents(afterSequence, Number.MAX_SAFE_INTEGER)`, so a stale client
+  cursor could force the backend to decode the entire global
+  `orchestration_events` table before filtering. On a large local DB this drove
+  the desktop backend into Node heap OOM. The fork now uses the event store's
+  default bounded replay for catch-up; cold loads still use snapshots.
+- **Stop-button stale projection cleanup.** If a turn start is requested but no
+  provider turn id is ever materialized, interrupt/stop events now delete the
+  pending-start placeholder so the UI does not stay stuck on "working" with
+  nothing real to stop. Session updates to `stopped` / `interrupted` / `error`
+  also clear pending placeholders.
+- **Stopped-runtime/session projection reconciliation.** On backend startup,
+  stopped provider runtime bindings are compared against projected thread
+  sessions. If `provider_session_runtime` says a binding is stopped but
+  `projection_thread_sessions` still says the thread is running, startup
+  dispatches a normal `thread.session.set` to `stopped`. The existing projection
+  path then settles any concrete running turn.
+- Files:
+  - `apps/server/src/ws.ts` — **modified**: shell and thread detail subscription
+    catch-up replays use bounded `readEvents(afterSequence)` instead of
+    `Number.MAX_SAFE_INTEGER`.
+  - `apps/server/src/orchestration/Layers/ProjectionPipeline.ts` — **modified**:
+    clears pending turn-start placeholders on no-turn interrupt, session stop
+    request, and terminal session statuses.
+  - `apps/server/src/serverRuntimeStartup.ts` — **modified**: startup
+    reconciliation from stopped provider runtime bindings to stopped projected
+    thread sessions.
+  - Tests: `apps/server/src/orchestration/Layers/ProjectionPipeline.test.ts`
+    and `apps/server/src/serverRuntimeStartup.test.ts` cover the stale
+    pending-start and stopped-runtime reconciliation paths.
+
 ### Queued prompt steering
 
 - Adds Codex-like running-turn prompt handling: sending while a thread is
