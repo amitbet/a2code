@@ -87,6 +87,41 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
   });
 });
 
+describe("ServerSettings.providerModelDefaults", () => {
+  it("defaults to an empty record for legacy configs", () => {
+    expect(DEFAULT_SERVER_SETTINGS.providerModelDefaults).toEqual({});
+    expect(decodeServerSettings({}).providerModelDefaults).toEqual({});
+  });
+
+  it("decodes instance-keyed provider option defaults", () => {
+    const decoded = decodeServerSettings({
+      providerModelDefaults: {
+        codex_personal: [
+          { id: "reasoningEffort", value: "low" },
+          { id: "fastMode", value: false },
+        ],
+      },
+    });
+
+    expect(decoded.providerModelDefaults[ProviderInstanceId.make("codex_personal")]).toEqual([
+      { id: "reasoningEffort", value: "low" },
+      { id: "fastMode", value: false },
+    ]);
+  });
+
+  it("accepts provider option default updates", () => {
+    const patch = decodeServerSettingsPatch({
+      providerModelDefaults: {
+        codex: [{ id: "fastMode", value: false }],
+      },
+    });
+
+    expect(patch.providerModelDefaults?.[ProviderInstanceId.make("codex")]).toEqual([
+      { id: "fastMode", value: false },
+    ]);
+  });
+});
+
 describe("ServerSettings worktree defaults", () => {
   it("defaults start-from-origin off for legacy configs", () => {
     expect(decodeServerSettings({}).newWorktreesStartFromOrigin).toBe(false);

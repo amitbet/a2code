@@ -386,6 +386,9 @@ export const ServerSettings = Schema.Struct({
       }),
     ),
   ),
+  providerModelDefaults: Schema.Record(ProviderInstanceId, ProviderOptionSelections).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
 
   // Legacy single-instance-per-driver settings. Continues to be the source
   // of truth until `providerInstances` (below) lands per-driver migration
@@ -510,6 +513,9 @@ export const ServerSettingsPatch = Schema.Struct({
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
   addProjectBaseDirectory: Schema.optionalKey(TrimmedString),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
+  providerModelDefaults: Schema.optionalKey(
+    Schema.Record(ProviderInstanceId, ProviderOptionSelections),
+  ),
   observability: Schema.optionalKey(
     Schema.Struct({
       otlpTracesUrl: Schema.optionalKey(TrimmedString),

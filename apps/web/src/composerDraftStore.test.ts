@@ -14,8 +14,10 @@ import {
   ThreadId,
   type ModelSelection,
   type ProviderOptionSelection,
+  type ServerProvider,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
+import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 
 // The composer draft's `modelSelectionByProvider` and
 // `stickyModelSelectionByProvider` maps are keyed by `ProviderInstanceId`
@@ -27,6 +29,54 @@ const CURSOR_INSTANCE = ProviderInstanceId.make("cursor");
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
 const CLAUDE_AGENT_DRIVER = ProviderDriverKind.make("claudeAgent");
 const CURSOR_DRIVER = ProviderDriverKind.make("cursor");
+
+function makeProvider(input: {
+  instanceId: ProviderInstanceId;
+  driver: ProviderDriverKind;
+  model: string;
+}): ServerProvider {
+  return {
+    instanceId: input.instanceId,
+    driver: input.driver,
+    enabled: true,
+    installed: true,
+    version: null,
+    status: "ready",
+    auth: { status: "authenticated" },
+    checkedAt: "2026-03-13T12:00:00.000Z",
+    models: [
+      {
+        slug: input.model,
+        name: input.model,
+        isCustom: false,
+        capabilities: {
+          optionDescriptors: [
+            {
+              id: "reasoningEffort",
+              label: "Reasoning",
+              type: "select",
+              options: [
+                { id: "low", label: "Low" },
+                { id: "medium", label: "Medium" },
+                { id: "high", label: "High" },
+                { id: "xhigh", label: "Extra High", isDefault: true },
+              ],
+              currentValue: "xhigh",
+            },
+            {
+              id: "fastMode",
+              label: "Fast Mode",
+              type: "boolean",
+              currentValue: true,
+            },
+          ],
+        },
+      },
+    ],
+    slashCommands: [],
+    skills: [],
+  };
+}
 
 type ProviderOptionSelectionBag = ReadonlyArray<ProviderOptionSelection>;
 type ProviderOptionSelectionsByProvider = Partial<Record<string, ProviderOptionSelectionBag>>;
@@ -68,6 +118,7 @@ import {
   type ComposerImageAttachment,
   useComposerDraftStore,
   DraftId,
+  deriveEffectiveComposerModelState,
 } from "./composerDraftStore";
 import { removeLocalStorageItem, setLocalStorageItem } from "./hooks/useLocalStorage";
 import {
@@ -1684,6 +1735,95 @@ describe("composerDraftStore sticky composer settings", () => {
       },
       activeProvider: "claudeAgent",
     });
+  });
+});
+
+describe("deriveEffectiveComposerModelState provider defaults", () => {
+  const providers = [
+    makeProvider({
+      instanceId: CODEX_INSTANCE,
+      driver: CODEX_DRIVER,
+      model: "gpt-5.4",
+    }),
+  ];
+
+  it("uses provider model defaults when no draft, thread, or project options exist", () => {
+    const state = deriveEffectiveComposerModelState({
+      draft: null,
+      providers,
+      selectedProvider: CODEX_DRIVER,
+      selectedInstanceId: CODEX_INSTANCE,
+      threadModelSelection: null,
+      projectModelSelection: null,
+      settings: {
+        ...DEFAULT_UNIFIED_SETTINGS,
+        providerModelDefaults: {
+          [CODEX_INSTANCE]: toSelections({
+            reasoningEffort: "low",
+            fastMode: false,
+          }),
+        },
+      },
+    });
+
+    expect(state.modelOptions?.[CODEX_INSTANCE]).toEqual(
+      toSelections({ reasoningEffort: "low", fastMode: false }),
+    );
+  });
+
+  it("keeps draft options ahead of provider model defaults", () => {
+    const state = deriveEffectiveComposerModelState({
+      draft: {
+        activeProvider: CODEX_INSTANCE,
+        modelSelectionByProvider: {
+          [CODEX_INSTANCE]: createModelSelection(
+            CODEX_INSTANCE,
+            "gpt-5.4",
+            toSelections({ reasoningEffort: "high", fastMode: true }),
+          ),
+        },
+      },
+      providers,
+      selectedProvider: CODEX_DRIVER,
+      selectedInstanceId: CODEX_INSTANCE,
+      threadModelSelection: null,
+      projectModelSelection: null,
+      settings: {
+        ...DEFAULT_UNIFIED_SETTINGS,
+        providerModelDefaults: {
+          [CODEX_INSTANCE]: toSelections({
+            reasoningEffort: "low",
+            fastMode: false,
+          }),
+        },
+      },
+    });
+
+    expect(state.modelOptions?.[CODEX_INSTANCE]).toEqual(
+      toSelections({ reasoningEffort: "high", fastMode: true }),
+    );
+  });
+
+  it("does not apply provider model defaults to existing threads without options", () => {
+    const state = deriveEffectiveComposerModelState({
+      draft: null,
+      providers,
+      selectedProvider: CODEX_DRIVER,
+      selectedInstanceId: CODEX_INSTANCE,
+      threadModelSelection: createModelSelection(CODEX_INSTANCE, "gpt-5.4"),
+      projectModelSelection: null,
+      settings: {
+        ...DEFAULT_UNIFIED_SETTINGS,
+        providerModelDefaults: {
+          [CODEX_INSTANCE]: toSelections({
+            reasoningEffort: "low",
+            fastMode: false,
+          }),
+        },
+      },
+    });
+
+    expect(state.modelOptions).toBeNull();
   });
 });
 

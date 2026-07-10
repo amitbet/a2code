@@ -390,7 +390,7 @@ export const TraitsPicker = memo(function TraitsPicker({
           ? descriptor.id === "fastMode"
             ? descriptor.currentValue === true
               ? "Fast"
-              : "Normal"
+              : "Standard"
             : `${descriptor.label} ${descriptor.currentValue === true ? "On" : "Off"}`
           : getProviderOptionCurrentLabel(descriptor);
     if (typeof label === "string" && label.length > 0) {

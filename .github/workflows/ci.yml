@@ -4,16 +4,24 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Existing release tag to attach the Android preview APK to (optional, for example v1.2.3)"
+        description: "Existing release tag to attach the Android standalone APK to (optional, for example v1.2.3)"
         required: false
         type: string
+      android_variant:
+        description: "Mobile Android app variant to build."
+        required: true
+        default: preview
+        type: choice
+        options:
+          - preview
+          - production
 
 permissions:
   contents: read
 
 jobs:
-  build_android_preview_apk:
-    name: Build Android preview APK
+  build_android_standalone_apk:
+    name: Build Android standalone APK
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     continue-on-error: ${{ inputs.release_tag == '' }}
@@ -52,25 +60,37 @@ jobs:
           # broken-pipe exit so pipefail doesn't fail an otherwise-OK step.
           ( yes 2>/dev/null || true ) | "$SDKMANAGER" --licenses >/dev/null
 
-      - name: Build Android preview debug APK
+      - name: Prebuild Android project
         shell: bash
         run: |
-          # `vp run` doesn't execute the script's `&& cd && ./gradlew` chain as
-          # a shell, so run prebuild (single command, works) via vp, then drive
-          # Gradle from bash where cd/./gradlew behave normally.
-          vp run --filter @t3tools/mobile prebuild:android:ci
+          case "${{ inputs.android_variant }}" in
+            preview)
+              vp run --filter @t3tools/mobile prebuild:android:ci
+              ;;
+            production)
+              vp run --filter @t3tools/mobile prebuild:android:prod:ci
+              ;;
+            *)
+              echo "Unsupported Android variant: ${{ inputs.android_variant }}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Build Android standalone release APK
+        shell: bash
+        run: |
           cd apps/mobile/android
           ./gradlew \
             -Dorg.gradle.jvmargs="-Xmx4096m -XX:MaxMetaspaceSize=1024m -Dfile.encoding=UTF-8" \
             -Dorg.gradle.workers.max=2 \
-            assembleDebug
+            assembleRelease
 
       - name: Upload Android APK
         if: ${{ success() }}
         uses: actions/upload-artifact@v7
         with:
-          name: mobile-android-preview-debug-apk
-          path: apps/mobile/android/app/build/outputs/apk/debug/*.apk
+          name: mobile-android-${{ inputs.android_variant }}-standalone-apk
+          path: apps/mobile/android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 7
 
@@ -91,9 +111,9 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          files=(apps/mobile/android/app/build/outputs/apk/debug/*.apk)
+          files=(apps/mobile/android/app/build/outputs/apk/release/*.apk)
           if (( ${#files[@]} == 0 )); then
-            echo "Android preview APK was not found." >&2
+            echo "Android standalone APK was not found." >&2
             exit 1
           fi
           gh release upload "$RELEASE_TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"

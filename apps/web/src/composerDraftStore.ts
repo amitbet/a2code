@@ -521,6 +521,20 @@ function providerSelectionsFromModelSelection(
   return { [modelSelection.instanceId]: options };
 }
 
+function providerSelectionsFromDefaults(
+  defaults: UnifiedSettings["providerModelDefaults"] | null | undefined,
+  instanceId: ProviderInstanceId | null | undefined,
+): ProviderOptionSelectionsByProvider | null {
+  if (!defaults || !instanceId) {
+    return null;
+  }
+  const options = defaults[instanceId];
+  if (!options || options.length === 0) {
+    return null;
+  }
+  return { [instanceId]: options };
+}
+
 function modelSelectionByProviderToOptions(
   map: Partial<Record<string, ModelSelection>> | null | undefined,
 ): ProviderOptionSelectionsByProvider | null {
@@ -1020,6 +1034,12 @@ export function deriveEffectiveComposerModelState(input: {
     modelSelectionByProviderToOptions(input.draft?.modelSelectionByProvider) ??
     providerSelectionsFromModelSelection(input.threadModelSelection) ??
     providerSelectionsFromModelSelection(input.projectModelSelection) ??
+    (input.threadModelSelection
+      ? null
+      : providerSelectionsFromDefaults(
+          input.settings.providerModelDefaults,
+          input.selectedInstanceId ?? defaultInstanceIdForDriver(input.selectedProvider),
+        )) ??
     null;
 
   return {

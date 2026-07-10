@@ -9,6 +9,7 @@ import {
   ProviderDriverKind,
   type ProviderInstanceConfig,
   type ProviderInstanceId,
+  type ProviderOptionSelection,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
@@ -1167,7 +1168,9 @@ export function ProviderSettingsPanel() {
         config: legacyConfig,
       } satisfies ProviderInstanceConfig);
     const isDirty =
-      explicitInstance !== undefined || !Equal.equals(legacyConfig, defaultLegacyConfig);
+      explicitInstance !== undefined ||
+      settings.providerModelDefaults?.[defaultInstanceId] !== undefined ||
+      !Equal.equals(legacyConfig, defaultLegacyConfig);
     rows.push({
       instanceId: defaultInstanceId,
       instance: effectiveInstance,
@@ -1216,8 +1219,25 @@ export function ProviderSettingsPanel() {
   const deleteProviderInstance = (id: ProviderInstanceId) => {
     updateSettings({
       providerInstances: withoutProviderInstanceKey(settings.providerInstances, id),
+      providerModelDefaults: withoutProviderInstanceKey(settings.providerModelDefaults, id),
       providerModelPreferences: withoutProviderInstanceKey(settings.providerModelPreferences, id),
       favorites: withoutProviderInstanceFavorites(settings.favorites ?? [], id),
+    });
+  };
+
+  const updateProviderModelDefaults = (
+    instanceId: ProviderInstanceId,
+    nextOptions: ReadonlyArray<ProviderOptionSelection> | null | undefined,
+  ) => {
+    const rest = withoutProviderInstanceKey(settings.providerModelDefaults, instanceId);
+    updateSettings({
+      providerModelDefaults:
+        nextOptions && nextOptions.length > 0
+          ? {
+              ...rest,
+              [instanceId]: nextOptions,
+            }
+          : rest,
     });
   };
 
@@ -1280,6 +1300,10 @@ export function ProviderSettingsPanel() {
         [driverKind]: defaultLegacyProvider,
       } as typeof settings.providers,
       providerInstances: withoutProviderInstanceKey(settings.providerInstances, defaultInstanceId),
+      providerModelDefaults: withoutProviderInstanceKey(
+        settings.providerModelDefaults,
+        defaultInstanceId,
+      ),
       providerModelPreferences: withoutProviderInstanceKey(
         settings.providerModelPreferences,
         defaultInstanceId,
@@ -1361,6 +1385,7 @@ export function ProviderSettingsPanel() {
             hiddenModels: [],
             modelOrder: [],
           };
+          const defaultModelOptions = settings.providerModelDefaults?.[row.instanceId];
           const favoriteModels = Arr.filterMap(settings.favorites ?? [], (favorite) =>
             favorite.provider === row.instanceId ? Result.succeed(favorite.model) : Result.failVoid,
           );
@@ -1404,6 +1429,7 @@ export function ProviderSettingsPanel() {
               hiddenModels={modelPreferences.hiddenModels}
               favoriteModels={favoriteModels}
               modelOrder={modelPreferences.modelOrder}
+              defaultModelOptions={defaultModelOptions}
               onHiddenModelsChange={(hiddenModels) =>
                 updateProviderModelPreferences(row.instanceId, {
                   ...modelPreferences,
@@ -1418,6 +1444,9 @@ export function ProviderSettingsPanel() {
                   ...modelPreferences,
                   modelOrder,
                 })
+              }
+              onDefaultModelOptionsChange={(nextOptions) =>
+                updateProviderModelDefaults(row.instanceId, nextOptions)
               }
               onRunUpdate={
                 showInlineUpdateButton && updateCandidate

@@ -438,8 +438,8 @@ jobs:
           path: release-publish/*
           if-no-files-found: error
 
-  build_android_preview_apk:
-    name: Build Android preview APK
+  build_android_standalone_apk:
+    name: Build Android standalone APK
     needs: preflight
     runs-on: ubuntu-24.04
     timeout-minutes: 45
@@ -448,6 +448,7 @@ jobs:
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     outputs:
       apk_exists: ${{ steps.apk_meta.outputs.exists }}
+      variant: ${{ steps.android_variant.outputs.variant }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -472,6 +473,16 @@ jobs:
       - name: Align package versions to release version
         run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
 
+      - id: android_variant
+        name: Resolve Android variant
+        shell: bash
+        run: |
+          if [[ "${{ needs.preflight.outputs.is_prerelease }}" == "true" ]]; then
+            echo "variant=preview" >> "$GITHUB_OUTPUT"
+          else
+            echo "variant=production" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Accept Android SDK licenses
         shell: bash
         run: |
@@ -484,19 +495,32 @@ jobs:
           # broken-pipe exit so pipefail doesn't fail an otherwise-OK step.
           ( yes 2>/dev/null || true ) | "$SDKMANAGER" --licenses >/dev/null
 
-      - name: Build Android preview debug APK
+      - name: Prebuild Android project
         continue-on-error: true
         shell: bash
         run: |
-          # `vp run` doesn't execute the script's `&& cd && ./gradlew` chain as
-          # a shell, so run prebuild (single command, works) via vp, then drive
-          # Gradle from bash where cd/./gradlew behave normally.
-          vp run --filter @t3tools/mobile prebuild:android:ci
+          case "${{ steps.android_variant.outputs.variant }}" in
+            preview)
+              vp run --filter @t3tools/mobile prebuild:android:ci
+              ;;
+            production)
+              vp run --filter @t3tools/mobile prebuild:android:prod:ci
+              ;;
+            *)
+              echo "Unsupported Android variant: ${{ steps.android_variant.outputs.variant }}" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Build Android standalone release APK
+        continue-on-error: true
+        shell: bash
+        run: |
           cd apps/mobile/android
           ./gradlew \
             -Dorg.gradle.jvmargs="-Xmx4096m -XX:MaxMetaspaceSize=1024m -Dfile.encoding=UTF-8" \
             -Dorg.gradle.workers.max=2 \
-            assembleDebug
+            assembleRelease
 
       - id: apk_meta
         name: Detect Android APK output
@@ -504,20 +528,20 @@ jobs:
         shell: bash
         run: |
           shopt -s nullglob
-          files=(apps/mobile/android/app/build/outputs/apk/debug/*.apk)
+          files=(apps/mobile/android/app/build/outputs/apk/release/*.apk)
           if (( ${#files[@]} > 0 )); then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "::warning title=Android APK missing::Build Android preview debug APK produced no .apk (build:android:ci likely failed); the Append Android preview APK job will be skipped."
+            echo "::warning title=Android APK missing::Build Android standalone release APK produced no .apk; the Append Android standalone APK job will be skipped."
           fi
 
       - name: Upload Android APK
         if: ${{ steps.apk_meta.outputs.exists == 'true' }}
         uses: actions/upload-artifact@v7
         with:
-          name: mobile-android-preview-debug-apk
-          path: apps/mobile/android/app/build/outputs/apk/debug/*.apk
+          name: mobile-android-${{ steps.android_variant.outputs.variant }}-standalone-apk
+          path: apps/mobile/android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
   release:
@@ -695,24 +719,24 @@ jobs:
             release-assets/*.yml
           fail_on_unmatched_files: false
 
-  append_android_preview_apk:
+  append_android_standalone_apk:
     if: |
       !failure() && !cancelled() &&
       needs.preflight.result == 'success' &&
       needs.release.result == 'success' &&
-      needs.build_android_preview_apk.outputs.apk_exists == 'true'
-    name: Append Android preview APK
+      needs.build_android_standalone_apk.outputs.apk_exists == 'true'
+    name: Append Android standalone APK
     needs:
       - preflight
       - release
-      - build_android_preview_apk
+      - build_android_standalone_apk
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Download Android APK
         uses: actions/download-artifact@v8
         with:
-          name: mobile-android-preview-debug-apk
+          name: mobile-android-${{ needs.build_android_standalone_apk.outputs.variant }}-standalone-apk
           path: release-assets
 
       - name: Upload Android APK

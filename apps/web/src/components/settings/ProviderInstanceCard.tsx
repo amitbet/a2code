@@ -19,6 +19,7 @@ import {
   type ProviderInstanceEnvironmentVariable,
   type ProviderInstanceId,
   type ProviderDriverKind,
+  type ProviderOptionSelection,
   type ServerProvider,
   type ServerProviderModel,
 } from "@t3tools/contracts";
@@ -41,6 +42,7 @@ import type { DriverOption } from "./providerDriverMeta";
 import { ProviderSettingsForm } from "./ProviderSettingsForm";
 import { ProviderModelsSection } from "./ProviderModelsSection";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
+import { TraitsPicker } from "../chat/TraitsPicker";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import {
@@ -344,9 +346,13 @@ interface ProviderInstanceCardProps {
   readonly hiddenModels: ReadonlyArray<string>;
   readonly favoriteModels: ReadonlyArray<string>;
   readonly modelOrder: ReadonlyArray<string>;
+  readonly defaultModelOptions: ReadonlyArray<ProviderOptionSelection> | undefined;
   readonly onHiddenModelsChange: (next: ReadonlyArray<string>) => void;
   readonly onFavoriteModelsChange: (next: ReadonlyArray<string>) => void;
   readonly onModelOrderChange: (next: ReadonlyArray<string>) => void;
+  readonly onDefaultModelOptionsChange: (
+    next: ReadonlyArray<ProviderOptionSelection> | undefined,
+  ) => void;
   readonly onRunUpdate?: (() => void) | undefined;
   readonly isUpdating?: boolean | undefined;
 }
@@ -388,9 +394,11 @@ export function ProviderInstanceCard({
   hiddenModels,
   favoriteModels,
   modelOrder,
+  defaultModelOptions,
   onHiddenModelsChange,
   onFavoriteModelsChange,
   onModelOrderChange,
+  onDefaultModelOptionsChange,
   onRunUpdate,
   isUpdating = false,
 }: ProviderInstanceCardProps) {
@@ -451,6 +459,10 @@ export function ProviderInstanceCard({
     liveModels: liveProvider?.models,
     customModels,
   });
+  const defaultTraitsModel =
+    liveProvider?.models.find((model) => (model.capabilities?.optionDescriptors?.length ?? 0) > 0)
+      ?.slug ?? null;
+  const hasDefaultModelOptions = (defaultModelOptions?.length ?? 0) > 0;
 
   const updateDisplayName = (value: string) => {
     const trimmed = value.trim();
@@ -772,6 +784,46 @@ export function ProviderInstanceCard({
                 variant="card"
                 onChange={updateConfig}
               />
+            ) : null}
+
+            {driverKind !== null && defaultTraitsModel !== null ? (
+              <div className="border-t border-border/60 px-4 py-3 sm:px-5">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-foreground">Default traits</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Used for new threads on this provider when no sticky or project default
+                      options apply.
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+                    {hasDefaultModelOptions ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-8 px-2 text-xs text-muted-foreground hover:text-foreground"
+                        onClick={() => onDefaultModelOptionsChange(undefined)}
+                      >
+                        Reset
+                      </Button>
+                    ) : null}
+                    <TraitsPicker
+                      provider={driverKind}
+                      instanceId={instanceId}
+                      models={liveProvider?.models ?? []}
+                      model={defaultTraitsModel}
+                      prompt=""
+                      onPromptChange={() => {}}
+                      modelOptions={defaultModelOptions}
+                      allowPromptInjectedEffort={false}
+                      triggerVariant="outline"
+                      triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
+                      onModelOptionsChange={onDefaultModelOptionsChange}
+                    />
+                  </div>
+                </div>
+              </div>
             ) : null}
 
             {driverOption !== undefined ? (
