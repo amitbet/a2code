@@ -24,6 +24,12 @@ function createBrowserLocalApi(): LocalApi {
         return window.confirm(message);
       },
     },
+    files: {
+      getPathForFile: (file) => {
+        if (!window.desktopBridge) return null;
+        return window.desktopBridge.getPathForFile(file);
+      },
+    },
     shell: {
       openInEditor: () => Promise.reject(unavailableLocalBackendError()),
       openExternal: async (url) => {

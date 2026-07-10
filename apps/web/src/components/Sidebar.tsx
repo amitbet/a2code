@@ -81,7 +81,7 @@ import { APP_MONOGRAM, APP_NAME_SUFFIX, APP_STAGE_LABEL, APP_VERSION } from "../
 import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { readPreparedConnection } from "../state/session";
 import { isTerminalFocused } from "../lib/terminalFocus";
-import { isMacPlatform } from "../lib/utils";
+import { cn, isMacPlatform } from "../lib/utils";
 import {
   readThreadShell,
   useProject,
@@ -113,6 +113,7 @@ import { isModelPickerOpen } from "../modelPickerVisibility";
 import { useShortcutModifierState } from "../shortcutModifierState";
 import { readLocalApi } from "../localApi";
 import { useComposerDraftStore } from "../composerDraftStore";
+import { useAddProjectDropZone } from "../hooks/useAddProjectDropZone";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useDesktopUpdateState } from "../state/desktopUpdate";
 
@@ -3067,8 +3068,16 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     [updateSettings],
   );
 
+  const { isDropActive, dropZoneProps } = useAddProjectDropZone();
+
   return (
-    <SidebarContent className="gap-0">
+    <SidebarContent
+      className={cn(
+        "gap-0 transition-colors",
+        isDropActive ? "bg-accent/45 ring-1 ring-inset ring-primary/60" : null,
+      )}
+      {...dropZoneProps}
+    >
       <SidebarGroup className="px-2 pt-2 pb-1">
         <SidebarMenu>
           <SidebarMenuItem>

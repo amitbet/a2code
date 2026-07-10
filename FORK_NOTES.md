@@ -494,6 +494,52 @@ useAccountRateLimitSnapshot(selectedInstanceId)` (NOT a per-thread
   `Extract<…, { type: "image" }>`, the web layer has been reverted again —
   re-apply the web pieces above.
 
+### Drag-and-drop folders onto the sidebar to add projects (2026-07-09)
+
+- Dropping one or more OS folders onto the sidebar's projects area adds each as
+  a project in the **primary (local) environment** and navigates to a new
+  thread (reopens the project if the path already backs one). The absolute path
+  of a dropped folder is only obtainable inside the Electron shell
+  (`webUtils.getPathForFile`); plain browsers get an explanatory toast, and
+  dropping non-folders toasts "only folders".
+- **Merge seam — add-project logic extracted out of `CommandPalette.tsx`.** The
+  palette's inline `handleAddProjectForEnvironment` body (~120 lines: path
+  validation → existing-project dedupe → `project.create` dispatch → new-thread
+  navigation → error toasts) now lives in the shared hook
+  `apps/web/src/hooks/useAddProjectFromPath.ts` (returns a success boolean; the
+  palette wraps it to close itself). If upstream edits that logic in
+  `CommandPalette.tsx`, the merge will conflict on a deleted block — re-apply
+  upstream's changes **inside the hook**, not by restoring the inline copy.
+  Likewise `getEnvironmentBrowsePlatform` moved from `CommandPalette.tsx` to
+  `apps/web/src/lib/environmentPlatform.ts`.
+- Files:
+  - `packages/contracts/src/ipc.ts` — **modified**: `getPathForFile(file)` on
+    `DesktopBridge` and a `files.getPathForFile` section on `LocalApi` (sync,
+    returns `string | null`).
+  - `apps/desktop/src/preload.ts` — **modified**: implements `getPathForFile`
+    via Electron `webUtils.getPathForFile` (null on empty path / throw).
+  - `apps/web/src/localApi.ts` — **modified**: browser `files.getPathForFile`
+    feature-detects `window.desktopBridge` (null without it), mirroring
+    `dialogs.pickFolder`.
+  - `apps/web/src/hooks/useAddProjectFromPath.ts` — **fork-added**: shared
+    add-project-by-path logic (extracted from `CommandPalette.tsx`, see above).
+  - `apps/web/src/hooks/useAddProjectDropZone.ts` — **fork-added**: drop-target
+    hook (drag-depth tracking per `ChatComposer`'s pattern, synchronous
+    `webkitGetAsEntry` directory detection during the drop event, sequential
+    adds for multi-folder drops).
+  - `apps/web/src/lib/environmentPlatform.ts` — **fork-added**:
+    `getEnvironmentBrowsePlatform` (moved from `CommandPalette.tsx`).
+  - `apps/web/src/components/CommandPalette.tsx` — **modified**: consumes the
+    hook; `handleAddProjectForEnvironment` is now a thin close-on-success
+    wrapper; the local `createProject` atom command and related imports were
+    removed.
+  - `apps/web/src/components/Sidebar.tsx` — **modified**: `SidebarProjectsContent`
+    spreads `useAddProjectDropZone().dropZoneProps` onto its `<SidebarContent>`
+    with an accent/ring highlight while a drop hovers.
+- Known limitation: on Windows, dropping a `\\wsl$\...` folder targets the
+  local Windows environment (surfacing the server's validation error) instead
+  of routing to the WSL backend like the palette's WSL-aware flow.
+
 ## 2026-06-30 upstream merge (parallel WSL backends + Legend List + preview) — notes
 
 The `upstream/main` merge on 2026-06-30 (up to `a9b1190a1`, "Desktop: parallel WSL +

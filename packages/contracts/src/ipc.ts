@@ -1091,6 +1091,12 @@ export interface DesktopBridge {
   setWslDistro: (distro: string | null) => Promise<DesktopWslState>;
   setWslOnly: (enabled: boolean) => Promise<DesktopWslState>;
   pickFolder: (options?: PickFolderOptions) => Promise<string | null>;
+  /**
+   * Resolve the absolute filesystem path of a `File` dragged in from the OS
+   * (Electron `webUtils.getPathForFile`). Returns null when the file has no
+   * on-disk path (e.g. synthetic files).
+   */
+  getPathForFile: (file: File) => string | null;
   confirm: (message: string) => Promise<boolean>;
   setTheme: (theme: DesktopTheme) => Promise<void>;
   showContextMenu: <T extends string>(
@@ -1188,6 +1194,14 @@ export interface LocalApi {
   dialogs: {
     pickFolder: (options?: PickFolderOptions) => Promise<string | null>;
     confirm: (message: string) => Promise<boolean>;
+  };
+  files: {
+    /**
+     * Resolve the absolute filesystem path of a `File` dragged in from the
+     * OS. Only the desktop shell can do this; returns null in plain browsers
+     * or when the file has no on-disk path.
+     */
+    getPathForFile: (file: File) => string | null;
   };
   shell: {
     openInEditor: (cwd: string, editor: EditorId) => Promise<void>;
