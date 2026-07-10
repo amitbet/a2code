@@ -555,6 +555,25 @@ export function computeStableMessagesTimelineRows(
   return anyChanged ? { byId: next, result } : previous;
 }
 
+const EMPTY_MESSAGE_ATTACHMENTS: NonNullable<ChatMessage["attachments"]> = [];
+
+function areMessagesEqual(a: ChatMessage, b: ChatMessage): boolean {
+  return (
+    a === b ||
+    (a.id === b.id &&
+      a.role === b.role &&
+      a.text === b.text &&
+      a.turnId === b.turnId &&
+      a.streaming === b.streaming &&
+      a.createdAt === b.createdAt &&
+      a.updatedAt === b.updatedAt &&
+      Equal.equals(
+        a.attachments ?? EMPTY_MESSAGE_ATTACHMENTS,
+        b.attachments ?? EMPTY_MESSAGE_ATTACHMENTS,
+      ))
+  );
+}
+
 /** Shallow field comparison per row variant — avoids deep equality cost. */
 function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean {
   if (a.kind !== b.kind || a.id !== b.id) return false;
@@ -588,7 +607,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
     case "message": {
       const bm = b as typeof a;
       return (
-        a.message === bm.message &&
+        areMessagesEqual(a.message, bm.message) &&
         a.durationStart === bm.durationStart &&
         a.showAssistantMeta === bm.showAssistantMeta &&
         a.showAssistantCopyButton === bm.showAssistantCopyButton &&

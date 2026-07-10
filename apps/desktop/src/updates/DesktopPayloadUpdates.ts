@@ -208,7 +208,18 @@ export const make = Effect.gen(function* () {
       let downloadedBytes = 0;
       let lastEmittedPercent = 0;
 
-      yield* Stream.runForEach(response.stream, (chunk) =>
+      let observedBytes = 0;
+      const boundedStream =
+        expectedBytes > 0
+          ? response.stream.pipe(
+              Stream.takeUntil((chunk) => {
+                observedBytes += chunk.byteLength;
+                return observedBytes >= expectedBytes;
+              }),
+            )
+          : response.stream;
+
+      yield* Stream.runForEach(boundedStream, (chunk) =>
         Effect.gen(function* () {
           chunks.push(chunk);
           downloadedBytes += chunk.byteLength;
@@ -223,7 +234,13 @@ export const make = Effect.gen(function* () {
             downloadPercent: percent,
           }));
         }),
-      ).pipe(Effect.mapError((cause) => `Failed to download payload archive: ${String(cause)}`));
+      ).pipe(
+        Effect.catchCause((cause) =>
+          expectedBytes > 0 && downloadedBytes >= expectedBytes
+            ? Effect.void
+            : Effect.fail(`Failed to download payload archive: ${Cause.pretty(cause)}`),
+        ),
+      );
 
       const bytes = new Uint8Array(downloadedBytes);
       let offset = 0;

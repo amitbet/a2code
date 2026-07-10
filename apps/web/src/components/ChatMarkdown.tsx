@@ -131,6 +131,94 @@ interface MarkdownActionFailureContext {
   readonly copyTarget?: string;
 }
 
+function selectionIntersectsElement(element: HTMLElement | null): boolean {
+  if (!element || typeof window === "undefined" || typeof window.getSelection !== "function") {
+    return false;
+  }
+
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+    return false;
+  }
+
+  for (let index = 0; index < selection.rangeCount; index += 1) {
+    try {
+      if (selection.getRangeAt(index).intersectsNode(element)) {
+        return true;
+      }
+    } catch {
+      // Ignore stale ranges from DOM that was removed while React was updating.
+    }
+  }
+
+  return false;
+}
+
+function waitForSelectionOutsideElement(shouldWait: () => boolean): Promise<void> {
+  if (!shouldWait()) {
+    return Promise.resolve();
+  }
+
+  if (typeof document === "undefined") {
+    return Promise.resolve();
+  }
+
+  const doc = document;
+  const win = typeof window === "undefined" ? null : window;
+  if (typeof doc.addEventListener !== "function") {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    let frame = 0;
+    let settled = false;
+
+    const cleanup = () => {
+      if (frame !== 0 && win && typeof win.cancelAnimationFrame === "function") {
+        win.cancelAnimationFrame(frame);
+      }
+      frame = 0;
+      doc.removeEventListener("selectionchange", scheduleCheck);
+      win?.removeEventListener("pointerup", scheduleCheck);
+      win?.removeEventListener("keyup", scheduleCheck);
+      win?.removeEventListener("blur", scheduleCheck);
+    };
+
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve();
+    };
+
+    const check = () => {
+      frame = 0;
+      if (!shouldWait()) {
+        finish();
+      }
+    };
+
+    function scheduleCheck() {
+      if (settled || frame !== 0) {
+        return;
+      }
+      if (win && typeof win.requestAnimationFrame === "function") {
+        frame = win.requestAnimationFrame(check);
+        return;
+      }
+      queueMicrotask(check);
+    }
+
+    doc.addEventListener("selectionchange", scheduleCheck);
+    win?.addEventListener("pointerup", scheduleCheck);
+    win?.addEventListener("keyup", scheduleCheck);
+    win?.addEventListener("blur", scheduleCheck);
+    scheduleCheck();
+  });
+}
+
 function reportMarkdownActionFailure(context: MarkdownActionFailureContext, cause: unknown): void {
   console.error("[chat-markdown] action failed", context, cause);
 }
@@ -635,6 +723,7 @@ interface SuspenseShikiCodeBlockProps {
   code: string;
   themeName: DiffThemeName;
   isStreaming: boolean;
+  shouldDeferAsyncHighlight: () => boolean;
 }
 
 function SuspenseShikiCodeBlock({
@@ -642,6 +731,7 @@ function SuspenseShikiCodeBlock({
   code,
   themeName,
   isStreaming,
+  shouldDeferAsyncHighlight,
 }: SuspenseShikiCodeBlockProps) {
   const language = extractFenceLanguage(className);
   const cacheKey = createHighlightCacheKey(code, language, themeName);
@@ -663,6 +753,7 @@ function SuspenseShikiCodeBlock({
       themeName={themeName}
       cacheKey={cacheKey}
       isStreaming={isStreaming}
+      shouldDeferAsyncHighlight={shouldDeferAsyncHighlight}
     />
   );
 }
@@ -673,6 +764,7 @@ interface UncachedShikiCodeBlockProps {
   themeName: DiffThemeName;
   cacheKey: string;
   isStreaming: boolean;
+  shouldDeferAsyncHighlight: () => boolean;
 }
 
 function UncachedShikiCodeBlock({
@@ -681,6 +773,7 @@ function UncachedShikiCodeBlock({
   themeName,
   cacheKey,
   isStreaming,
+  shouldDeferAsyncHighlight,
 }: UncachedShikiCodeBlockProps) {
   const highlighter = use(getHighlighterPromise(language));
   const highlightedHtml = useMemo(() => {
@@ -696,6 +789,11 @@ function UncachedShikiCodeBlock({
       return highlighter.codeToHtml(code, { lang: "text", theme: themeName });
     }
   }, [code, highlighter, language, themeName]);
+
+  if (shouldDeferAsyncHighlight()) {
+    // Keep the plain-code Suspense fallback mounted while the user is selecting text.
+    use(waitForSelectionOutsideElement(shouldDeferAsyncHighlight));
+  }
 
   useEffect(() => {
     if (!isStreaming) {
@@ -1238,6 +1336,7 @@ function ChatMarkdown({
   className,
   lineBreaks = false,
 }: ChatMarkdownProps) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const { resolvedTheme } = useTheme();
   const createAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
     reportFailure: false,
@@ -1275,6 +1374,10 @@ function ChatMarkdown({
   const markdownUrlTransform = useCallback((href: string) => {
     return rewriteMarkdownFileUriHref(href) ?? defaultUrlTransform(href);
   }, []);
+  const shouldDeferAsyncHighlight = useCallback(
+    () => selectionIntersectsElement(rootRef.current),
+    [],
+  );
   // Re-emit highlighted content as markdown so copying out of the rendered
   // view keeps links, emphasis, lists, and code fences intact.
   const handleCopy = useCallback((event: ReactClipboardEvent<HTMLDivElement>) => {
@@ -1512,6 +1615,7 @@ function ChatMarkdown({
                   code={codeBlock.code}
                   themeName={diffThemeName}
                   isStreaming={isStreaming}
+                  shouldDeferAsyncHighlight={shouldDeferAsyncHighlight}
                 />
               </Suspense>
             </CodeHighlightErrorBoundary>
@@ -1529,6 +1633,7 @@ function ChatMarkdown({
       openExternalLinkInPreview,
       openMarkdownFileInPreview,
       resolvedTheme,
+      shouldDeferAsyncHighlight,
       skills,
       text,
       threadRef,
@@ -1537,6 +1642,7 @@ function ChatMarkdown({
 
   return (
     <div
+      ref={rootRef}
       className={cn(
         "chat-markdown w-full min-w-0 text-sm leading-relaxed text-foreground/80",
         className,

@@ -107,6 +107,14 @@ function makeChunkedResponse(bytes: Uint8Array): ReadableStream<Uint8Array> {
   });
 }
 
+function makeNonClosingCompleteResponse(bytes: Uint8Array): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes);
+    },
+  });
+}
+
 const makePayloadHttpClientLayer = (input: {
   readonly manifestUrl: string;
   readonly archiveBytes: Uint8Array;
@@ -241,6 +249,54 @@ describe("DesktopPayloadUpdates", () => {
       ),
     );
   });
+
+  it.effect(
+    "finishes staging after receiving the manifest byte count even if the stream stays open",
+    () => {
+      const payloadFiles: Record<string, string> = {};
+      const archiveBytes = createPayloadArchive([
+        { path: "bin.mjs", data: new TextEncoder().encode("console.log('server')\n") },
+        { path: "client/index.html", data: new TextEncoder().encode("<!doctype html>") },
+      ]);
+      const manifestUrl = "https://updates.test/payload-manifest.json";
+      const manifest = makeManifest({ version: "1.2.4", archiveBytes });
+      const httpClientLayer = Layer.succeed(
+        HttpClient.HttpClient,
+        HttpClient.make((request) => {
+          const archiveUrl = new URL(manifest.fileName, manifestUrl).toString();
+          const body =
+            request.url === manifestUrl
+              ? JSON.stringify(manifest)
+              : request.url === archiveUrl
+                ? makeNonClosingCompleteResponse(archiveBytes)
+                : "not found";
+          const status = request.url === manifestUrl || request.url === archiveUrl ? 200 : 404;
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(request, new Response(body, { status })),
+          );
+        }),
+      );
+
+      return Effect.gen(function* () {
+        const payloadUpdates = yield* DesktopPayloadUpdates.DesktopPayloadUpdates;
+
+        const state = yield* payloadUpdates.download.pipe(Effect.timeout("1 second"));
+
+        assert.equal(state.status, "staged");
+        assert.equal(state.downloadPercent, 100);
+      }).pipe(
+        Effect.provide(
+          makePayloadLayer(payloadFiles, {
+            config: {
+              T3CODE_PAYLOAD_ALLOW_UNSIGNED: "true",
+              T3CODE_PAYLOAD_MANIFEST_URL: manifestUrl,
+            },
+            httpClientLayer,
+          }),
+        ),
+      );
+    },
+  );
 
   it.effect("does not carry staged progress into a newer available payload", () => {
     const payloadFiles: Record<string, string> = {};

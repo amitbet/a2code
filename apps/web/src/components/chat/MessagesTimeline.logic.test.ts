@@ -1066,6 +1066,110 @@ describe("computeStableMessagesTimelineRows", () => {
     expect(repeated.result).toBe(initial.result);
   });
 
+  it("reuses message rows when equivalent messages are rebuilt", () => {
+    const firstUserMessage = {
+      id: "user-1" as never,
+      role: "user" as const,
+      text: "First",
+      turnId: null,
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+      streaming: false,
+    };
+
+    const initialRows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "entry-user-1",
+          kind: "message",
+          createdAt: firstUserMessage.createdAt,
+          message: firstUserMessage,
+        },
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    const initial = computeStableMessagesTimelineRows(initialRows, {
+      byId: new Map(),
+      result: [],
+    });
+
+    const rebuiltRows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "entry-user-1",
+          kind: "message",
+          createdAt: firstUserMessage.createdAt,
+          message: { ...firstUserMessage },
+        },
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    const repeated = computeStableMessagesTimelineRows(rebuiltRows, initial);
+
+    expect(repeated).toBe(initial);
+    expect(repeated.result[0]).toBe(initial.result[0]);
+  });
+
+  it("replaces message rows when rebuilt messages change text", () => {
+    const firstUserMessage = {
+      id: "user-1" as never,
+      role: "user" as const,
+      text: "First",
+      turnId: null,
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+      streaming: false,
+    };
+
+    const initialRows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "entry-user-1",
+          kind: "message",
+          createdAt: firstUserMessage.createdAt,
+          message: firstUserMessage,
+        },
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    const initial = computeStableMessagesTimelineRows(initialRows, {
+      byId: new Map(),
+      result: [],
+    });
+
+    const changedRows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        {
+          id: "entry-user-1",
+          kind: "message",
+          createdAt: firstUserMessage.createdAt,
+          message: { ...firstUserMessage, text: "Updated" },
+        },
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      revertTurnCountByUserMessageId: new Map(),
+    });
+
+    const changed = computeStableMessagesTimelineRows(changedRows, initial);
+
+    expect(changed).not.toBe(initial);
+    expect(changed.result[0]).not.toBe(initial.result[0]);
+  });
+
   it("reuses work rows when equivalent timeline derivations create new grouped arrays", () => {
     const firstWorkEntry = {
       id: "work-1",
