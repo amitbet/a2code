@@ -547,22 +547,11 @@ jobs:
     if: |
       !failure() && !cancelled() &&
       needs.preflight.result == 'success' &&
-      needs.build_payload.result == 'success' &&
-      needs.build_macos_arm64.result == 'success' &&
-      needs.build_macos_x64.result == 'success' &&
-      needs.build_linux_x64.result == 'success' &&
-      needs.build_windows_x64.result == 'success' &&
-      needs.build_android_standalone_apk.result == 'success' &&
-      needs.build_android_standalone_apk.outputs.apk_exists == 'true'
+      needs.build_payload.result == 'success'
     name: Publish GitHub Release
     needs:
       - preflight
       - build_payload
-      - build_macos_arm64
-      - build_macos_x64
-      - build_linux_x64
-      - build_windows_x64
-      - build_android_standalone_apk
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -570,36 +559,6 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: desktop-payload
-          path: release-assets
-
-      - name: Download macOS arm64 artifacts
-        uses: actions/download-artifact@v8
-        with:
-          name: desktop-mac-arm64
-          path: release-assets
-
-      - name: Download macOS x64 artifacts
-        uses: actions/download-artifact@v8
-        with:
-          name: desktop-mac-x64
-          path: release-assets
-
-      - name: Download Linux x64 artifacts
-        uses: actions/download-artifact@v8
-        with:
-          name: desktop-linux-x64
-          path: release-assets
-
-      - name: Download Windows x64 artifacts
-        uses: actions/download-artifact@v8
-        with:
-          name: desktop-win-x64
-          path: release-assets
-
-      - name: Download Android APK
-        uses: actions/download-artifact@v8
-        with:
-          name: mobile-android-${{ needs.build_android_standalone_apk.outputs.variant }}-standalone-apk
           path: release-assets
 
       - name: Publish release
@@ -616,14 +575,7 @@ jobs:
           files: |
             release-assets/payload-*.tar.gz
             release-assets/payload-manifest.json
-            release-assets/*.dmg
-            release-assets/*.zip
-            release-assets/*.AppImage
-            release-assets/*.exe
-            release-assets/*.blockmap
-            release-assets/*.yml
-            release-assets/*.apk
-          fail_on_unmatched_files: true
+          fail_on_unmatched_files: false
 
       - name: Publish first release
         if: needs.preflight.outputs.previous_tag == ''
@@ -638,11 +590,160 @@ jobs:
           files: |
             release-assets/payload-*.tar.gz
             release-assets/payload-manifest.json
+          fail_on_unmatched_files: false
+
+  append_macos_arm64:
+    if: |
+      !failure() && !cancelled() &&
+      needs.preflight.result == 'success' &&
+      needs.release.result == 'success' &&
+      needs.build_macos_arm64.result == 'success'
+    name: Append macOS arm64 assets
+    needs:
+      - preflight
+      - release
+      - build_macos_arm64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Download macOS arm64 artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: desktop-mac-arm64
+          path: release-assets
+
+      - name: Upload macOS arm64 assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          target_commitish: ${{ needs.preflight.outputs.ref }}
+          files: |
             release-assets/*.dmg
             release-assets/*.zip
+            release-assets/*.blockmap
+            release-assets/*.yml
+          fail_on_unmatched_files: false
+
+  append_macos_x64:
+    if: |
+      !failure() && !cancelled() &&
+      needs.preflight.result == 'success' &&
+      needs.release.result == 'success' &&
+      needs.build_macos_x64.result == 'success'
+    name: Append macOS x64 assets
+    needs:
+      - preflight
+      - release
+      - build_macos_x64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Download macOS x64 artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: desktop-mac-x64
+          path: release-assets
+
+      - name: Upload macOS x64 assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          target_commitish: ${{ needs.preflight.outputs.ref }}
+          files: |
+            release-assets/*.dmg
+            release-assets/*.zip
+            release-assets/*.blockmap
+            release-assets/*.yml
+          fail_on_unmatched_files: false
+
+  append_linux_x64:
+    if: |
+      !failure() && !cancelled() &&
+      needs.preflight.result == 'success' &&
+      needs.release.result == 'success' &&
+      needs.build_linux_x64.result == 'success'
+    name: Append Linux x64 assets
+    needs:
+      - preflight
+      - release
+      - build_linux_x64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Download Linux x64 artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: desktop-linux-x64
+          path: release-assets
+
+      - name: Upload Linux x64 assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          target_commitish: ${{ needs.preflight.outputs.ref }}
+          files: |
             release-assets/*.AppImage
+            release-assets/*.blockmap
+            release-assets/*.yml
+          fail_on_unmatched_files: false
+
+  append_windows_x64:
+    if: |
+      !failure() && !cancelled() &&
+      needs.preflight.result == 'success' &&
+      needs.release.result == 'success' &&
+      needs.build_windows_x64.result == 'success'
+    name: Append Windows x64 assets
+    needs:
+      - preflight
+      - release
+      - build_windows_x64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Download Windows x64 artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: desktop-win-x64
+          path: release-assets
+
+      - name: Upload Windows x64 assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          target_commitish: ${{ needs.preflight.outputs.ref }}
+          files: |
             release-assets/*.exe
             release-assets/*.blockmap
             release-assets/*.yml
+          fail_on_unmatched_files: false
+
+  append_android_standalone_apk:
+    if: |
+      !failure() && !cancelled() &&
+      needs.preflight.result == 'success' &&
+      needs.release.result == 'success' &&
+      needs.build_android_standalone_apk.result == 'success' &&
+      needs.build_android_standalone_apk.outputs.apk_exists == 'true'
+    name: Append Android standalone APK
+    needs:
+      - preflight
+      - release
+      - build_android_standalone_apk
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Download Android APK
+        uses: actions/download-artifact@v8
+        with:
+          name: mobile-android-${{ needs.build_android_standalone_apk.outputs.variant }}-standalone-apk
+          path: release-assets
+
+      - name: Upload Android APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.preflight.outputs.tag }}
+          target_commitish: ${{ needs.preflight.outputs.ref }}
+          files: |
             release-assets/*.apk
-          fail_on_unmatched_files: true
+          fail_on_unmatched_files: false
