@@ -1,13 +1,19 @@
+import * as NodeModule from "node:module";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
+import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
+import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 import {
   BuildCommandFailedError,
   createStageWorkspaceConfig,
@@ -39,6 +45,18 @@ import {
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
+const RUNTIME_SOURCE_ROOTS = [
+  "apps/desktop/src",
+  "apps/desktop/electron",
+  "apps/server/src",
+  "packages/client-runtime/src",
+  "packages/contracts/src",
+  "packages/shared/src",
+] as const;
+
+const RUNTIME_SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"]);
+const RUNTIME_SOURCE_IGNORED_SUFFIXES = [".test.ts", ".test.tsx", ".spec.ts", ".spec.tsx"] as const;
+
 function mockProcess(exitCode: number) {
   return ChildProcessSpawner.makeHandle({
     pid: ChildProcessSpawner.ProcessId(1),
@@ -53,6 +71,54 @@ function mockProcess(exitCode: number) {
     getInputFd: () => Sink.drain,
     getOutputFd: () => Stream.empty,
   });
+}
+
+function collectRuntimeSourceFiles(
+  root: string,
+): Effect.Effect<ReadonlyArray<string>, never, FileSystem.FileSystem | Path.Path> {
+  const visit = (
+    entryPath: string,
+  ): Effect.Effect<ReadonlyArray<string>, never, FileSystem.FileSystem | Path.Path> =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const stat = yield* fs.stat(entryPath).pipe(Effect.orDie);
+
+      if (stat.type === "Directory") {
+        const sources: string[] = [];
+        const entries = yield* fs.readDirectory(entryPath).pipe(Effect.orDie);
+        for (const entry of entries) {
+          sources.push(...(yield* visit(path.join(entryPath, entry))));
+        }
+        return sources;
+      }
+
+      if (
+        stat.type === "File" &&
+        RUNTIME_SOURCE_EXTENSIONS.has(path.extname(entryPath)) &&
+        !RUNTIME_SOURCE_IGNORED_SUFFIXES.some((suffix) => entryPath.endsWith(suffix))
+      ) {
+        return [entryPath];
+      }
+
+      return [];
+    });
+
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    if (!(yield* fs.exists(root).pipe(Effect.orDie))) {
+      return [];
+    }
+    return yield* visit(root);
+  });
+}
+
+function firstMatchingLine(source: string, pattern: RegExp): number {
+  const match = pattern.exec(source);
+  if (!match?.index) {
+    return 1;
+  }
+  return source.slice(0, match.index).split("\n").length;
 }
 
 function iconResizeSpawnerLayer(
@@ -168,6 +234,71 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       },
     );
   });
+
+  it("does not promote Effect's fast-check test dependency into desktop runtime manifests", () => {
+    assert.equal(Object.hasOwn(serverPackageJson.dependencies, "fast-check"), false);
+    assert.equal(Object.hasOwn(serverPackageJson.dependencies, "pure-rand"), false);
+    assert.equal(Object.hasOwn(desktopPackageJson.dependencies, "fast-check"), false);
+    assert.equal(Object.hasOwn(desktopPackageJson.dependencies, "pure-rand"), false);
+  });
+
+  it.effect("keeps fast-check and Effect testing helpers out of runtime source imports", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const repoRoot = yield* path.fromFileUrl(new URL("..", import.meta.url));
+      const violations: string[] = [];
+      const bannedRuntimeImports = [
+        {
+          description: "fast-check",
+          pattern: /^\s*import\s+.*from\s+["']fast-check(?:\/[^"']*)?["']/mu,
+        },
+        {
+          description: "effect/testing",
+          pattern: /^\s*import\s+.*from\s+["']effect\/testing(?:\/[^"']*)?["']/mu,
+        },
+        {
+          description: "Schema.toArbitrary",
+          pattern: /\bSchema\.toArbitrary\s*\(/u,
+        },
+      ] as const;
+
+      for (const sourceRoot of RUNTIME_SOURCE_ROOTS) {
+        const files = yield* collectRuntimeSourceFiles(path.join(repoRoot, sourceRoot));
+        for (const filePath of files) {
+          const source = yield* fs.readFileString(filePath);
+          for (const banned of bannedRuntimeImports) {
+            if (banned.pattern.test(source)) {
+              const line = firstMatchingLine(source, banned.pattern);
+              violations.push(
+                `${path.relative(repoRoot, filePath)}:${line} imports ${banned.description}`,
+              );
+            }
+          }
+        }
+      }
+
+      assert.deepStrictEqual(violations, []);
+    }),
+  );
+
+  it.effect("does not let Effect Schema eagerly load fast-check in the desktop runtime", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const requireForDesktop = NodeModule.createRequire(
+        new URL("../apps/desktop/package.json", import.meta.url),
+      );
+      const schemaPath = requireForDesktop.resolve("effect/Schema");
+      const schemaSource = yield* fs.readFileString(schemaPath);
+
+      assert.notInclude(schemaSource, "./testing/FastCheck.js");
+      assert.equal(
+        /^\s*(?:import|export)\s+.*from\s+["']fast-check["']/mu.test(schemaSource),
+        false,
+      );
+      assert.doesNotThrow(() => requireForDesktop("effect/Schema"));
+    }),
+  );
 
   it("carries only staged dependency patch metadata into staged desktop installs", () => {
     assert.deepStrictEqual(
