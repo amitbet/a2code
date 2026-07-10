@@ -8,7 +8,6 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
-import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 import {
   BuildCommandFailedError,
   createStageWorkspaceConfig,
@@ -168,10 +167,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         effect: "4.0.0-beta.59",
       },
     );
-  });
-
-  it("keeps Effect's fast-check runtime dependency in the staged server manifest", () => {
-    assert.equal(serverPackageJson.dependencies["fast-check"], "catalog:");
   });
 
   it("carries only staged dependency patch metadata into staged desktop installs", () => {

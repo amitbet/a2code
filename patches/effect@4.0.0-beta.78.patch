@@ -1,3 +1,61 @@
+diff --git a/dist/Schema.d.ts b/dist/Schema.d.ts
+index 525606a..1261076 100644
+--- a/dist/Schema.d.ts
++++ b/dist/Schema.d.ts
+@@ -115,6 +115,6 @@ import type * as SchemaRepresentation from "./SchemaRepresentation.ts";
+ import type { Assign, Lambda, Mutable, Simplify } from "./Struct.ts";
+ import * as Struct_ from "./Struct.ts";
+-import * as FastCheck from "./testing/FastCheck.ts";
++import type * as FastCheck from "./testing/FastCheck.ts";
+ import type { RequiredKeys, UnionToIntersection } from "./Types.ts";
+ import type { Unify } from "./Unify.ts";
+ declare const TypeId = "~effect/Schema/Schema";
+diff --git a/dist/Schema.js b/dist/Schema.js
+index 0b23784..d4fb668 100644
+--- a/dist/Schema.js
++++ b/dist/Schema.js
+@@ -124,6 +124,5 @@ import * as SchemaParser from "./SchemaParser.js";
+ import * as SchemaTransformation from "./SchemaTransformation.js";
+ import * as Struct_ from "./Struct.js";
+-import * as FastCheck from "./testing/FastCheck.js";
+ const TypeId = InternalSchema.TypeId;
+ /**
+  * Creates a schema for a **parametric** type (a generic container such as
+@@ -7584,7 +7583,7 @@ export function toArbitraryLazy(schema) {
+  * @since 4.0.0
+  */
+ export function toArbitrary(schema) {
+-  return toArbitraryLazy(schema)(FastCheck);
++  throw new Error("Schema.toArbitrary requires fast-check at runtime. Use Schema.toArbitraryLazy(schema)(FastCheck) from test code instead.");
+ }
+ // -----------------------------------------------------------------------------
+ // Formatter
+diff --git a/src/Schema.ts b/src/Schema.ts
+index 37d7beb..7803f8e 100644
+--- a/src/Schema.ts
++++ b/src/Schema.ts
+@@ -133,7 +133,7 @@ import type * as SchemaRepresentation from "./SchemaRepresentation.ts"
+ import * as SchemaTransformation from "./SchemaTransformation.ts"
+ import type { Assign, Lambda, Mutable, Simplify } from "./Struct.ts"
+ import * as Struct_ from "./Struct.ts"
+-import * as FastCheck from "./testing/FastCheck.ts"
++import type * as FastCheck from "./testing/FastCheck.ts"
+ import type { RequiredKeys, UnionToIntersection } from "./Types.ts"
+ import type { Unify } from "./Unify.ts"
+ 
+@@ -12802,8 +12802,10 @@ export function toArbitraryLazy<S extends Top>(schema: S): LazyArbitrary<S["Type
+  * @category Arbitrary
+  * @since 4.0.0
+  */
+-export function toArbitrary<S extends Top>(schema: S): FastCheck.Arbitrary<S["Type"]> {
+-  return toArbitraryLazy(schema)(FastCheck)
++export function toArbitrary<S extends Top>(_schema: S): FastCheck.Arbitrary<S["Type"]> {
++  throw new Error(
++    "Schema.toArbitrary requires fast-check at runtime. Use Schema.toArbitraryLazy(schema)(FastCheck) from test code instead."
++  )
+ }
+ 
+ // -----------------------------------------------------------------------------
 diff --git a/dist/unstable/ai/McpServer.js b/dist/unstable/ai/McpServer.js
 index 4819ff0..f5e0f60 100644
 --- a/dist/unstable/ai/McpServer.js
