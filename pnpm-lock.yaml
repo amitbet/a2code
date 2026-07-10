@@ -24,6 +24,9 @@ catalogs:
     '@typescript/native-preview':
       specifier: 7.0.0-dev.20260604.1
       version: 7.0.0-dev.20260604.1
+    fast-check:
+      specifier: 4.8.0
+      version: 4.8.0
     jose:
       specifier: 6.2.2
       version: 6.2.2
@@ -448,6 +451,9 @@ importers:
       effect:
         specifier: 4.0.0-beta.78
         version: 4.0.0-beta.78(patch_hash=c502bc684210b707dfceb87d8fe6ad6843395af6e19cfc02cd65854898bde2c5)
+      fast-check:
+        specifier: 'catalog:'
+        version: 4.8.0
       fflate:
         specifier: ^0.8.2
         version: 0.8.3
