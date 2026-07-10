@@ -28,6 +28,7 @@ import {
   MacPasskeySigningConfigurationResolutionError,
   MissingMacPasskeyProvisioningProfileError,
   renderMacPasskeyEntitlements,
+  resolveProductionDependencyClosure,
   resolveClerkPasskeyNativeArtifacts,
   resolveMacPasskeySigningConfiguration,
   resolveDesktopRuntimeDependencies,
@@ -240,6 +241,59 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.equal(Object.hasOwn(serverPackageJson.dependencies, "pure-rand"), false);
     assert.equal(Object.hasOwn(desktopPackageJson.dependencies, "fast-check"), false);
     assert.equal(Object.hasOwn(desktopPackageJson.dependencies, "pure-rand"), false);
+  });
+
+  it("promotes nested production dependencies into the staged desktop manifest", () => {
+    const manifests = new Map([
+      [
+        "effect",
+        {
+          manifestPath: "/node_modules/effect/package.json",
+          version: "4.0.0-beta.78",
+          dependencies: { "fast-check": "^4.8.0", "find-my-way-ts": "^0.1.6" },
+          optionalDependencies: {},
+        },
+      ],
+      [
+        "fast-check",
+        {
+          manifestPath: "/node_modules/fast-check/package.json",
+          version: "4.8.0",
+          dependencies: { "pure-rand": "^8.4.0" },
+          optionalDependencies: {},
+        },
+      ],
+      [
+        "find-my-way-ts",
+        {
+          manifestPath: "/node_modules/find-my-way-ts/package.json",
+          version: "0.1.6",
+          dependencies: {},
+          optionalDependencies: {},
+        },
+      ],
+      [
+        "pure-rand",
+        {
+          manifestPath: "/node_modules/pure-rand/package.json",
+          version: "8.4.0",
+          dependencies: {},
+          optionalDependencies: {},
+        },
+      ],
+    ]);
+
+    assert.deepStrictEqual(
+      resolveProductionDependencyClosure({ effect: "4.0.0-beta.78" }, (packageName) =>
+        manifests.get(packageName),
+      ),
+      {
+        effect: "4.0.0-beta.78",
+        "fast-check": "4.8.0",
+        "find-my-way-ts": "0.1.6",
+        "pure-rand": "8.4.0",
+      },
+    );
   });
 
   it.effect("keeps fast-check and Effect testing helpers out of runtime source imports", () =>

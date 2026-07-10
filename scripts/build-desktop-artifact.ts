@@ -1291,6 +1291,101 @@ export function resolveDesktopRuntimeDependencies(
   return resolveCatalogDependencies(runtimeDependencies, catalog, "apps/desktop");
 }
 
+interface InstalledPackageManifest {
+  readonly manifestPath: string;
+  readonly version: string;
+  readonly dependencies: Record<string, string>;
+  readonly optionalDependencies: Record<string, string>;
+}
+
+type ResolveInstalledPackageManifest = (
+  packageName: string,
+  fromManifestPath: string | undefined,
+) => InstalledPackageManifest | undefined;
+
+/**
+ * electron-builder's pnpm collector currently omits nested production dependencies.
+ * Promote the installed production closure into the staged manifest so every runtime
+ * package is collected as a top-level dependency in the desktop archive.
+ */
+export function resolveProductionDependencyClosure(
+  dependencies: Record<string, string>,
+  resolveManifest: ResolveInstalledPackageManifest,
+): Record<string, string> {
+  const closure = { ...dependencies };
+  const pending = Object.keys(dependencies).map((packageName) => ({
+    packageName,
+    fromManifestPath: undefined as string | undefined,
+  }));
+  const visitedManifestPaths = new Set<string>();
+
+  for (const current of pending) {
+    const manifest = resolveManifest(current.packageName, current.fromManifestPath);
+    if (!manifest || visitedManifestPaths.has(manifest.manifestPath)) continue;
+
+    visitedManifestPaths.add(manifest.manifestPath);
+    for (const dependencyName of Object.keys({
+      ...manifest.dependencies,
+      ...manifest.optionalDependencies,
+    })) {
+      if (Object.hasOwn(closure, dependencyName)) continue;
+
+      const dependencyManifest = resolveManifest(dependencyName, manifest.manifestPath);
+      if (!dependencyManifest) continue;
+
+      closure[dependencyName] = dependencyManifest.version;
+      pending.push({
+        packageName: dependencyName,
+        fromManifestPath: manifest.manifestPath,
+      });
+    }
+  }
+
+  return closure;
+}
+
+function resolveInstalledPackageManifest(
+  packageName: string,
+  fromManifestPath: string | undefined,
+): InstalledPackageManifest | undefined {
+  const resolutionRoots = fromManifestPath
+    ? [fromManifestPath]
+    : [
+        new URL("../apps/desktop/package.json", import.meta.url),
+        new URL("../apps/server/package.json", import.meta.url),
+      ];
+
+  for (const resolutionRoot of resolutionRoots) {
+    const requireFromPackage = NodeModule.createRequire(resolutionRoot);
+    try {
+      const manifestPath = requireFromPackage.resolve(`${packageName}/package.json`);
+      const manifest = requireFromPackage(manifestPath) as {
+        version?: unknown;
+        dependencies?: unknown;
+        optionalDependencies?: unknown;
+      };
+      if (typeof manifest.version !== "string") continue;
+
+      return {
+        manifestPath,
+        version: manifest.version,
+        dependencies:
+          manifest.dependencies && typeof manifest.dependencies === "object"
+            ? (manifest.dependencies as Record<string, string>)
+            : {},
+        optionalDependencies:
+          manifest.optionalDependencies && typeof manifest.optionalDependencies === "object"
+            ? (manifest.optionalDependencies as Record<string, string>)
+            : {},
+      };
+    } catch {
+      // Cross-platform optional dependencies might not be present on the build host.
+    }
+  }
+
+  return undefined;
+}
+
 export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig")(function* (
   updateChannel: "latest" | "nightly",
 ) {
@@ -1706,7 +1801,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     yield* fs.writeFileString(macEntitlementsPath, renderMacPasskeyEntitlements(macPasskeySigning));
   }
 
-  const stageDependencies = {
+  const directStageDependencies = {
     ...resolvedServerDependencies,
     ...resolvedDesktopRuntimeDependencies,
     ...resolveFffNativeDependencies(
@@ -1726,6 +1821,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
         )
       : {}),
   };
+  const stageDependencies = resolveProductionDependencyClosure(
+    directStageDependencies,
+    resolveInstalledPackageManifest,
+  );
   const stagePatchedDependencies = createStagePatchedDependencies(
     workspacePatchedDependencies,
     stageDependencies,
