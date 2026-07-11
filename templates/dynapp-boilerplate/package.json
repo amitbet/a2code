@@ -1,0 +1,11 @@
+{
+  "name": "dynapp-boilerplate",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node tests/boilerplate.test.mjs",
+    "typecheck": "node scripts/typecheck.mjs"
+  }
+}
