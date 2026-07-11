@@ -2,7 +2,6 @@
 
 - [Getting started](./getting-started/quick-start.md)
 - [Architecture](./architecture/overview.md)
-- [DynApp package spec](./architecture/dynapp-package-spec.md)
 - [T3 Connect](./cloud/t3-connect-clerk.md)
 - [Integrations](./integrations/source-control-providers.md)
 - [Mobile](./mobile/app.md)
