@@ -8,6 +8,7 @@ import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
 import { normalizeDispatchCommand } from "./Normalizer.ts";
+import { projectThreadSnapshotForClient } from "./ClientProjection.ts";
 import {
   annotateEnvironmentRequest,
   failEnvironmentInternal,
@@ -58,7 +59,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         "threadSnapshot",
         Effect.fn("environment.orchestration.threadSnapshot")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
-          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          const session = yield* requireEnvironmentScope(AuthOrchestrationReadScope);
           const snapshot = yield* projectionSnapshotQuery
             .getThreadDetailSnapshot(args.params.threadId)
             .pipe(
@@ -69,7 +70,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           if (Option.isNone(snapshot)) {
             return yield* failEnvironmentNotFound("thread_not_found");
           }
-          return snapshot.value;
+          return projectThreadSnapshotForClient(snapshot.value, session.client.deviceType);
         }),
       )
       .handle(

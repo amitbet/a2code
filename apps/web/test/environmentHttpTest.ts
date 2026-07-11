@@ -56,6 +56,7 @@ const authenticatedAuth: Context.Service.Shape<typeof EnvironmentAuthenticatedAu
       subject: "test-client",
       method: "browser-session-cookie",
       scopes: new Set<AuthEnvironmentScope>(),
+      client: { deviceType: "desktop" },
       expiresAt: DateTime.makeUnsafe("2026-05-01T12:00:00.000Z"),
     }),
   );

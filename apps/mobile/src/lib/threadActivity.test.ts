@@ -56,6 +56,43 @@ function makeThread(
 }
 
 describe("buildThreadFeed", () => {
+  it("excludes account rate limit updates from the mobile work log", () => {
+    const thread = makeThread({
+      id: ThreadId.make("thread-rate-limits"),
+      projectId: ProjectId.make("project-1"),
+      title: "Rate limit updates",
+      activities: [
+        makeActivity({
+          id: EventId.make("rate-limit-1"),
+          kind: "account.rate-limits.updated",
+          summary: "Account rate limits updated",
+          createdAt: "2026-04-01T00:00:01.000Z",
+          payload: {
+            snapshot: {
+              windows: [{ kind: "five_hour", label: "5-hour", usedPercent: 42 }],
+              status: "allowed",
+            },
+          },
+        }),
+        makeActivity({
+          id: EventId.make("tool-completed"),
+          kind: "tool.completed",
+          tone: "tool",
+          summary: "Ran command",
+          createdAt: "2026-04-01T00:00:02.000Z",
+        }),
+      ],
+    });
+
+    const feed = buildThreadFeed(thread);
+
+    expect(feed).toHaveLength(1);
+    expect(feed[0]).toMatchObject({
+      type: "activity-group",
+      activities: [{ id: "tool-completed", summary: "Ran command" }],
+    });
+  });
+
   it("keeps historic work entries attributed to their turns", () => {
     const thread = makeThread({
       id: ThreadId.make("thread-1"),
