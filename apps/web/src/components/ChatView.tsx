@@ -3829,7 +3829,11 @@ function ChatViewContent(props: ChatViewProps) {
     setOptimisticQueuedPrompts([]);
     resetLocalDispatch();
     setExpandedImage(null);
-  }, [draftId, resetLocalDispatch, threadId]);
+    // A draft is promoted in place once its server thread starts. During that
+    // render, `draftId` disappears before the server message echo is guaranteed
+    // to arrive. Keep optimistic state across that promotion; only a move to a
+    // different scoped thread should clear it.
+  }, [resetLocalDispatch, routeThreadKey]);
 
   const closeExpandedImage = useCallback(() => {
     setExpandedImage(null);
