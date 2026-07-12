@@ -1,5 +1,6 @@
 import {
   type ApprovalRequestId,
+  type ChatAttachment,
   DEFAULT_MODEL,
   defaultInstanceIdForDriver,
   type EnvironmentId,
@@ -139,6 +140,7 @@ import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
   ChevronDownIcon,
+  PencilIcon,
   SendHorizontalIcon,
   TriangleAlertIcon,
   WifiOffIcon,
@@ -346,13 +348,13 @@ function formatOutgoingPrompt(params: {
 type OptimisticQueuedPrompt = {
   readonly messageId: MessageId;
   readonly text: string;
-  readonly attachments: ReadonlyArray<unknown>;
+  readonly attachments: ReadonlyArray<ChatAttachment & { readonly previewUrl?: string }>;
   readonly createdAt: string;
 };
 
 function formatQueuedPromptPreview(prompt: {
   readonly text: string;
-  readonly attachments: ReadonlyArray<unknown>;
+  readonly attachments: ReadonlyArray<ChatAttachment>;
 }): string {
   const text = prompt.text.trim();
   if (text) {
@@ -1297,15 +1299,14 @@ function ChatViewContent(props: ChatViewProps) {
     const pending = optimisticQueuedPrompts.filter((prompt) => !serverIds.has(prompt.messageId));
     return [
       ...serverQueuedPrompts.map((prompt) => ({
-        messageId: prompt.messageId,
-        text: prompt.text,
-        attachments: prompt.attachments as ReadonlyArray<unknown>,
+        ...prompt,
         pending: false,
       })),
       ...pending.map((prompt) => ({
-        messageId: prompt.messageId,
-        text: prompt.text,
-        attachments: prompt.attachments,
+        ...prompt,
+        modelSelection: undefined,
+        runtimeMode: undefined,
+        interactionMode: undefined,
         pending: true,
       })),
     ];
@@ -1976,8 +1977,13 @@ function ChatViewContent(props: ChatViewProps) {
         attachmentIds.add(attachment.id);
       }
     }
+    for (const prompt of serverQueuedPrompts) {
+      for (const attachment of prompt.attachments) {
+        attachmentIds.add(attachment.id);
+      }
+    }
     return [...attachmentIds];
-  }, [serverMessages]);
+  }, [serverMessages, serverQueuedPrompts]);
   const serverAttachmentResources = useMemo(
     () =>
       serverAttachmentIds.map((attachmentId) => ({
@@ -1996,6 +2002,23 @@ function ChatViewContent(props: ChatViewProps) {
         }),
       ),
     [serverAttachmentIds, serverAttachmentUrls],
+  );
+  const queuedPromptsWithPreviewUrls = useMemo(
+    () =>
+      displayedQueuedPrompts.map((prompt) => ({
+        ...prompt,
+        attachments: prompt.attachments.map((attachment) => {
+          if (attachment.type !== "image") {
+            return attachment;
+          }
+          const previewUrl =
+            ("previewUrl" in attachment ? attachment.previewUrl : undefined) ??
+            serverAttachmentUrlById.get(attachment.id) ??
+            undefined;
+          return { ...attachment, previewUrl };
+        }),
+      })),
+    [displayedQueuedPrompts, serverAttachmentUrlById],
   );
   const displayServerMessages = useMemo<ReadonlyArray<ChatMessage>>(() => {
     if (!serverMessages) return [];
@@ -2349,8 +2372,8 @@ function ChatViewContent(props: ChatViewProps) {
     [draftId, routeThreadKey, routeThreadRef, serverThread],
   );
   const onRemoveQueuedPrompt = useCallback(
-    async (messageId: MessageId) => {
-      if (!isServerThread || activeThreadId === null) return;
+    async (messageId: MessageId): Promise<boolean> => {
+      if (!isServerThread || activeThreadId === null) return false;
       const result = await removeThreadPrompt({
         environmentId,
         input: {
@@ -2364,9 +2387,112 @@ function ChatViewContent(props: ChatViewProps) {
           activeThreadId,
           error instanceof Error ? error.message : "Failed to remove queued prompt.",
         );
+        return false;
       }
+      return result._tag === "Success";
     },
     [activeThreadId, environmentId, isServerThread, removeThreadPrompt, setThreadError],
+  );
+  const onEditQueuedPrompt = useCallback(
+    async (prompt: (typeof queuedPromptsWithPreviewUrls)[number]) => {
+      if (prompt.pending) return;
+
+      const draft = composerRef.current?.getSendContext();
+      if (
+        draft &&
+        (draft.prompt.trim().length > 0 ||
+          draft.images.length > 0 ||
+          draft.terminalContexts.length > 0 ||
+          draft.elementContexts.length > 0 ||
+          draft.previewAnnotations.length > 0 ||
+          draft.reviewComments.length > 0)
+      ) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "warning",
+            title: "Composer already has a draft",
+            description: "Send or clear the current draft before editing a queued item.",
+          }),
+        );
+        return;
+      }
+
+      let restoredAttachments: ComposerImageAttachment[];
+      try {
+        const restoredFiles = await Promise.all(
+          prompt.attachments.map(async (attachment) => {
+            const url = serverAttachmentUrlById.get(attachment.id);
+            if (!url) {
+              throw new Error(`Attachment “${attachment.name}” is not available yet.`);
+            }
+            const response = await fetch(url);
+            if (!response.ok) {
+              throw new Error(`Could not load attachment “${attachment.name}”.`);
+            }
+            const file = new File([await response.blob()], attachment.name, {
+              type: attachment.mimeType,
+            });
+            return { attachment, file };
+          }),
+        );
+        restoredAttachments = restoredFiles.map(({ attachment, file }) =>
+          attachment.type === "image"
+            ? {
+                ...attachment,
+                previewUrl: URL.createObjectURL(file),
+                file,
+              }
+            : { ...attachment, file },
+        );
+      } catch (error) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not edit queued item",
+            description: error instanceof Error ? error.message : "Failed to restore attachments.",
+          }),
+        );
+        return;
+      }
+
+      const removed = await onRemoveQueuedPrompt(prompt.messageId);
+      if (!removed) {
+        for (const attachment of restoredAttachments) {
+          if (attachment.previewUrl) URL.revokeObjectURL(attachment.previewUrl);
+        }
+        return;
+      }
+
+      setComposerDraftPrompt(composerDraftTarget, prompt.text);
+      addComposerDraftImages(composerDraftTarget, restoredAttachments);
+      if (prompt.modelSelection) {
+        setComposerDraftModelSelection(composerDraftTarget, prompt.modelSelection);
+      }
+      if (prompt.runtimeMode) {
+        setComposerDraftRuntimeMode(composerDraftTarget, prompt.runtimeMode);
+      }
+      if (prompt.interactionMode) {
+        setComposerDraftInteractionMode(composerDraftTarget, prompt.interactionMode);
+      }
+      promptRef.current = prompt.text;
+      composerRef.current?.resetCursorState({
+        cursor: prompt.text.length,
+        prompt: prompt.text,
+        detectTrigger: true,
+      });
+      window.requestAnimationFrame(() => composerRef.current?.focusAtEnd());
+    },
+    [
+      addComposerDraftImages,
+      composerDraftTarget,
+      composerRef,
+      onRemoveQueuedPrompt,
+      serverAttachmentUrlById,
+      setComposerDraftInteractionMode,
+      setComposerDraftModelSelection,
+      setComposerDraftPrompt,
+      setComposerDraftRuntimeMode,
+    ],
   );
   const onSteerQueuedPrompt = useCallback(
     async (messageId: MessageId) => {
@@ -5364,38 +5490,80 @@ function ChatViewContent(props: ChatViewProps) {
                           </span>
                         </div>
                         <div className="flex flex-col gap-1.5">
-                          {displayedQueuedPrompts.map((prompt) => (
-                            <div
-                              key={prompt.messageId}
-                              className="flex min-h-8 items-center gap-2 rounded-md bg-muted/45 px-2 py-1.5"
-                            >
-                              <div className="min-w-0 flex-1 truncate text-sm">
-                                {formatQueuedPromptPreview(prompt)}
+                          {queuedPromptsWithPreviewUrls.map((prompt) => {
+                            const images = prompt.attachments.filter(
+                              (attachment) => attachment.type === "image",
+                            );
+                            return (
+                              <div
+                                key={prompt.messageId}
+                                className="flex min-h-8 items-center gap-2 rounded-md bg-muted/45 px-2 py-1.5"
+                              >
+                                {images.length > 0 ? (
+                                  <div className="flex shrink-0 -space-x-1">
+                                    {images.slice(0, 3).map((image) => (
+                                      <div
+                                        key={image.id}
+                                        title={image.name}
+                                        className="size-7 overflow-hidden rounded border border-border bg-muted"
+                                      >
+                                        {image.previewUrl ? (
+                                          <img
+                                            src={image.previewUrl}
+                                            alt=""
+                                            loading="lazy"
+                                            decoding="async"
+                                            className="size-full object-cover"
+                                          />
+                                        ) : null}
+                                      </div>
+                                    ))}
+                                    {images.length > 3 ? (
+                                      <span className="relative flex size-7 items-center justify-center rounded border border-border bg-muted text-[10px] text-muted-foreground">
+                                        +{images.length - 3}
+                                      </span>
+                                    ) : null}
+                                  </div>
+                                ) : null}
+                                <div className="min-w-0 flex-1 truncate text-sm">
+                                  {formatQueuedPromptPreview(prompt)}
+                                </div>
+                                <Button
+                                  size="xs"
+                                  variant="ghost"
+                                  disabled={prompt.pending}
+                                  onClick={() => {
+                                    void onEditQueuedPrompt(prompt);
+                                  }}
+                                >
+                                  <PencilIcon className="size-3.5" />
+                                  Edit
+                                </Button>
+                                <Button
+                                  size="xs"
+                                  variant="outline"
+                                  disabled={prompt.pending}
+                                  onClick={() => {
+                                    void onSteerQueuedPrompt(prompt.messageId);
+                                  }}
+                                >
+                                  <SendHorizontalIcon className="size-3.5" />
+                                  Steer
+                                </Button>
+                                <Button
+                                  aria-label="Remove queued prompt"
+                                  size="icon-xs"
+                                  variant="ghost"
+                                  disabled={prompt.pending}
+                                  onClick={() => {
+                                    void onRemoveQueuedPrompt(prompt.messageId);
+                                  }}
+                                >
+                                  <XIcon className="size-3.5" />
+                                </Button>
                               </div>
-                              <Button
-                                size="xs"
-                                variant="outline"
-                                disabled={prompt.pending}
-                                onClick={() => {
-                                  void onSteerQueuedPrompt(prompt.messageId);
-                                }}
-                              >
-                                <SendHorizontalIcon className="size-3.5" />
-                                Steer
-                              </Button>
-                              <Button
-                                aria-label="Remove queued prompt"
-                                size="icon-xs"
-                                variant="ghost"
-                                disabled={prompt.pending}
-                                onClick={() => {
-                                  void onRemoveQueuedPrompt(prompt.messageId);
-                                }}
-                              >
-                                <XIcon className="size-3.5" />
-                              </Button>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                     ) : null}
