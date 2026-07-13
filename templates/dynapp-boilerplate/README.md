@@ -14,16 +14,16 @@ npm test
 npm run typecheck
 ```
 
-The shell loads `dist/index.html`. A2 Code edits the source in `src/`, then runs
-the declared build script to refresh `dist/`.
+The shell loads `content/index.html`. A2 Code edits the source in `src/`, then
+runs the declared build script to refresh `content/`.
 
 ## Permissions
 
 This boilerplate requests no shell capabilities:
 
 ```json
-"permissions": []
+"backendPermissions": []
 ```
 
-Add permissions only when the app needs shell access, and include a clear
-manifest reason for each capability.
+Add permission objects only when the app needs shell access, and include a
+specific user-facing `reason` for each permission.

@@ -5,17 +5,17 @@ import { fileURLToPath } from "node:url";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const manifest = JSON.parse(await readFile(join(root, "app.json"), "utf8"));
 
-const required = ["schemaVersion", "id", "name", "version", "entry", "permissions"];
+const required = ["schemaVersion", "id", "name", "version", "backendPermissions"];
 for (const field of required) {
   if (!(field in manifest)) {
     throw new Error(`app.json is missing required field: ${field}`);
   }
 }
 
-if (!Array.isArray(manifest.permissions)) {
-  throw new Error("app.json permissions must be an array");
+if (manifest.schemaVersion !== 2) {
+  throw new Error("app.json schemaVersion must be 2");
 }
 
-if (!manifest.entry?.html) {
-  throw new Error("app.json entry.html is required");
+if (!Array.isArray(manifest.backendPermissions)) {
+  throw new Error("app.json backendPermissions must be an array");
 }

@@ -2,15 +2,15 @@ const app = document.querySelector("#app");
 
 const manifestSummary = {
   name: "DynApp Boilerplate",
-  permissions: [],
+  backendPermissions: [],
   source: "src/",
-  output: "dist/"
+  output: "content/",
 };
 
 app.innerHTML = `
   <main class="shell">
     <section class="intro">
-      <img src="../public/icon.svg" alt="" class="icon" />
+      <img src="./assets/icon.svg" alt="" class="icon" />
       <div>
         <p class="eyebrow">DynApp starter</p>
         <h1>${manifestSummary.name}</h1>
@@ -23,7 +23,7 @@ app.innerHTML = `
     <section class="facts" aria-label="Package facts">
       <article>
         <span>Permissions</span>
-        <strong>${manifestSummary.permissions.length}</strong>
+        <strong>${manifestSummary.backendPermissions.length}</strong>
       </article>
       <article>
         <span>Source</span>

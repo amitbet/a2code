@@ -1,12 +1,12 @@
 # Modification Guide
 
 Start with `src/main.js` and `src/styles.css`. Keep app behavior in source files,
-then run `npm run build` to regenerate `dist/`.
+then run `npm run build` to regenerate `content/`.
 
 When adding shell access:
 
 - Add the permission to `app.json`.
-- Use the narrowest scope that works.
+- Request only the specific permission needed by the feature.
 - Add a plain-language reason.
 - Update `README.md` and `CHANGES.md`.
 

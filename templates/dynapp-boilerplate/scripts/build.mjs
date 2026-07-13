@@ -4,11 +4,12 @@ import { fileURLToPath } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 
-await mkdir(join(root, "dist/assets"), { recursive: true });
-await copyFile(join(root, "src/main.js"), join(root, "dist/assets/app.js"));
-await copyFile(join(root, "src/styles.css"), join(root, "dist/assets/app.css"));
+await mkdir(join(root, "content/assets"), { recursive: true });
+await copyFile(join(root, "src/main.js"), join(root, "content/assets/app.js"));
+await copyFile(join(root, "src/styles.css"), join(root, "content/assets/app.css"));
+await copyFile(join(root, "public/icon.svg"), join(root, "content/assets/icon.svg"));
 await writeFile(
-  join(root, "dist/index.html"),
+  join(root, "content/index.html"),
   `<!doctype html>
 <html lang="en">
   <head>

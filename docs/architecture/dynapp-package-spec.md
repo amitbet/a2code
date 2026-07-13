@@ -20,6 +20,7 @@ tracking files, declared scripts, and no requested shell permissions.
   native setup.
 - Keep app content hot-updatable and inspectable.
 - Move privileged host access into shell capabilities that any DynApp can request.
+- Use one Shell capability contract over local IPC and authenticated remote WSS.
 - Make permissions visible before install and before update.
 - Grade apps for shareability and modifiability, called "modifyability" in
   user-facing store UI if we prefer that wording, so the app store can recommend
@@ -39,12 +40,14 @@ capabilities are declared in the manifest and granted by the user.
 
 - Verify bundle signatures and checksums before install.
 - Parse `app.json` and compute install/update permission warnings.
-- Store grants, secrets, signing keys, audit logs, and durable process state.
+- Store grants, app-scoped secrets, trusted verification keys, audit logs, and
+  durable process state.
 - Expose typed shell capabilities through `window.appShell`.
 - Enforce capability grants at every call boundary.
 - Deny undeclared, unknown, revoked, or ungranted capabilities.
-- Provide filesystem, process, PTY, git, packaging, preview, and publish
-  capabilities.
+- Provide generic filesystem, networking, application, and process capabilities.
+- Expose the same capability contract locally and, when explicitly paired, from
+  a remote Shell over authenticated WSS.
 - Keep long-running work alive across content reloads where appropriate.
 
 ### DynApp Responsibilities
@@ -67,21 +70,32 @@ app-specific:
 ```ts
 window.appShell.capabilities.list();
 window.appShell.capabilities.getGrantState();
-window.appShell.files.read(projectId, "src/App.tsx");
-window.appShell.files.applyPatch(projectId, patch);
-window.appShell.processes.spawn("npm", { args: ["test"], cwd });
-window.appShell.terminals.open(projectId, cwd);
-window.appShell.dynapp.package(appId);
+window.appShell.fs.readText("/projects/todo/src/App.tsx");
+window.appShell.fs.writeText("/projects/todo/src/App.tsx", source);
+window.appShell.fs.execFile("git", ["status", "--short"], "/projects/todo");
+
+const process = await window.appShell.process.open({
+  file: "codex",
+  args: ["app-server"],
+  cwd: "/projects/todo",
+  mode: "pipe",
+});
+process.write(request);
+process.onStdout(handleResponse);
 ```
 
 Every method is available only when the DynApp declares the matching capability
 and the user grants it. A2 Code is not a privileged exception; it is a DynApp
 that requests stronger editor capabilities.
 
-Apps should prefer narrow workflow APIs over broad raw access. For example, an
-app editor should prefer `files.applyPatch` over full-project write access when a
-patch is enough, and should prefer a declared build script over arbitrary command
-execution when possible.
+The Shell contract stays generic. Product-specific operations such as applying a
+patch, running a DynApp build, invoking git, or scoring a manifest are composed in
+content from the generic APIs. A content helper may provide a narrow workflow API,
+but it must not create a new privileged Shell namespace.
+
+Local and remote Shells expose the same contract. A remote connection returns a
+Shell client whose `fs`, `process`, `net`, and other groups behave like the local
+groups. The transport differs; application logic does not.
 
 ## Bundle Structure
 
@@ -98,7 +112,7 @@ my-app.dynapp/
   CHANGELOG.md
   CHANGES.md
   FORK_NOTES.md
-  dist/
+  content/
     index.html
     assets/
       app.js
@@ -122,7 +136,7 @@ Required files:
 - `app.json`: Manifest, permissions, entrypoints, scripts, and scoring metadata.
 - `LICENSE`: License for the app code and bundled assets.
 - `README.md`: What the app does, how to use it, and what it needs access to.
-- `dist/`: Built browser content loaded by the shell.
+- `content/`: Built browser content loaded by the shell.
 
 Required for new apps created from the boilerplate:
 
@@ -160,13 +174,13 @@ replace template values before the first package:
 - `author`
 - `version`
 - `assets`
-- `permissions`
+- `backendPermissions`
 - `repository`
 - `shareability`
 
 ```json
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "id": "com.example.todo",
   "name": "Todo Studio",
   "version": "1.0.0",
@@ -177,9 +191,6 @@ replace template values before the first package:
   },
   "license": "MIT",
   "minShellVersion": "1.0.0",
-  "entry": {
-    "html": "dist/index.html"
-  },
   "source": {
     "root": "src",
     "language": "typescript",
@@ -189,16 +200,14 @@ replace template values before the first package:
     "icon": "public/icon.png",
     "screenshots": ["public/screenshots/main.png"]
   },
-  "permissions": [
+  "backendPermissions": [
     {
-      "capability": "files.read",
-      "scope": "selectedProjectRoots",
-      "reason": "Open user-selected app source for editing."
+      "permission": "fs.readText",
+      "reason": "Reads source files selected by the user so they can be edited in A2 Code."
     },
     {
-      "capability": "files.write",
-      "scope": "selectedProjectRoots",
-      "reason": "Save accepted edits back to the selected project."
+      "permission": "fs.writeText",
+      "reason": "Writes changes accepted by the user back to the selected DynApp source files."
     }
   ],
   "scripts": {
@@ -227,15 +236,17 @@ replace template values before the first package:
 ### Required Manifest Fields
 
 - `schemaVersion`: Manifest schema version.
-- `id`: Stable reverse-DNS app identifier.
+- `id`: Stable app identifier matching its package directory. Reverse-DNS ids are
+  recommended for published third-party apps.
 - `name`: User-visible app name.
 - `version`: Semver package version.
 - `description`: Short explanation displayed in install and store UI.
 - `license`: SPDX license identifier or `SEE LICENSE IN LICENSE`.
 - `minShellVersion`: Oldest shell version that can run the app.
-- `entry.html`: Browser entrypoint inside the bundle.
-- `permissions`: Explicit list of requested shell capabilities. Use `[]` for
-  apps that need no host authority.
+- `backendPermissions`: Explicit list of requested shell capabilities using
+  `{ "permission", "reason" }` entries. Use `[]` for apps that need no host
+  authority. Reasons must satisfy the Shell's minimum specificity and length
+  rules.
 
 ### Recommended Manifest Fields
 
@@ -305,50 +316,88 @@ Install and update UI must show:
 - Removed permissions.
 - Permission danger level.
 - Plain-language reason from the manifest.
-- Whether the permission applies locally, remotely, or to selected projects only.
+- Which Shell is granting it. Every remote Shell reviews and stores its own grants.
 
 ### Permission Danger Levels
 
-| Level     | Examples                                                                                     | Store/install meaning                                        |
-| --------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| Low       | App metadata, UI preferences, notifications, opening external links                          | Can affect the app experience but cannot inspect user files. |
-| Medium    | Read files in selected project roots, file watchers, clipboard read                          | Can inspect selected local content.                          |
-| High      | Write files, apply patches, mutate git state, connect to remote targets                      | Can change project content or send work elsewhere.           |
-| Very high | Execute commands, open PTYs, hold process handles, package/sign/publish apps, access secrets | Can run code on a machine or publish signed artifacts.       |
+| Level     | Examples                                                                              | Store/install meaning                                        |
+| --------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| Low       | Notifications, opening external links, app catalog reads                              | Can affect the app experience but cannot inspect user files. |
+| Medium    | `fs.readText`, `fs.list`, `fs.stat`, `fs.watch`, clipboard reads                      | Can inspect selected local content.                          |
+| High      | `fs.writeText`, `fs.copy`, `fs.remove`, `fs.pack`, `apps.install`                     | Can change files or installed applications.                  |
+| Very high | `fs.exec`, `fs.execFile`, `process.session`, `secrets.manage`, `shell.remote.connect` | Can run code, use credentials, or control another machine.   |
 
 Very-high permissions should require additional confirmation and should be
 called out in app-store review. Apps requesting very-high permissions can still
 score well if the need is obvious, scoped, documented, and exercised through
 typed workflows rather than unrestricted raw execution.
 
-### Capability Naming
+### Reuse Existing Permissions
 
-Use dotted capability names:
+The A2 Code migration must use the Shell's existing schema-v2
+`backendPermissions` names rather than creating feature-specific aliases:
 
-- `files.read`
-- `files.write`
-- `files.watch`
-- `git.status`
-- `git.mutate`
-- `process.spawn`
-- `process.handle`
-- `pty.open`
-- `network.remoteTarget`
-- `dynapp.preview`
-- `dynapp.package`
-- `dynapp.publish`
-- `secrets.read`
+| Need                            | Existing permissions                                                                                          |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| Select and inspect projects     | `dialog.pickPath`, `fs.home`, `fs.roots`, `fs.list`, `fs.stat`, `fs.readText`, `fs.readChunk`, `search.files` |
+| Edit projects                   | `fs.writeText`, `fs.mkdir`, `fs.copy`, `fs.move`, `fs.trash`, `fs.remove`, `fs.watch`                         |
+| Run bounded commands            | `fs.execFile`, with `fs.exec` only when a user-authored shell command is required                             |
+| Run git                         | `fs.execFile`; git parsing and workflow policy remain in content                                              |
+| Build and package               | `fs.execFile`, `fs.pack`                                                                                      |
+| Preview local servers           | `net.tcp.connect`, `net.tcp.listen`, `net.protocol.http`, `net.protocol.https`                                |
+| Publish or call registries      | `net.protocol.https`                                                                                          |
+| Browse, install, or launch apps | `apps.catalog`, `apps.install`, `apps.launch`                                                                 |
 
-Scopes should narrow the permission whenever possible:
+Manifest validation, shareability scoring, modifiability scoring, fork-note
+maintenance, change summaries, thread reducers, diff calculation, and agent
+protocol parsing run in content and require no Shell permission.
 
-- `self`
-- `selectedFiles`
-- `selectedProjectRoots`
-- `declaredWorkspace`
-- `projectCommands`
-- `projectTerminals`
-- `remoteTargets`
-- `publisherAccount`
+### Added Permissions For A2 Code And Remote Shells
+
+Only three new generic permissions are required:
+
+| Permission             | Danger    | Granted behavior                                                                                                                                                           |
+| ---------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `process.session`      | Very high | Open and attach to long-running pipe or PTY processes; stream stdin, stdout, stderr, lifecycle and bounded replay events; resize PTYs; signal, restart, and close handles. |
+| `secrets.manage`       | Very high | Create, replace, delete, and use app-scoped credentials through Shell-owned UI and secure storage. Secret values should not be readable back into content.                 |
+| `shell.remote.connect` | Very high | Pair with and open an authenticated WSS session to another DynApp Shell, returning the same capability contract as the local Shell.                                        |
+
+`process.session` is a new lifecycle API more than new machine authority because
+`fs.exec` already permits arbitrary execution. It remains a separate permission
+because persistent handles, streamed input, PTYs, and reload-surviving work are a
+meaningfully stronger install-time promise than a bounded one-shot command.
+
+`shell.remote.connect` does not imply `net.protocol.wss` and does not grant any
+remote filesystem or process capability. It authorizes use of the Shell's
+authenticated remote transport. Each operation is then checked against the
+DynApp's declared permission, the local connection grant, the remote user's
+grant, and the remote Shell's supported capabilities.
+
+`secrets.manage` must be app-scoped. A DynApp may refer to a credential when
+opening a process or approved network operation, but there should be no generic
+`secrets.read` permission. A user who grants both credential use and arbitrary
+process execution must be warned that a spawned process can disclose those
+credentials.
+
+### Remote Shell Contract
+
+A remote DynApp connection is a transport for the generic Shell contract, not an
+A2 Code backend and not an app-specific remote protocol. The WSS service must:
+
+- Pair the two Shell installations and establish revocable device identities.
+- Use short-lived session credentials bound to the DynApp id, installed revision,
+  requesting Shell, and granted permission set.
+- Validate WebSocket Origin, prevent replay, rate-limit authentication, and keep
+  an audit history of pairing and very-high capability use.
+- Multiplex request/response calls and event streams for process output, file
+  watches, progress, and capability changes.
+- Give long-lived resources opaque handles with ownership, leases, bounded event
+  replay, reconnect, cancellation, and deterministic cleanup semantics.
+- Compute effective remote authority as the intersection of the manifest request,
+  local connection grant, remote grant, and remote Shell support.
+
+Any DynApp can use this contract after declaring `shell.remote.connect`. A2 Code
+only adds target selection and project UX on top of it.
 
 ## Shipping Code
 
@@ -367,7 +416,7 @@ A high-quality DynApp should include:
 - Dependency manifest, such as `package.json`.
 - Lockfile, such as `package-lock.json`, `pnpm-lock.yaml`, or `bun.lock`.
 - Declared `build`, `test`, and `typecheck` scripts in `app.json`.
-- Clear generated-file boundaries, usually `dist/` and not mixed into `src/`.
+- Clear generated-file boundaries, usually `content/` and not mixed into `src/`.
 - No hidden network build steps unless documented and permissioned.
 
 ### Assets
@@ -430,10 +479,10 @@ A DynApp should be rejected or held for manual review when it:
 To receive a strong shareability and modifiability score, a DynApp should have:
 
 - A complete `app.json`.
-- Minimal permissions with specific scopes and reasons.
+- Minimal permissions with specific reasons and user-selected paths at runtime.
 - No undeclared shell capability calls.
 - Source code in a predictable `src/` tree.
-- Built content in `dist/`.
+- Built content in `content/`.
 - A recognized open-source license, or a clear proprietary license.
 - Asset attribution where needed.
 - README with usage, permissions, and external dependencies.
@@ -457,13 +506,17 @@ It should:
 - Show store-score deductions before publish.
 - Offer fixes for missing license, missing README, missing screenshots, broad
   permissions, missing tests, and missing modification docs.
-- Keep user edits in source files, then rebuild `dist/` through declared scripts.
+- Keep user edits in source files, then rebuild `content/` through declared scripts.
 - Diff permission changes during app updates.
 - Detect forked apps through `origin` metadata and keep `FORK_NOTES.md` plus
   `CHANGES.md` current as edits are made.
 - Use fork notes during upstream merges so local features are preserved unless
   the user explicitly chooses to remove them.
 - Preserve audit logs for very-high capability use while editing or publishing.
+- Treat local and remote Shell clients as the same capability contract while
+  always showing which Shell will execute a destructive or expensive action.
+- Require `shell.remote.connect` before offering pairing, and explain that every
+  remote Shell independently reviews filesystem and process grants.
 
 The editor may generate or update docs, manifests, tests, and package metadata,
 but the final bundle must remain inspectable and reproducible by the shell and

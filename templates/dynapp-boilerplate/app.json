@@ -1,7 +1,8 @@
 {
-  "schemaVersion": 1,
-  "id": "com.dynapp.boilerplate",
+  "schemaVersion": 2,
+  "id": "dynapp-boilerplate",
   "name": "DynApp Boilerplate",
+  "icon": "B",
   "version": "0.1.0",
   "description": "A minimal DynApp starter with manifest, source, docs, tests, and built content.",
   "author": {
@@ -10,9 +11,6 @@
   },
   "license": "MIT",
   "minShellVersion": "1.0.0",
-  "entry": {
-    "html": "dist/index.html"
-  },
   "source": {
     "root": "src",
     "language": "javascript",
@@ -22,7 +20,7 @@
     "icon": "public/icon.svg",
     "screenshots": []
   },
-  "permissions": [],
+  "backendPermissions": [],
   "scripts": {
     "build": "node scripts/build.mjs",
     "test": "node tests/boilerplate.test.mjs",

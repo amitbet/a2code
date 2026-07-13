@@ -359,11 +359,11 @@
       <header>
         <div>
           <span class="pill">Architecture plan</span>
-          <h1>Dissolved A2 Code for the DynApp app store</h1>
+          <h1>A2 Code as a DynApp</h1>
           <p class="lede">
-            Dissolve the current A2server boundary into two places: trusted shell capabilities and
-            richer A2 Code DynApp content. Users install DynApp once and can modify any app without
-            a separate backend process or server product.
+            Dissolve A2server into generic Shell capabilities and A2 Code content. The same
+            capability contract works through local IPC or an authenticated remote DynApp Shell,
+            without an A2-specific backend or remote-machine protocol.
           </p>
         </div>
         <div class="meta">
@@ -388,24 +388,23 @@
         <div class="content">
           <div class="diagram">
             <div class="box">
-              <strong>DynApp Shell</strong>
-              <span class="muted"
-                >Trusted install, app store, sandbox, updates, signed payloads.</span
-              >
-            </div>
-            <div class="arrow">→</div>
-            <div class="box">
               <strong>A2 Code DynApp</strong>
               <span class="muted"
-                >The editor UI and modification workflow, shipped as bundled content.</span
+                >Editor UI, agent orchestration, git workflows, package rules, and app-making
+                experience.</span
               >
             </div>
             <div class="arrow">→</div>
             <div class="box">
-              <strong>Shell Capabilities</strong>
+              <strong>Generic appShell contract</strong>
+              <span class="muted">The same typed APIs over local IPC or authenticated WSS.</span>
+            </div>
+            <div class="arrow">→</div>
+            <div class="box">
+              <strong>Local or remote DynApp Shell</strong>
               <span class="muted"
-                >Typed privileged APIs for files, processes, PTYs, providers, git, and
-                packaging.</span
+                >Permission enforcement and generic files, processes, credentials, networking, and
+                app-management capabilities.</span
               >
             </div>
           </div>
@@ -439,16 +438,21 @@
                 <td>Fast to iterate, hot-updatable, product-specific, low authority.</td>
               </tr>
               <tr>
-                <td>Provider subprocesses, PTYs, filesystem writes, git mutations</td>
+                <td>
+                  Filesystem access, process sessions, PTYs, credentials, and remote transport
+                </td>
                 <td><span class="status shell">Shell capabilities</span></td>
                 <td>
                   Needs durable ownership, OS integration, cancellation, logs, and security policy.
                 </td>
               </tr>
               <tr>
-                <td>App build/package/sign/publish operations</td>
-                <td><span class="status shell">Shell capabilities</span></td>
-                <td>Touches trusted signing keys and controls what becomes installable.</td>
+                <td>Agent protocols, git workflows, build/package/publish orchestration</td>
+                <td><span class="status content">A2 Code content</span></td>
+                <td>
+                  Product logic composes existing generic process, filesystem, archive, network, and
+                  app APIs.
+                </td>
               </tr>
               <tr>
                 <td>Pure reducers, command composition, non-secret preferences</td>
@@ -456,7 +460,7 @@
                 <td>Can survive as browser code and can be tested without privileged APIs.</td>
               </tr>
               <tr>
-                <td>Contracts, schemas, event formats, project references</td>
+                <td>Capability schemas, process events, handles, and remote framing</td>
                 <td><span class="status shared">Shared contracts</span></td>
                 <td>Both sides need stable typed boundaries and migration compatibility.</td>
               </tr>
@@ -470,24 +474,24 @@
           <div>
             <h2>Add To The Shell</h2>
             <p>
-              The reduced shell needs typed capabilities, not a bundled A2server and not an
-              app-specific privileged namespace. Any DynApp can request capabilities in its
-              manifest; the shell displays their danger level at install/update time and enforces
-              them at runtime.
+              Most required authority already exists in the DynApp Shell. Reuse its schema-v2
+              <code>backendPermissions</code> and add only managed process sessions, secure
+              credentials, authenticated remote-Shell connections, and danger metadata.
             </p>
           </div>
           <span class="tag">Trusted base</span>
         </div>
         <div class="content grid">
           <article class="card wide">
-            <h3>General capability registry</h3>
+            <h3>Existing capability registry</h3>
             <ul>
               <li>
-                Add typed shell capabilities any DynApp can request through <code>app.json</code>.
+                Keep using normal <code>backendPermissions</code> entries with a specific
+                user-facing reason.
               </li>
               <li>
-                Expose project, file, process, provider, terminal, git, and packaging APIs as normal
-                shell capability groups.
+                Reuse <code>fs.*</code>, <code>net.*</code>, and <code>apps.*</code> instead of
+                adding A2, git, preview, build, package, or publish namespaces.
               </li>
               <li>Grant capabilities only after install/update review by the user.</li>
               <li>Advertise capabilities and versions so content can feature-gate safely.</li>
@@ -495,42 +499,53 @@
             </ul>
           </article>
           <article class="card wide">
-            <h3>Streaming process and PTY APIs</h3>
+            <h3>New: process.session</h3>
             <ul>
-              <li>Replace command-only <code>fs.exec</code> usage with process handles.</li>
+              <li>Add managed pipe and PTY modes behind one very-high permission.</li>
               <li>Stream stdout, stderr, lifecycle events, and exit codes.</li>
-              <li>Support stdin writes, cancellation, timeouts, and backpressure.</li>
+              <li>Support stdin, resize, signals, restart, cancellation, and backpressure.</li>
+              <li>Return opaque handles with ownership, leases, and deterministic cleanup.</li>
+              <li>Keep bounded event replay so content can recover after a reload or reconnect.</li>
+            </ul>
+          </article>
+          <article class="card">
+            <h3>Reuse existing filesystem APIs</h3>
+            <ul>
+              <li>Select roots with <code>dialog.pickPath</code>.</li>
               <li>
-                Support PTY sessions for terminals and provider CLIs that expect TTY behavior.
+                Read with <code>fs.list</code>, <code>fs.stat</code>, and <code>fs.readText</code>.
               </li>
-              <li>Persist process logs for diagnostics and agent replay.</li>
+              <li>Write with <code>fs.writeText</code>, <code>fs.copy</code>, and related APIs.</li>
+              <li>Use <code>fs.watch</code> and <code>search.files</code> for editor sync.</li>
             </ul>
           </article>
           <article class="card">
-            <h3>Project filesystem authority</h3>
+            <h3>Compose workflows in content</h3>
             <ul>
-              <li>Explicitly grant project roots.</li>
-              <li>Normalize paths and prevent root escape.</li>
-              <li>Provide patch/apply operations, not only raw writes.</li>
-              <li>Emit file-watch events for editor sync.</li>
+              <li>Run git and declared build tools through <code>fs.execFile</code>.</li>
+              <li>Parse git output and own branch/worktree UX in A2 Code.</li>
+              <li>Apply patches in content, then write accepted file results through the Shell.</li>
+              <li>Keep manifest validation, scoring, and fork tracking entirely in content.</li>
             </ul>
           </article>
           <article class="card">
-            <h3>Git and source control bridge</h3>
+            <h3>Reuse package and app APIs</h3>
             <ul>
-              <li>Run git mutations under shell authority.</li>
-              <li>Support branch/worktree operations.</li>
-              <li>Surface source-control provider auth state.</li>
-              <li>Keep secrets outside content.</li>
+              <li>Build through <code>fs.execFile</code> or <code>process.session</code>.</li>
+              <li>Package with <code>fs.pack</code>.</li>
+              <li>Publish over <code>net.protocol.https</code>.</li>
+              <li>
+                Inspect, install, and launch with the existing <code>apps.*</code> permissions.
+              </li>
             </ul>
           </article>
-          <article class="card">
-            <h3>DynApp build and publish APIs</h3>
+          <article class="card wide">
+            <h3>New: secrets.manage</h3>
             <ul>
-              <li>Build app content with declared commands.</li>
-              <li>Package signed payloads.</li>
-              <li>Diff permission changes.</li>
-              <li>Submit app updates to the registry.</li>
+              <li>Store credentials in app-scoped Shell secure storage.</li>
+              <li>Create, replace, delete, and select secrets through Shell-owned UI.</li>
+              <li>Pass credential references to approved process or network operations.</li>
+              <li>Do not expose a generic secret-read API to content.</li>
             </ul>
           </article>
           <article class="card wide">
@@ -575,16 +590,16 @@
                 </tr>
                 <tr>
                   <td><span class="status shell">High</span></td>
-                  <td>Write files, apply patches, mutate git state, connect to remote targets</td>
-                  <td>This app can change project content or send work to another machine.</td>
+                  <td>Write, copy, remove, or package files; install applications</td>
+                  <td>This app can change files or installed applications.</td>
                 </tr>
                 <tr>
                   <td><span class="status obsolete">Very high</span></td>
                   <td>
-                    Execute commands, open PTYs, hold process handles, package/sign/publish apps,
-                    access secrets
+                    Execute commands, hold process or PTY handles, manage credentials, or connect to
+                    a remote Shell
                   </td>
-                  <td>This app can run code on this machine or publish signed artifacts.</td>
+                  <td>This app can run code, use credentials, or control another machine.</td>
                 </tr>
               </tbody>
             </table>
@@ -592,11 +607,24 @@
           <article class="card wide">
             <h3>Manifest declaration</h3>
             <pre><code>{
-  "permissions": [
-    { "capability": "files.read", "scope": "selectedProjectRoots" },
-    { "capability": "files.write", "scope": "selectedProjectRoots" },
-    { "capability": "process.spawn", "scope": "projectCommands" },
-    { "capability": "pty.open", "scope": "projectTerminals" }
+  "schemaVersion": 2,
+  "backendPermissions": [
+    {
+      "permission": "fs.readText",
+      "reason": "Reads project source selected by the user for editing in A2 Code."
+    },
+    {
+      "permission": "process.session",
+      "reason": "Runs coding agents and terminals selected by the user with streamed input and output."
+    },
+    {
+      "permission": "secrets.manage",
+      "reason": "Stores and uses credentials the user configures for coding-agent providers."
+    },
+    {
+      "permission": "shell.remote.connect",
+      "reason": "Connects to a remote DynApp Shell only after the user selects and pairs it."
+    }
   ]
 }</code></pre>
             <p class="muted">
@@ -606,18 +634,25 @@
             </p>
           </article>
           <article class="card wide">
-            <h3>Remote execution adapters</h3>
+            <h3>New: shell.remote.connect</h3>
             <ul>
-              <li>Keep local editing zero-install beyond DynApp itself.</li>
+              <li>Pair with another DynApp Shell and connect over authenticated WSS.</li>
+              <li>Return the same generic capability groups as the local Shell.</li>
+              <li>Bind short-lived credentials to app id, revision, device, and grants.</li>
+              <li>Recheck every operation against permissions granted by the remote user.</li>
               <li>
-                Add optional remote capability providers for Windows, Linux, and cloud builds.
+                Do not treat ordinary <code>net.protocol.wss</code> as remote Shell authority.
               </li>
-              <li>
-                Use the same capability interface across local shell APIs and remote adapters.
-              </li>
-              <li>Represent remote machines as build/test targets, not required setup.</li>
-              <li>Keep remote transport hidden behind the same typed shell capability groups.</li>
             </ul>
+          </article>
+          <article class="card full callout">
+            <h3>Only three added permissions</h3>
+            <p class="muted">
+              <code>process.session</code>, <code>secrets.manage</code>, and
+              <code>shell.remote.connect</code>. Patch application, git workflows, previews, DynApp
+              validation, scoring, fork notes, build composition, and thread orchestration do not
+              need new permissions.
+            </p>
           </article>
         </div>
       </section>
@@ -686,11 +721,13 @@
             </ul>
           </article>
           <article class="card wide">
-            <h3>Environment and target selection</h3>
+            <h3>Shell selection</h3>
             <ul>
-              <li>Default to local DynApp shell capabilities.</li>
-              <li>Offer optional Windows/Linux/cloud targets for build and test.</li>
-              <li>Scope projects, threads, terminals, and previews by execution target.</li>
+              <li>Default to the local DynApp Shell.</li>
+              <li>
+                Offer paired remote Shells only when <code>shell.remote.connect</code> is granted.
+              </li>
+              <li>Bind projects, threads, process handles, and previews to one Shell client.</li>
               <li>Make “where actions run” visible in every destructive or expensive workflow.</li>
             </ul>
           </article>
@@ -700,9 +737,7 @@
               <li>Cache presentation state in IndexedDB or local storage.</li>
               <li>Store non-secret editor preferences.</li>
               <li>Hydrate thread/project snapshots while shell capabilities initialize.</li>
-              <li>
-                Never store provider tokens, signing keys, or privileged credentials in content.
-              </li>
+              <li>Never store provider tokens or privileged credentials in content.</li>
             </ul>
           </article>
         </div>
@@ -713,8 +748,8 @@
           <div>
             <h2>Proposed Capability API</h2>
             <p>
-              The boundary should be typed, narrow, and workflow-oriented. Raw filesystem and raw
-              shell execution should be implementation details behind higher-level methods.
+              The boundary should be typed, generic, and transport-independent. A2-specific
+              workflows are content helpers composed from these Shell primitives.
             </p>
           </div>
         </div>
@@ -723,39 +758,41 @@
   capabilities: {
     list(),
     getGrantState(),
-    request(),
     subscribe()
   },
-  files: {
-    openPath(path),
-    read(projectId, path),
-    write(projectId, path, contents),
-    applyPatch(projectId, patch),
-    watch(projectId)
+  fs: {
+    list(path),
+    readText(path),
+    writeText(path, contents),
+    execFile(file, args, cwd),
+    packZip(paths, archive),
+    watch(path)
   },
-  processes: {
-    spawn(command, options),
+  process: {
+    open({ file, args, cwd, mode, credentialRefs }),
+    attach(processId),
     write(processId, data),
+    resize(processId, size),
     signal(processId, signal),
-    subscribe(processId)
+    close(processId),
+    subscribe(processId, cursor)
   },
-  terminals: {
-    open(projectId, cwd),
-    write(sessionId, data),
-    resize(sessionId, size),
-    close(sessionId)
+  secrets: {
+    configure(name, options),
+    remove(name),
+    listMetadata()
   },
-  dynapp: {
-    inspect(appId),
-    livePreview(appId),
-    build(appId),
-    package(appId),
-    submit(appId)
+  remote: {
+    pair(options),
+    connect(profileId), // returns this same Shell contract over WSS
+    disconnect(profileId),
+    revoke(profileId)
   }
 }
 
 // Every method is available only when the DynApp declares the matching
-// capability and the user grants it during install or update.</code></pre>
+// backendPermission and the serving Shell grants it. A remote connection
+// never inherits local grants.</code></pre>
         </div>
       </section>
 
@@ -773,46 +810,53 @@
           <article class="card full phase">
             <h3>Inventory A2server responsibilities</h3>
             <p class="muted">
-              Classify each current server module as shell authority, content logic, shared
-              contract, or obsolete transport glue. This is the decision log that prevents a
-              server-shaped service from reappearing under a new name.
+              Map every current server module to existing <code>appShell</code> authority, one of
+              the three new generic permissions, content logic, or obsolete transport glue. Record
+              the result so a server-shaped service does not reappear under a new name.
             </p>
           </article>
           <article class="card full phase">
-            <h3>Define the shell capability contracts</h3>
+            <h3>Freeze the transport-independent Shell contract</h3>
             <p class="muted">
-              Create schemas for shell-hosted capabilities, event logs, process handles, PTY
-              sessions, project operations, provider turns, git mutations, and DynApp packaging.
+              Reuse schema-v2 <code>backendPermissions</code>. Add schemas only for
+              <code>process.session</code>, <code>secrets.manage</code>, and
+              <code>shell.remote.connect</code>, including stream cursors, handle ownership,
+              cancellation, replay, and capability discovery.
             </p>
           </article>
           <article class="card full phase">
-            <h3>Build shell capability implementations</h3>
+            <h3>Implement the missing Shell primitives</h3>
             <p class="muted">
-              Implement filesystem authority, process/PTY streaming, provider subprocess control,
-              git/source-control mutations, app packaging, signing, and durable event logs directly
-              in the DynApp shell.
+              Add managed pipe/PTY processes, app-scoped credential storage and prompts,
+              danger-level metadata, audit records, and authenticated remote-Shell connection
+              management. Keep these implementations generic and available to any DynApp.
             </p>
           </article>
           <article class="card full phase">
             <h3>Move pure runtime logic into content</h3>
             <p class="muted">
               Port command composition, orchestration reducers, thread projections, app-store
-              modification flows, diff review, and non-secret settings into the A2 Code DynApp.
+              modification flows, provider JSON-RPC clients, git workflows, diff review, manifest
+              validation, scoring, and non-secret settings into the A2 Code DynApp. Persist thread
+              and project state in content storage; keep only privileged resource lifetimes in the
+              Shell.
             </p>
           </article>
           <article class="card full phase">
-            <h3>Retire HTTP/WebSocket server glue locally</h3>
+            <h3>Retire the local A2server transport</h3>
             <p class="muted">
-              Replace local server RPC with direct shell capability calls. Keep remote targets
-              behind adapters that expose the same capability contract to content.
+              Replace local WebSocket RPC with direct <code>appShell</code> calls, verify agent
+              process recovery across content reloads, and remove the bundled server once local
+              files, processes, terminals, previews, builds, and publishing work end to end.
             </p>
           </article>
           <article class="card full phase">
-            <h3>Add optional remote targets</h3>
+            <h3>Build the separate remote DynApp concept</h3>
             <p class="muted">
-              Let advanced users connect Windows/Linux/cloud capability providers for testing and
-              builds, while keeping local modification available immediately after installing
-              DynApp.
+              Expose the generic Shell contract over authenticated WSS. Pair Shell installations,
+              bind short-lived credentials to app identity and grants, multiplex calls and events,
+              and make the remote Shell perform an independent permission review. A2 Code only
+              selects which Shell client it uses.
             </p>
           </article>
         </div>
@@ -832,15 +876,16 @@
             <h3>Do not expose raw exec as the core editor API</h3>
             <p class="muted">
               Raw execution is useful as an escape hatch for trusted editor workflows, but normal
-              app modification should go through typed project, agent, build, and package APIs.
+              app modification should go through typed A2 Code helpers that compose the generic
+              filesystem and process APIs.
             </p>
           </div>
           <div class="card wide callout">
             <h3>Shell owns durability for active work</h3>
             <p class="muted">
-              Agent turns, provider processes, PTYs, event logs, and packaging jobs must survive
-              content reloads. Content can render and coordinate, but shell services own active
-              host-side lifetimes.
+              Provider processes and PTYs must survive content reloads. The Shell owns handles,
+              bounded event replay, leases, and cleanup; A2 Code owns agent/thread state and
+              reconstructs it from its content database plus resumed process events.
             </p>
           </div>
           <div class="card">
@@ -859,7 +904,13 @@
                 A2 Code is powerful because it asks for more capabilities, not because it gets
                 special shell access.
               </li>
-              <li>Signing keys and provider secrets stay in shell storage.</li>
+              <li>
+                Provider secrets stay in Shell storage; package signing stays with the store or
+                release service.
+              </li>
+              <li>
+                Remote Shells authenticate both devices and independently enforce every grant.
+              </li>
             </ul>
           </div>
           <div class="card">
@@ -867,7 +918,9 @@
             <ul class="list-tight">
               <li>No separate local backend install.</li>
               <li>Modify works offline for local projects.</li>
-              <li>Remote machines are optional accelerators.</li>
+              <li>
+                Remote Shells are optional and use the same capability contract as local work.
+              </li>
             </ul>
           </div>
         </div>
