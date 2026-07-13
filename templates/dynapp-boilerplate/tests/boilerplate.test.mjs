@@ -1,16 +1,16 @@
-import { access, readFile } from "node:fs/promises";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
 
-const root = dirname(dirname(fileURLToPath(import.meta.url)));
+const root = NodePath.dirname(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)));
 
-await access(join(root, "app.json"));
-await access(join(root, "LICENSE"));
-await access(join(root, "README.md"));
-await access(join(root, "content/index.html"));
-await access(join(root, "src/main.js"));
+await NodeFSP.access(NodePath.join(root, "app.json"));
+await NodeFSP.access(NodePath.join(root, "LICENSE"));
+await NodeFSP.access(NodePath.join(root, "README.md"));
+await NodeFSP.access(NodePath.join(root, "content/index.html"));
+await NodeFSP.access(NodePath.join(root, "src/main.js"));
 
-const manifest = JSON.parse(await readFile(join(root, "app.json"), "utf8"));
+const manifest = JSON.parse(await NodeFSP.readFile(NodePath.join(root, "app.json"), "utf8"));
 
 if (manifest.id !== "dynapp-boilerplate") {
   throw new Error("Unexpected boilerplate app id");

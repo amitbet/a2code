@@ -1,9 +1,9 @@
-import { readFile } from "node:fs/promises";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
 
-const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const manifest = JSON.parse(await readFile(join(root, "app.json"), "utf8"));
+const root = NodePath.dirname(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)));
+const manifest = JSON.parse(await NodeFSP.readFile(NodePath.join(root, "app.json"), "utf8"));
 
 const required = ["schemaVersion", "id", "name", "version", "backendPermissions"];
 for (const field of required) {
