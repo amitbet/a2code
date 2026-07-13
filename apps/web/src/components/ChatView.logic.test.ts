@@ -1,4 +1,11 @@
-import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId, TurnId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  MessageId,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { Thread } from "../types";
@@ -15,6 +22,8 @@ import {
   reconcileRetainedMountedThreadIds,
   resolveSendEnvMode,
   shouldWriteThreadErrorToCurrentServerThread,
+  threadHasAuthoritativeUserMessage,
+  threadHasStarted,
 } from "./ChatView.logic";
 
 const environmentId = EnvironmentId.make("environment-local");
@@ -71,6 +80,53 @@ const readySession = {
   lastError: null,
   updatedAt: "2026-03-29T00:00:10.000Z",
 };
+
+describe("draft promotion handoff", () => {
+  it("does not treat a started session as an authoritative first prompt", () => {
+    const thread = makeThread({ session: readySession });
+
+    expect(threadHasStarted(thread)).toBe(true);
+    expect(threadHasAuthoritativeUserMessage(thread)).toBe(false);
+  });
+
+  it("waits through assistant-only snapshots", () => {
+    const thread = makeThread({
+      session: readySession,
+      messages: [
+        {
+          id: MessageId.make("message-assistant"),
+          role: "assistant",
+          text: "Working on it.",
+          turnId: null,
+          createdAt: now,
+          updatedAt: now,
+          streaming: true,
+        },
+      ],
+    });
+
+    expect(threadHasAuthoritativeUserMessage(thread)).toBe(false);
+  });
+
+  it("allows canonical navigation after the user message is echoed", () => {
+    const thread = makeThread({
+      session: readySession,
+      messages: [
+        {
+          id: MessageId.make("message-user"),
+          role: "user",
+          text: "Keep this prompt visible.",
+          turnId: null,
+          createdAt: now,
+          updatedAt: now,
+          streaming: false,
+        },
+      ],
+    });
+
+    expect(threadHasAuthoritativeUserMessage(thread)).toBe(true);
+  });
+});
 
 describe("buildThreadTurnInterruptInput", () => {
   it("targets the session's active running turn", () => {

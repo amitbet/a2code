@@ -272,6 +272,16 @@ export function threadHasStarted(thread: Thread | null | undefined): boolean {
   );
 }
 
+/**
+ * A promoted draft can switch to the server-backed view as soon as its session
+ * starts, but it must not leave the draft route until the first user message is
+ * authoritative. Changing routes remounts ChatView and drops its component-local
+ * optimistic message; waiting for the server echo makes that handoff lossless.
+ */
+export function threadHasAuthoritativeUserMessage(thread: Thread | null | undefined): boolean {
+  return Boolean(thread?.messages.some((message) => message.role === "user"));
+}
+
 // `threadProvider` is the open branded driver kind carried by the session.
 // Unknown driver kinds degrade to `null` (i.e. "unlocked"), which is the safe
 // rollback / fork behavior — the routing layer is the right place to surface
