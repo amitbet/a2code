@@ -508,17 +508,18 @@ interface ComposerDraftModelState {
   modelSelectionByProvider: Partial<Record<ProviderInstanceId, ModelSelection>>;
 }
 
-function providerSelectionsFromModelSelection(
+function providerSelectionsFromModelSelectionForInstance(
   modelSelection: ModelSelection | null | undefined,
+  instanceId: ProviderInstanceId,
 ): ProviderOptionSelectionsByProvider | null {
-  if (!modelSelection) {
+  if (!modelSelection || modelSelection.instanceId !== instanceId) {
     return null;
   }
   const options = modelSelection.options;
   if (!options || options.length === 0) {
     return null;
   }
-  return { [modelSelection.instanceId]: options };
+  return { [instanceId]: options };
 }
 
 function providerSelectionsFromDefaults(
@@ -535,17 +536,15 @@ function providerSelectionsFromDefaults(
   return { [instanceId]: options };
 }
 
-function modelSelectionByProviderToOptions(
+function providerSelectionsFromDraftForInstance(
   map: Partial<Record<string, ModelSelection>> | null | undefined,
+  instanceId: ProviderInstanceId,
 ): ProviderOptionSelectionsByProvider | null {
-  if (!map) return null;
-  const result: ProviderOptionSelectionsByProvider = {};
-  for (const [provider, selection] of Object.entries(map)) {
-    if (selection?.options && selection.options.length > 0) {
-      result[provider] = selection.options;
-    }
+  const options = map?.[instanceId]?.options;
+  if (!options || options.length === 0) {
+    return null;
   }
-  return Object.keys(result).length > 0 ? result : null;
+  return { [instanceId]: options };
 }
 
 function cloneModelSelection(selection: ModelSelection): DeepMutable<ModelSelection> {
@@ -1003,16 +1002,15 @@ export function deriveEffectiveComposerModelState(input: {
     ) ??
     normalizeModelSlug(baseModelCandidate, input.selectedProvider) ??
     getDefaultServerModel(input.providers, input.selectedProvider);
-  // Look up the instance's saved selection first; fall back to the
-  // driver-kind bucket so legacy kind-keyed drafts still resolve. Every
-  // `ProviderDriverKind` literal is a valid `ProviderInstanceId` slug, so the
-  // cast to the branded type is safe.
+  // Draft selections are instance-scoped. Legacy built-in provider keys are
+  // already valid default instance ids, so a custom instance must never fall
+  // back to another instance of the same driver kind.
   const instanceSelection = input.selectedInstanceId
     ? input.draft?.modelSelectionByProvider?.[input.selectedInstanceId]
     : undefined;
   const legacySelection =
     input.draft?.modelSelectionByProvider?.[ProviderInstanceId.make(input.selectedProvider)];
-  const activeSelection = instanceSelection ?? legacySelection;
+  const activeSelection = input.selectedInstanceId ? instanceSelection : legacySelection;
   const activeSelectionInstanceId = instanceSelection
     ? (input.selectedInstanceId ?? ProviderInstanceId.make(input.selectedProvider))
     : ProviderInstanceId.make(input.selectedProvider);
@@ -1030,15 +1028,30 @@ export function deriveEffectiveComposerModelState(input: {
         activeSelection.model,
       ))
     : baseModel;
+  const effectiveInstanceId =
+    input.selectedInstanceId ??
+    activeSelection?.instanceId ??
+    input.threadModelSelection?.instanceId ??
+    input.projectModelSelection?.instanceId ??
+    defaultInstanceIdForDriver(input.selectedProvider);
   const modelOptions =
-    modelSelectionByProviderToOptions(input.draft?.modelSelectionByProvider) ??
-    providerSelectionsFromModelSelection(input.threadModelSelection) ??
-    providerSelectionsFromModelSelection(input.projectModelSelection) ??
+    providerSelectionsFromDraftForInstance(
+      input.draft?.modelSelectionByProvider,
+      effectiveInstanceId,
+    ) ??
+    providerSelectionsFromModelSelectionForInstance(
+      input.threadModelSelection,
+      effectiveInstanceId,
+    ) ??
+    providerSelectionsFromModelSelectionForInstance(
+      input.projectModelSelection,
+      effectiveInstanceId,
+    ) ??
     (input.threadModelSelection
       ? null
       : providerSelectionsFromDefaults(
           input.settings.providerModelDefaults,
-          input.selectedInstanceId ?? defaultInstanceIdForDriver(input.selectedProvider),
+          effectiveInstanceId,
         )) ??
     null;
 

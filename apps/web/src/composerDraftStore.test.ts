@@ -1804,6 +1804,87 @@ describe("deriveEffectiveComposerModelState provider defaults", () => {
     );
   });
 
+  it("does not let another provider's sticky options mask the selected provider defaults", () => {
+    const state = deriveEffectiveComposerModelState({
+      draft: {
+        activeProvider: CODEX_INSTANCE,
+        modelSelectionByProvider: {
+          [CODEX_INSTANCE]: createModelSelection(CODEX_INSTANCE, "gpt-5.4"),
+          [CLAUDE_AGENT_INSTANCE]: createModelSelection(
+            CLAUDE_AGENT_INSTANCE,
+            "claude-opus-4-6",
+            toSelections({ effort: "max" }),
+          ),
+        },
+      },
+      providers,
+      selectedProvider: CODEX_DRIVER,
+      selectedInstanceId: CODEX_INSTANCE,
+      threadModelSelection: null,
+      projectModelSelection: null,
+      settings: {
+        ...DEFAULT_UNIFIED_SETTINGS,
+        providerModelDefaults: {
+          [CODEX_INSTANCE]: toSelections({
+            reasoningEffort: "low",
+            serviceTier: "standard",
+          }),
+        },
+      },
+    });
+
+    expect(state.modelOptions).toEqual({
+      [CODEX_INSTANCE]: toSelections({
+        reasoningEffort: "low",
+        serviceTier: "standard",
+      }),
+    });
+  });
+
+  it("does not reuse the default instance options for a selected custom instance", () => {
+    const state = deriveEffectiveComposerModelState({
+      draft: {
+        activeProvider: CODEX_SECONDARY_INSTANCE,
+        modelSelectionByProvider: {
+          [CODEX_INSTANCE]: createModelSelection(
+            CODEX_INSTANCE,
+            "gpt-5.4",
+            toSelections({ reasoningEffort: "xhigh", serviceTier: "fast" }),
+          ),
+        },
+      },
+      providers: [
+        ...providers,
+        makeProvider({
+          instanceId: CODEX_SECONDARY_INSTANCE,
+          driver: CODEX_DRIVER,
+          model: "gpt-5-codex",
+        }),
+      ],
+      selectedProvider: CODEX_DRIVER,
+      selectedInstanceId: CODEX_SECONDARY_INSTANCE,
+      threadModelSelection: null,
+      projectModelSelection: null,
+      settings: {
+        ...DEFAULT_UNIFIED_SETTINGS,
+        providerModelDefaults: {
+          [CODEX_SECONDARY_INSTANCE]: toSelections({
+            reasoningEffort: "medium",
+            serviceTier: "standard",
+          }),
+        },
+      },
+    });
+
+    expect(state.selectedModel).toBe("gpt-5-codex");
+    expect(state.modelOptions).toEqual({
+      [CODEX_SECONDARY_INSTANCE]: toSelections({
+        reasoningEffort: "medium",
+        serviceTier: "standard",
+      }),
+    });
+  });
+
   it("does not apply provider model defaults to existing threads without options", () => {
     const state = deriveEffectiveComposerModelState({
       draft: null,
