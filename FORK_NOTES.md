@@ -51,6 +51,21 @@ the next merge; the per-feature sections below were updated to match.
   run now). The in-chat-find browser test (`MessagesTimeline.browser.tsx`) was
   dropped; the feature itself survives in `MessagesTimeline.tsx`.
 
+## 2026-07-13 upstream merge (Android mobile support) — migration notes
+
+- Upstream extracted the `expo-widgets` configuration in
+  `apps/mobile/app.config.ts` into `widgetsPlugin` and conditionally disables it
+  for personal-team iOS builds. Keep that structure, including the new Android
+  config plugins, but preserve the fork's `android: null` on the
+  `AgentActivity` widget. The widget is iOS-only; without the opt-out,
+  `expo-widgets` emits Android string resources under `res/xml/` while the
+  generated manifest references them as normal string resources, causing AAPT
+  resource-link failures.
+- `apps/web/src/components/chat/ThreadErrorBanner.tsx` adopted upstream's
+  content-width cap. Keep `AlertDescription` as a direct child of `Alert` (with
+  the tooltip nested inside it), because the alert component assigns layout
+  slots by direct child component name.
+
 ## Fork features
 
 ### Desktop/backend reliability safeguards
