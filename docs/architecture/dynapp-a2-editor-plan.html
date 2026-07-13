@@ -361,9 +361,9 @@
           <span class="pill">Architecture plan</span>
           <h1>A2 Code as a DynApp</h1>
           <p class="lede">
-            Dissolve A2server into generic Shell capabilities and A2 Code content. The same
-            capability contract works through local IPC or an authenticated remote DynApp Shell,
-            without an A2-specific backend or remote-machine protocol.
+            Dissolve A2server into generic Shell capabilities and A2 Code content. Start with the
+            locally connected Shell over IPC; keep the contract transport-independent so remote
+            DynApps can be added later without an A2-specific protocol.
           </p>
         </div>
         <div class="meta">
@@ -397,11 +397,11 @@
             <div class="arrow">→</div>
             <div class="box">
               <strong>Generic appShell contract</strong>
-              <span class="muted">The same typed APIs over local IPC or authenticated WSS.</span>
+              <span class="muted">Typed APIs over local IPC in the first migration stage.</span>
             </div>
             <div class="arrow">→</div>
             <div class="box">
-              <strong>Local or remote DynApp Shell</strong>
+              <strong>Local DynApp Shell</strong>
               <span class="muted"
                 >Permission enforcement and generic files, processes, credentials, networking, and
                 app-management capabilities.</span
@@ -438,9 +438,7 @@
                 <td>Fast to iterate, hot-updatable, product-specific, low authority.</td>
               </tr>
               <tr>
-                <td>
-                  Filesystem access, process sessions, PTYs, credentials, and remote transport
-                </td>
+                <td>Filesystem access, process sessions, PTYs, and credentials</td>
                 <td><span class="status shell">Shell capabilities</span></td>
                 <td>
                   Needs durable ownership, OS integration, cancellation, logs, and security policy.
@@ -460,7 +458,7 @@
                 <td>Can survive as browser code and can be tested without privileged APIs.</td>
               </tr>
               <tr>
-                <td>Capability schemas, process events, handles, and remote framing</td>
+                <td>Capability schemas, process events, and handles</td>
                 <td><span class="status shared">Shared contracts</span></td>
                 <td>Both sides need stable typed boundaries and migration compatibility.</td>
               </tr>
@@ -475,8 +473,8 @@
             <h2>Add To The Shell</h2>
             <p>
               Most required authority already exists in the DynApp Shell. Reuse its schema-v2
-              <code>backendPermissions</code> and add only managed process sessions, secure
-              credentials, authenticated remote-Shell connections, and danger metadata.
+              <code>backendPermissions</code>, extend the existing <code>fs.exec</code> grant with
+              managed process sessions, and add secure credentials plus danger metadata.
             </p>
           </div>
           <span class="tag">Trusted base</span>
@@ -499,9 +497,17 @@
             </ul>
           </article>
           <article class="card wide">
-            <h3>New: process.session</h3>
+            <h3>Extend fs.exec with process sessions</h3>
             <ul>
-              <li>Add managed pipe and PTY modes behind one very-high permission.</li>
+              <li>
+                Commander already uses the very-high <code>fs.exec</code> permission; reuse that
+                execution grant.
+              </li>
+              <li>
+                Subtrans already receives completed <code>stdout</code> and <code>stderr</code> from
+                <code>fs.execFile</code>; retain it for bounded commands.
+              </li>
+              <li>Add managed pipe and PTY modes without a new permission name.</li>
               <li>Stream stdout, stderr, lifecycle events, and exit codes.</li>
               <li>Support stdin, resize, signals, restart, cancellation, and backpressure.</li>
               <li>Return opaque handles with ownership, leases, and deterministic cleanup.</li>
@@ -531,7 +537,7 @@
           <article class="card">
             <h3>Reuse package and app APIs</h3>
             <ul>
-              <li>Build through <code>fs.execFile</code> or <code>process.session</code>.</li>
+              <li>Build through <code>fs.execFile</code> or managed <code>fs.exec</code>.</li>
               <li>Package with <code>fs.pack</code>.</li>
               <li>Publish over <code>net.protocol.https</code>.</li>
               <li>
@@ -595,11 +601,8 @@
                 </tr>
                 <tr>
                   <td><span class="status obsolete">Very high</span></td>
-                  <td>
-                    Execute commands, hold process or PTY handles, manage credentials, or connect to
-                    a remote Shell
-                  </td>
-                  <td>This app can run code, use credentials, or control another machine.</td>
+                  <td>Execute commands, hold process or PTY handles, or manage credentials</td>
+                  <td>This app can run code or use configured credentials.</td>
                 </tr>
               </tbody>
             </table>
@@ -614,16 +617,12 @@
       "reason": "Reads project source selected by the user for editing in A2 Code."
     },
     {
-      "permission": "process.session",
+      "permission": "fs.exec",
       "reason": "Runs coding agents and terminals selected by the user with streamed input and output."
     },
     {
       "permission": "secrets.manage",
       "reason": "Stores and uses credentials the user configures for coding-agent providers."
-    },
-    {
-      "permission": "shell.remote.connect",
-      "reason": "Connects to a remote DynApp Shell only after the user selects and pairs it."
     }
   ]
 }</code></pre>
@@ -634,8 +633,9 @@
             </p>
           </article>
           <article class="card wide">
-            <h3>New: shell.remote.connect</h3>
+            <h3>Future stage: shell.remote.connect</h3>
             <ul>
+              <li>Do not implement remote Shell support in the initial local migration.</li>
               <li>Pair with another DynApp Shell and connect over authenticated WSS.</li>
               <li>Return the same generic capability groups as the local Shell.</li>
               <li>Bind short-lived credentials to app id, revision, device, and grants.</li>
@@ -646,12 +646,11 @@
             </ul>
           </article>
           <article class="card full callout">
-            <h3>Only three added permissions</h3>
+            <h3>Only one added permission for the local migration</h3>
             <p class="muted">
-              <code>process.session</code>, <code>secrets.manage</code>, and
-              <code>shell.remote.connect</code>. Patch application, git workflows, previews, DynApp
-              validation, scoring, fork notes, build composition, and thread orchestration do not
-              need new permissions.
+              <code>secrets.manage</code>. Managed process handles reuse <code>fs.exec</code>. Patch
+              application, git workflows, previews, DynApp validation, scoring, fork notes, build
+              composition, and thread orchestration do not need new permissions.
             </p>
           </article>
         </div>
@@ -721,14 +720,14 @@
             </ul>
           </article>
           <article class="card wide">
-            <h3>Shell selection</h3>
+            <h3>Local Shell binding</h3>
             <ul>
-              <li>Default to the local DynApp Shell.</li>
+              <li>Bind A2 Code to the local DynApp Shell for the initial migration.</li>
+              <li>Keep projects, threads, process handles, and previews local.</li>
               <li>
-                Offer paired remote Shells only when <code>shell.remote.connect</code> is granted.
+                Do not ship machine selection, pairing, or remote connection UI in this stage.
               </li>
-              <li>Bind projects, threads, process handles, and previews to one Shell client.</li>
-              <li>Make “where actions run” visible in every destructive or expensive workflow.</li>
+              <li>Keep the client contract transport-independent for the later remote stage.</li>
             </ul>
           </article>
           <article class="card wide">
@@ -781,18 +780,12 @@
     configure(name, options),
     remove(name),
     listMetadata()
-  },
-  remote: {
-    pair(options),
-    connect(profileId), // returns this same Shell contract over WSS
-    disconnect(profileId),
-    revoke(profileId)
   }
 }
 
 // Every method is available only when the DynApp declares the matching
-// backendPermission and the serving Shell grants it. A remote connection
-// never inherits local grants.</code></pre>
+// backendPermission and the local Shell grants it. appShell.process is
+// guarded by the existing fs.exec permission.</code></pre>
         </div>
       </section>
 
@@ -810,26 +803,25 @@
           <article class="card full phase">
             <h3>Inventory A2server responsibilities</h3>
             <p class="muted">
-              Map every current server module to existing <code>appShell</code> authority, one of
-              the three new generic permissions, content logic, or obsolete transport glue. Record
-              the result so a server-shaped service does not reappear under a new name.
+              Map every current server module to existing <code>appShell</code> authority,
+              <code>secrets.manage</code>, content logic, or obsolete transport glue. Record the
+              result so a server-shaped service does not reappear under a new name.
             </p>
           </article>
           <article class="card full phase">
             <h3>Freeze the transport-independent Shell contract</h3>
             <p class="muted">
               Reuse schema-v2 <code>backendPermissions</code>. Add schemas only for
-              <code>process.session</code>, <code>secrets.manage</code>, and
-              <code>shell.remote.connect</code>, including stream cursors, handle ownership,
-              cancellation, replay, and capability discovery.
+              <code>secrets.manage</code>. Extend the API guarded by <code>fs.exec</code> with
+              stream cursors, handle ownership, cancellation, replay, and capability discovery.
             </p>
           </article>
           <article class="card full phase">
             <h3>Implement the missing Shell primitives</h3>
             <p class="muted">
-              Add managed pipe/PTY processes, app-scoped credential storage and prompts,
-              danger-level metadata, audit records, and authenticated remote-Shell connection
-              management. Keep these implementations generic and available to any DynApp.
+              Add managed pipe/PTY processes under <code>fs.exec</code>, app-scoped credential
+              storage and prompts, danger-level metadata, and audit records. Keep these
+              implementations generic and available to any local DynApp.
             </p>
           </article>
           <article class="card full phase">
@@ -853,10 +845,10 @@
           <article class="card full phase">
             <h3>Build the separate remote DynApp concept</h3>
             <p class="muted">
-              Expose the generic Shell contract over authenticated WSS. Pair Shell installations,
-              bind short-lived credentials to app identity and grants, multiplex calls and events,
-              and make the remote Shell perform an independent permission review. A2 Code only
-              selects which Shell client it uses.
+              After the local migration ships, add <code>shell.remote.connect</code> and expose the
+              generic Shell contract over authenticated WSS. Pair Shell installations, bind
+              short-lived credentials to app identity and grants, multiplex calls and events, and
+              make the remote Shell perform an independent permission review.
             </p>
           </article>
         </div>
@@ -909,7 +901,8 @@
                 release service.
               </li>
               <li>
-                Remote Shells authenticate both devices and independently enforce every grant.
+                The future remote stage must authenticate both devices and independently enforce
+                every grant.
               </li>
             </ul>
           </div>
@@ -919,7 +912,7 @@
               <li>No separate local backend install.</li>
               <li>Modify works offline for local projects.</li>
               <li>
-                Remote Shells are optional and use the same capability contract as local work.
+                The first release is local-only; remote DynApps come in a separate later stage.
               </li>
             </ul>
           </div>

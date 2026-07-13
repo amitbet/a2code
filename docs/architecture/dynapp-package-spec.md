@@ -20,7 +20,8 @@ tracking files, declared scripts, and no requested shell permissions.
   native setup.
 - Keep app content hot-updatable and inspectable.
 - Move privileged host access into shell capabilities that any DynApp can request.
-- Use one Shell capability contract over local IPC and authenticated remote WSS.
+- Start with the Shell capability contract over local IPC. A later remote DynApp
+  stage may expose the same contract over authenticated WSS.
 - Make permissions visible before install and before update.
 - Grade apps for shareability and modifiability, called "modifyability" in
   user-facing store UI if we prefer that wording, so the app store can recommend
@@ -46,8 +47,8 @@ capabilities are declared in the manifest and granted by the user.
 - Enforce capability grants at every call boundary.
 - Deny undeclared, unknown, revoked, or ungranted capabilities.
 - Provide generic filesystem, networking, application, and process capabilities.
-- Expose the same capability contract locally and, when explicitly paired, from
-  a remote Shell over authenticated WSS.
+- Keep the capability contract transport-independent so a later remote DynApp
+  stage can expose it over authenticated WSS without changing application logic.
 - Keep long-running work alive across content reloads where appropriate.
 
 ### DynApp Responsibilities
@@ -93,9 +94,10 @@ patch, running a DynApp build, invoking git, or scoring a manifest are composed 
 content from the generic APIs. A content helper may provide a narrow workflow API,
 but it must not create a new privileged Shell namespace.
 
-Local and remote Shells expose the same contract. A remote connection returns a
-Shell client whose `fs`, `process`, `net`, and other groups behave like the local
-groups. The transport differs; application logic does not.
+The first migration milestone uses only the local Shell over IPC. The contract
+must not assume Electron IPC, so a later remote connection can return a Shell
+client whose `fs`, `process`, `net`, and other groups behave like the local
+groups without changing application logic.
 
 ## Bundle Structure
 
@@ -316,16 +318,16 @@ Install and update UI must show:
 - Removed permissions.
 - Permission danger level.
 - Plain-language reason from the manifest.
-- Which Shell is granting it. Every remote Shell reviews and stores its own grants.
+- Which local Shell capability is being granted.
 
 ### Permission Danger Levels
 
-| Level     | Examples                                                                              | Store/install meaning                                        |
-| --------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| Low       | Notifications, opening external links, app catalog reads                              | Can affect the app experience but cannot inspect user files. |
-| Medium    | `fs.readText`, `fs.list`, `fs.stat`, `fs.watch`, clipboard reads                      | Can inspect selected local content.                          |
-| High      | `fs.writeText`, `fs.copy`, `fs.remove`, `fs.pack`, `apps.install`                     | Can change files or installed applications.                  |
-| Very high | `fs.exec`, `fs.execFile`, `process.session`, `secrets.manage`, `shell.remote.connect` | Can run code, use credentials, or control another machine.   |
+| Level     | Examples                                                          | Store/install meaning                                        |
+| --------- | ----------------------------------------------------------------- | ------------------------------------------------------------ |
+| Low       | Notifications, opening external links, app catalog reads          | Can affect the app experience but cannot inspect user files. |
+| Medium    | `fs.readText`, `fs.list`, `fs.stat`, `fs.watch`, clipboard reads  | Can inspect selected local content.                          |
+| High      | `fs.writeText`, `fs.copy`, `fs.remove`, `fs.pack`, `apps.install` | Can change files or installed applications.                  |
+| Very high | `fs.exec`, `fs.execFile`, `fs.execTerminal`, `secrets.manage`     | Can run code or use configured credentials.                  |
 
 Very-high permissions should require additional confirmation and should be
 called out in app-store review. Apps requesting very-high permissions can still
@@ -342,6 +344,7 @@ The A2 Code migration must use the Shell's existing schema-v2
 | Select and inspect projects     | `dialog.pickPath`, `fs.home`, `fs.roots`, `fs.list`, `fs.stat`, `fs.readText`, `fs.readChunk`, `search.files` |
 | Edit projects                   | `fs.writeText`, `fs.mkdir`, `fs.copy`, `fs.move`, `fs.trash`, `fs.remove`, `fs.watch`                         |
 | Run bounded commands            | `fs.execFile`, with `fs.exec` only when a user-authored shell command is required                             |
+| Run managed processes and PTYs  | Extend the API behind `fs.exec`; do not add a second execution permission                                     |
 | Run git                         | `fs.execFile`; git parsing and workflow policy remain in content                                              |
 | Build and package               | `fs.execFile`, `fs.pack`                                                                                      |
 | Preview local servers           | `net.tcp.connect`, `net.tcp.listen`, `net.protocol.http`, `net.protocol.https`                                |
@@ -352,26 +355,39 @@ Manifest validation, shareability scoring, modifiability scoring, fork-note
 maintenance, change summaries, thread reducers, diff calculation, and agent
 protocol parsing run in content and require no Shell permission.
 
-### Added Permissions For A2 Code And Remote Shells
+### Initial Added Permission
 
-Only three new generic permissions are required:
+The local A2 Code migration needs one new generic permission:
 
-| Permission             | Danger    | Granted behavior                                                                                                                                                           |
-| ---------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `process.session`      | Very high | Open and attach to long-running pipe or PTY processes; stream stdin, stdout, stderr, lifecycle and bounded replay events; resize PTYs; signal, restart, and close handles. |
-| `secrets.manage`       | Very high | Create, replace, delete, and use app-scoped credentials through Shell-owned UI and secure storage. Secret values should not be readable back into content.                 |
-| `shell.remote.connect` | Very high | Pair with and open an authenticated WSS session to another DynApp Shell, returning the same capability contract as the local Shell.                                        |
+| Permission       | Danger    | Granted behavior                                                                                                                                           |
+| ---------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `secrets.manage` | Very high | Create, replace, delete, and use app-scoped credentials through Shell-owned UI and secure storage. Secret values should not be readable back into content. |
 
-`process.session` is a new lifecycle API more than new machine authority because
-`fs.exec` already permits arbitrary execution. It remains a separate permission
-because persistent handles, streamed input, PTYs, and reload-surviving work are a
-meaningfully stronger install-time promise than a bounded one-shot command.
+If the first release relies exclusively on credentials already configured in the
+Codex, Claude, or other provider CLI, it can defer `secrets.manage` too. Full
+parity with A2server's configurable sensitive provider environment variables
+requires it.
 
-`shell.remote.connect` does not imply `net.protocol.wss` and does not grant any
-remote filesystem or process capability. It authorizes use of the Shell's
-authenticated remote transport. Each operation is then checked against the
-DynApp's declared permission, the local connection grant, the remote user's
-grant, and the remote Shell's supported capabilities.
+### Managed Process Sessions Reuse fs.exec
+
+Commander already requests `fs.exec` for user-authored commands and
+`fs.execTerminal` for an external terminal window. Those are already classified
+as very-high execution authority. A2 Code needs a richer Shell API, but not a new
+permission name:
+
+Subtrans already uses `fs.execFile` results shaped as `{ code, stdout, stderr }`
+to probe FFmpeg and inspect media. That existing API collects output until a
+bounded process exits; it does not expose live stdin, output events, or a process
+handle.
+
+- Open and attach to long-running pipe or PTY processes.
+- Stream stdin, stdout, stderr, lifecycle, and bounded replay events.
+- Resize PTYs and signal, restart, or close process handles.
+- Give handles ownership, leases, reconnect, and deterministic cleanup semantics.
+
+These methods should be added to a generic `appShell.process` group and guarded
+by the existing `fs.exec` permission. `fs.execFile` remains the narrower choice
+for bounded argument-array commands.
 
 `secrets.manage` must be app-scoped. A DynApp may refer to a credential when
 opening a process or approved network operation, but there should be no generic
@@ -379,10 +395,12 @@ opening a process or approved network operation, but there should be no generic
 process execution must be warned that a spawned process can disclose those
 credentials.
 
-### Remote Shell Contract
+### Future Stage: Remote Shell Contract
 
-A remote DynApp connection is a transport for the generic Shell contract, not an
-A2 Code backend and not an app-specific remote protocol. The WSS service must:
+Remote Shell support is not part of the initial local migration. In the next
+stage, a remote DynApp connection can transport the generic Shell contract rather
+than introduce an A2 Code backend or app-specific remote protocol. That stage
+adds the very-high `shell.remote.connect` permission. The WSS service must:
 
 - Pair the two Shell installations and establish revocable device identities.
 - Use short-lived session credentials bound to the DynApp id, installed revision,
@@ -513,10 +531,10 @@ It should:
 - Use fork notes during upstream merges so local features are preserved unless
   the user explicitly chooses to remove them.
 - Preserve audit logs for very-high capability use while editing or publishing.
-- Treat local and remote Shell clients as the same capability contract while
-  always showing which Shell will execute a destructive or expensive action.
-- Require `shell.remote.connect` before offering pairing, and explain that every
-  remote Shell independently reviews filesystem and process grants.
+- Use only the locally connected Shell in the initial migration.
+- In the later remote DynApp stage, preserve the same capability contract, require
+  `shell.remote.connect` before pairing, and show which Shell will execute every
+  destructive or expensive action.
 
 The editor may generate or update docs, manifests, tests, and package metadata,
 but the final bundle must remain inspectable and reproducible by the shell and

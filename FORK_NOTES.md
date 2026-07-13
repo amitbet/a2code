@@ -9,14 +9,15 @@ The `dynapp-a2code-plan` branch contains fork-specific architecture documents an
 an executable DynApp boilerplate; it does not change the current T3 Code runtime.
 
 - `docs/architecture/dynapp-a2-editor-plan.html` dissolves the local A2server into
-  A2 Code content plus generic DynApp Shell capabilities. Local IPC and remote WSS
-  use the same Shell contract.
+  A2 Code content plus generic DynApp Shell capabilities. The first migration
+  stage uses the locally connected Shell over IPC; remote WSS is a later stage.
 - `docs/architecture/dynapp-package-spec.md` defines schema-v2 manifests,
   shareability/modifiability rules, fork documentation, and remote-Shell grants.
 - `templates/dynapp-boilerplate/` is a valid schema-v2 desktop DynApp using
   `content/` and `backendPermissions`.
-- The migration adds only three generic permission names:
-  `process.session`, `secrets.manage`, and `shell.remote.connect`.
+- The local migration adds only `secrets.manage`. Managed process sessions extend
+  the API behind the existing `fs.exec` permission. The later remote DynApp stage
+  adds `shell.remote.connect`.
 
 ## 2026-06-20 upstream merge (client architecture rewrite) — migration notes
 
