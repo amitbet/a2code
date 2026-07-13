@@ -291,6 +291,16 @@ function sanitizedHtmlFrom(container: Element): string {
   return `<meta charset="utf-8">${container.innerHTML}`;
 }
 
+function closestCodeBlock(node: Node): Element | null {
+  const element = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
+  return element?.closest("pre") ?? null;
+}
+
+function rangeIsInsideSingleCodeBlock(range: Range): boolean {
+  const codeBlock = closestCodeBlock(range.startContainer);
+  return codeBlock !== null && codeBlock === closestCodeBlock(range.endContainer);
+}
+
 export function chatMarkdownClipboardPayload(
   selection: Selection,
 ): MarkdownClipboardPayload | null {
@@ -301,7 +311,13 @@ export function chatMarkdownClipboardPayload(
     if (range.collapsed) continue;
     const container = document.createElement("div");
     container.appendChild(range.cloneContents());
-    const text = serializeRenderedMarkdownFragment(container);
+    // A selection made wholly within one code block is usually intended for
+    // a terminal or editor. Preserve that exact text instead of turning it
+    // back into a fenced Markdown block. Mixed-content selections still use
+    // the Markdown serializer below.
+    const text = rangeIsInsideSingleCodeBlock(range)
+      ? (container.textContent ?? "")
+      : serializeRenderedMarkdownFragment(container);
     if (!text) continue;
     texts.push(text);
     htmls.push(sanitizedHtmlFrom(container));
