@@ -473,8 +473,8 @@
             <h2>Add To The Shell</h2>
             <p>
               Most required authority already exists in the DynApp Shell. Reuse its schema-v2
-              <code>backendPermissions</code>, extend the existing <code>fs.exec</code> grant with
-              managed process sessions, and add secure credentials plus danger metadata.
+              <code>backendPermissions</code>, extend the existing execution grants with managed
+              process sessions, and add secure credentials plus danger metadata.
             </p>
           </div>
           <span class="tag">Trusted base</span>
@@ -497,7 +497,7 @@
             </ul>
           </article>
           <article class="card wide">
-            <h3>Extend fs.exec with process sessions</h3>
+            <h3>Extend execution actions with process sessions</h3>
             <ul>
               <li>
                 Commander already uses the very-high <code>fs.exec</code> permission; reuse that
@@ -512,6 +512,48 @@
               <li>Support stdin, resize, signals, restart, cancellation, and backpressure.</li>
               <li>Return opaque handles with ownership, leases, and deterministic cleanup.</li>
               <li>Keep bounded event replay so content can recover after a reload or reconnect.</li>
+            </ul>
+          </article>
+          <article class="card wide">
+            <h3>Backward-compatible streaming toggle</h3>
+            <pre><code>type ExecOptions = {
+  cwd?: string;
+  stream?: boolean;                 // default false
+  mode?: "pipes" | "pty";          // default "pipes"
+  stdin?: "ignore" | "pipe";       // default "ignore"
+  timeoutMs?: number | null;
+  maxOutputBytes?: number;
+  replayBytes?: number;
+  env?: Record&lt;string, string | null&gt;;
+  credentialRefs?: Record&lt;string, string&gt;;
+  cols?: number;
+  rows?: number;
+  lifecycle?: "window" | "app";    // default "window"
+};
+
+exec(command, cwd?: string): Promise&lt;ExecResult&gt;;
+exec(command, options?: ExecOptions): Promise&lt;ExecResult | ProcessHandle&gt;;
+
+execFile(file, args?, cwd?: string): Promise&lt;ExecResult&gt;;
+execFile(file, args?, options?: ExecOptions): Promise&lt;ExecResult | ProcessHandle&gt;;</code></pre>
+            <ul>
+              <li>
+                With no options object, or with <code>stream: false</code>, preserve the current
+                collected <code>{ code, stdout, stderr }</code> behavior.
+              </li>
+              <li>
+                With <code>stream: true</code>, return an opaque <code>{ processId }</code> handle
+                immediately and deliver sequence-numbered events through
+                <code>appShell.process</code>.
+              </li>
+              <li>
+                Prefer <code>execFile</code> for A2 Code agent servers so executable and arguments
+                remain structured and do not pass through a command shell.
+              </li>
+              <li>
+                PTY mode merges output by design; pipe mode preserves separate stdout and stderr
+                events. Both modes enforce bounded replay and output limits.
+              </li>
             </ul>
           </article>
           <article class="card">
@@ -548,10 +590,39 @@
           <article class="card wide">
             <h3>New: secrets.manage</h3>
             <ul>
+              <li>Add <code>secrets.manage</code> to the generic Shell permission registry.</li>
               <li>Store credentials in app-scoped Shell secure storage.</li>
               <li>Create, replace, delete, and select secrets through Shell-owned UI.</li>
               <li>Pass credential references to approved process or network operations.</li>
               <li>Do not expose a generic secret-read API to content.</li>
+            </ul>
+          </article>
+          <article class="card wide">
+            <h3>Permission naming policy</h3>
+            <ul>
+              <li>
+                Keep all existing schema-v2 names as stable compatibility identifiers; do not rename
+                permissions in place.
+              </li>
+              <li>
+                Define new permissions as lower-camel <code>domain.action</code> names. Use deeper
+                qualifiers only for a coherent family such as <code>net.protocol.https</code>.
+              </li>
+              <li>
+                Replace the flat allow-list internally with permission descriptors containing
+                domain, title, danger level, explanation, and supported runtimes; derive the
+                allow-list and install UI from those descriptors.
+              </li>
+              <li>
+                Treat <code>globalShortcut</code>, <code>externalOpen.files</code>,
+                <code>file.pathForFile</code>, <code>dialog.message</code>, and execution under
+                <code>fs.*</code> as legacy naming exceptions, not patterns for new names.
+              </li>
+              <li>
+                If cleanup becomes worthwhile, introduce canonical names and aliases only in a
+                future manifest schema version; old and new names must resolve to one grant and one
+                danger record.
+              </li>
             </ul>
           </article>
           <article class="card wide">
@@ -648,9 +719,10 @@
           <article class="card full callout">
             <h3>Only one added permission for the local migration</h3>
             <p class="muted">
-              <code>secrets.manage</code>. Managed process handles reuse <code>fs.exec</code>. Patch
-              application, git workflows, previews, DynApp validation, scoring, fork notes, build
-              composition, and thread orchestration do not need new permissions.
+              <code>secrets.manage</code>. Managed process handles inherit and reuse
+              <code>fs.exec</code> or <code>fs.execFile</code> from the action that creates them.
+              Patch application, git workflows, previews, DynApp validation, scoring, fork notes,
+              build composition, and thread orchestration do not need new permissions.
             </p>
           </article>
         </div>
@@ -763,18 +835,21 @@
     list(path),
     readText(path),
     writeText(path, contents),
-    execFile(file, args, cwd),
+    // Existing cwd strings still collect bounded output. Passing
+    // { cwd, stream: true, ... } returns an opaque process handle.
+    exec(command, cwdOrOptions),
+    execFile(file, args, cwdOrOptions),
     packZip(paths, archive),
     watch(path)
   },
   process: {
-    open({ file, args, cwd, mode, credentialRefs }),
     attach(processId),
+    status(processId),
     write(processId, data),
     resize(processId, size),
     signal(processId, signal),
     close(processId),
-    subscribe(processId, cursor)
+    subscribe(processId, { afterSequence }, callback)
   },
   secrets: {
     configure(name, options),
@@ -784,8 +859,14 @@
 }
 
 // Every method is available only when the DynApp declares the matching
-// backendPermission and the local Shell grants it. appShell.process is
-// guarded by the existing fs.exec permission.</code></pre>
+// backendPermission and the local Shell grants it. A process handle inherits
+// fs.exec or fs.execFile from the action that created it.</code></pre>
+          <p class="muted">
+            Streaming emits <code>started</code>, <code>stdout</code>, <code>stderr</code>,
+            <code>exit</code>, <code>error</code>, and <code>replay-gap</code> events with monotonic
+            sequence numbers. App-lifecycle handles may survive a content reload for a bounded TTL;
+            window-lifecycle handles are terminated when their owner closes.
+          </p>
         </div>
       </section>
 
@@ -812,15 +893,17 @@
             <h3>Freeze the transport-independent Shell contract</h3>
             <p class="muted">
               Reuse schema-v2 <code>backendPermissions</code>. Add schemas only for
-              <code>secrets.manage</code>. Extend the API guarded by <code>fs.exec</code> with
-              stream cursors, handle ownership, cancellation, replay, and capability discovery.
+              <code>secrets.manage</code>. Extend <code>fs.exec</code> and
+              <code>fs.execFile</code> with a backward-compatible streaming toggle, stream cursors,
+              handle ownership, cancellation, replay, and capability discovery. Add structured
+              permission metadata without renaming schema-v2 grants.
             </p>
           </article>
           <article class="card full phase">
             <h3>Implement the missing Shell primitives</h3>
             <p class="muted">
-              Add managed pipe/PTY processes under <code>fs.exec</code>, app-scoped credential
-              storage and prompts, danger-level metadata, and audit records. Keep these
+              Add managed pipe/PTY processes under the existing execution permissions, app-scoped
+              credential storage and prompts, danger-level metadata, and audit records. Keep these
               implementations generic and available to any local DynApp.
             </p>
           </article>

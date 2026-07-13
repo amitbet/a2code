@@ -15,9 +15,12 @@ an executable DynApp boilerplate; it does not change the current T3 Code runtime
   shareability/modifiability rules, fork documentation, and remote-Shell grants.
 - `templates/dynapp-boilerplate/` is a valid schema-v2 desktop DynApp using
   `content/` and `backendPermissions`.
-- The local migration adds only `secrets.manage`. Managed process sessions extend
-  the API behind the existing `fs.exec` permission. The later remote DynApp stage
-  adds `shell.remote.connect`.
+- The local migration adds only `secrets.manage`. `fs.exec` and `fs.execFile`
+  gain a backward-compatible `stream` option while their existing positional
+  `cwd` and collected-output behavior remain valid. Managed process sessions
+  inherit and reuse the execution grant that created them. Schema-v2 permission
+  names remain stable; structured metadata supplies grouping and danger levels.
+  The later remote DynApp stage adds `shell.remote.connect`.
 
 ## 2026-06-20 upstream merge (client architecture rewrite) — migration notes
 

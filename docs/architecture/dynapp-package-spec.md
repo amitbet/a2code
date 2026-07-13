@@ -344,7 +344,7 @@ The A2 Code migration must use the Shell's existing schema-v2
 | Select and inspect projects     | `dialog.pickPath`, `fs.home`, `fs.roots`, `fs.list`, `fs.stat`, `fs.readText`, `fs.readChunk`, `search.files` |
 | Edit projects                   | `fs.writeText`, `fs.mkdir`, `fs.copy`, `fs.move`, `fs.trash`, `fs.remove`, `fs.watch`                         |
 | Run bounded commands            | `fs.execFile`, with `fs.exec` only when a user-authored shell command is required                             |
-| Run managed processes and PTYs  | Extend the API behind `fs.exec`; do not add a second execution permission                                     |
+| Run managed processes and PTYs  | Extend `fs.exec` and `fs.execFile`; each handle inherits its creating permission                              |
 | Run git                         | `fs.execFile`; git parsing and workflow policy remain in content                                              |
 | Build and package               | `fs.execFile`, `fs.pack`                                                                                      |
 | Preview local servers           | `net.tcp.connect`, `net.tcp.listen`, `net.protocol.http`, `net.protocol.https`                                |
@@ -355,6 +355,45 @@ Manifest validation, shareability scoring, modifiability scoring, fork-note
 maintenance, change summaries, thread reducers, diff calculation, and agent
 protocol parsing run in content and require no Shell permission.
 
+### Permission Naming And Registry Organization
+
+Permission names are compatibility identifiers, not display labels. Existing
+schema-v2 names must remain valid because installed manifests and independently
+updated content may target older Shell versions.
+
+New permissions should use lower-camel `domain.action` names. A third segment is
+appropriate only for a coherent qualified family such as `net.protocol.https`.
+Names should describe granted authority, while titles and explanations belong in
+registry metadata and may change without changing the permission identifier.
+
+The current registry is mostly understandable, but it has legacy exceptions:
+
+| Existing name                          | Assessment                                                                           |
+| -------------------------------------- | ------------------------------------------------------------------------------------ |
+| `fs.*`                                 | Established and coherent; `fs.exec*` is broader than files but stays stable.         |
+| `net.protocol.*`                       | Coherent protocol-grant family; retain.                                              |
+| `apps.*`                               | Coherent app-store/app-management family; retain.                                    |
+| `globalShortcut`                       | Missing an action segment; treat as a legacy alias, not a naming pattern.            |
+| `externalOpen.files`                   | Reverses the usual action/resource order; retain for compatibility.                  |
+| `file.pathForFile`                     | Implementation-shaped and redundant; retain for compatibility.                       |
+| `dialog.message`                       | Noun-shaped action; retain for compatibility.                                        |
+| `shortcut.manage` / `shortcut.install` | Similar names across runtimes need one documented semantic relationship.             |
+| `storage.local`                        | Runtime feature grant rather than an operation; document as a target-only exception. |
+
+The Shell should replace its flat permission allow-list with a descriptor map
+grouped by domain. Each descriptor must contain a stable id, display title,
+danger level, plain-language effect, supported runtimes, enforcement mechanism,
+and any compatibility aliases. Validation sets, capability discovery, and
+install/update warnings should be derived from this one registry. This also
+distinguishes implemented bridge actions from declarative protocol labels: the
+current list includes many `net.protocol.*` names that have no direct
+`appShell` method and must not be presented as implemented Shell APIs merely
+because the manifest parser accepts their names.
+
+Do not perform a schema-v2 mass rename. A later schema version may introduce
+cleaner canonical names, but old and new identifiers must resolve to one grant,
+one prompt, and one audit category so aliases cannot double-request authority.
+
 ### Initial Added Permission
 
 The local A2 Code migration needs one new generic permission:
@@ -363,12 +402,16 @@ The local A2 Code migration needs one new generic permission:
 | ---------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `secrets.manage` | Very high | Create, replace, delete, and use app-scoped credentials through Shell-owned UI and secure storage. Secret values should not be readable back into content. |
 
+`secrets.manage` must be added to the generic Shell permission registry and
+capability metadata. It follows the `domain.action` rule and is available to any
+DynApp that declares it; it is not A2 Code-specific.
+
 If the first release relies exclusively on credentials already configured in the
 Codex, Claude, or other provider CLI, it can defer `secrets.manage` too. Full
 parity with A2server's configurable sensitive provider environment variables
 requires it.
 
-### Managed Process Sessions Reuse fs.exec
+### Managed Process Sessions Reuse Execution Grants
 
 Commander already requests `fs.exec` for user-authored commands and
 `fs.execTerminal` for an external terminal window. Those are already classified
@@ -380,14 +423,59 @@ to probe FFmpeg and inspect media. That existing API collects output until a
 bounded process exits; it does not expose live stdin, output events, or a process
 handle.
 
+Add streaming as a backward-compatible option on both execution actions:
+
+```ts
+type ExecOptions = {
+  cwd?: string;
+  stream?: boolean; // false when omitted
+  mode?: "pipes" | "pty";
+  stdin?: "ignore" | "pipe";
+  timeoutMs?: number | null;
+  maxOutputBytes?: number;
+  replayBytes?: number;
+  env?: Record<string, string | null>;
+  credentialRefs?: Record<string, string>;
+  cols?: number;
+  rows?: number;
+  lifecycle?: "window" | "app";
+};
+
+appShell.fs.exec(command, cwd?: string): Promise<ExecResult>;
+appShell.fs.exec(command, options?: ExecOptions): Promise<ExecResult | ProcessHandle>;
+appShell.fs.execFile(file, args?, cwd?: string): Promise<ExecResult>;
+appShell.fs.execFile(file, args?, options?: ExecOptions): Promise<ExecResult | ProcessHandle>;
+```
+
+The second/third positional `cwd` string remains supported. With no options
+object, or with `stream: false`, the result remains the existing collected
+`{ code, stdout, stderr }` object. Implementations may add non-breaking metadata
+such as `signal` and `truncated`, but must not require callers to read it.
+
+With `stream: true`, return `{ processId }` immediately. The generic process API
+then exposes `attach`, `status`, `subscribe`, `write`, `resize`, `signal`, and
+`close`. Events are sequence-numbered `started`, `stdout`, `stderr`, `exit`,
+`error`, or `replay-gap` records. Pipe mode keeps stdout and stderr separate;
+PTY mode produces one merged output stream.
+
 - Open and attach to long-running pipe or PTY processes.
 - Stream stdin, stdout, stderr, lifecycle, and bounded replay events.
 - Resize PTYs and signal, restart, or close process handles.
 - Give handles ownership, leases, reconnect, and deterministic cleanup semantics.
 
-These methods should be added to a generic `appShell.process` group and guarded
-by the existing `fs.exec` permission. `fs.execFile` remains the narrower choice
-for bounded argument-array commands.
+Replay and collection buffers must be bounded. `lifecycle: "window"` is the
+default and terminates the process with its owning window. `lifecycle: "app"`
+may survive a content reload, but only for a Shell-defined TTL and only while the
+same installed app owns the handle. Detached, ownerless processes are not part
+of this API. Credential values are resolved by the Shell and never appear in
+process events, status results, or replay buffers.
+
+These methods should be added to a generic `appShell.process` group. Each handle
+inherits the permission used to create it: a streamed `fs.exec` handle is
+guarded by `fs.exec`, while a streamed `fs.execFile` handle is guarded by
+`fs.execFile`. Handle operations must recheck that originating grant and app
+ownership. This preserves least privilege and does not force structured
+argument-array callers to request the broader shell-command permission.
 
 `secrets.manage` must be app-scoped. A DynApp may refer to a credential when
 opening a process or approved network operation, but there should be no generic
