@@ -49,6 +49,12 @@ export interface ProviderRegistryShape {
   ) => Effect.Effect<ReadonlyArray<ServerProvider>>;
 
   /**
+   * Best-effort account rate-limit refresh for a live provider instance.
+   * Optional for lightweight registry implementations and test doubles.
+   */
+  readonly refreshRateLimits?: (instanceId: ProviderInstanceId) => Effect.Effect<void>;
+
+  /**
    * Resolve the maintenance capabilities owned by one live provider instance.
    * Falls back to manual-only capabilities when the instance is not live.
    */

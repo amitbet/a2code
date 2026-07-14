@@ -688,6 +688,16 @@ export const ProviderRegistryLive = Layer.effect(
         refresh(provider).pipe(Effect.catchCause(recoverRefreshFailure)),
       refreshInstance: (instanceId: ProviderInstanceId) =>
         refreshInstance(instanceId).pipe(Effect.catchCause(recoverRefreshFailure)),
+      refreshRateLimits: (instanceId: ProviderInstanceId) =>
+        instanceRegistry.getInstance(instanceId).pipe(
+          Effect.flatMap((instance) => instance?.adapter.refreshRateLimits?.() ?? Effect.void),
+          Effect.catchCause((cause) =>
+            Effect.logDebug("Unable to refresh provider rate limits.", {
+              cause,
+              providerInstanceId: instanceId,
+            }),
+          ),
+        ),
       getProviderMaintenanceCapabilitiesForInstance,
       setProviderMaintenanceActionState,
       get streamChanges() {

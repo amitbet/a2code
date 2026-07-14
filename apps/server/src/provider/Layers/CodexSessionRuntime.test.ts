@@ -18,7 +18,38 @@ import {
   isRecoverableThreadResumeError,
   openCodexThread,
 } from "./CodexSessionRuntime.ts";
+import {
+  CODEX_RATE_LIMIT_RESET_REFRESH_GRACE_MS,
+  nextCodexRateLimitResetRefreshAt,
+} from "./CodexRateLimits.ts";
 const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
+
+describe("nextCodexRateLimitResetRefreshAt", () => {
+  it("schedules one read just after the earliest future reset", () => {
+    const nowMs = 1_900_000_000_000;
+    NodeAssert.equal(
+      nextCodexRateLimitResetRefreshAt(
+        {
+          primary: { usedPercent: 25, resetsAt: 1_900_000_600 },
+          secondary: { usedPercent: 75, resetsAt: 1_900_003_600 },
+        },
+        nowMs,
+      ),
+      1_900_000_600_000 + CODEX_RATE_LIMIT_RESET_REFRESH_GRACE_MS,
+    );
+  });
+
+  it("does not reschedule a reset deadline that has already passed", () => {
+    const nowMs = 1_900_000_020_000;
+    NodeAssert.equal(
+      nextCodexRateLimitResetRefreshAt(
+        { primary: { usedPercent: 0, resetsAt: 1_900_000_000 } },
+        nowMs,
+      ),
+      undefined,
+    );
+  });
+});
 
 describe("CodexSessionRuntimeIdentifierGenerationError", () => {
   it("retains identifier purpose and the random source failure", () => {

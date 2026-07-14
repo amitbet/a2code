@@ -7,6 +7,7 @@ import {
   freshestRateLimitSnapshot,
   isRateLimitSnapshotStale,
   sanitizeRateLimitSnapshot,
+  shouldRefreshRateLimitsOnActivation,
   shouldShowRateLimitMeter,
 } from "./rateLimits";
 
@@ -130,7 +131,7 @@ describe("deriveLatestRateLimitSnapshot", () => {
     expect(snapshot?.windows[0]?.usedPercent).toBe(100);
   });
 
-  it("merges sparse rolling updates with older windows", () => {
+  it("replaces older windows with the newest complete snapshot", () => {
     const snapshot = deriveLatestRateLimitSnapshot([
       activity({
         createdAt: "2026-06-03T00:00:00.000Z",
@@ -156,13 +157,12 @@ describe("deriveLatestRateLimitSnapshot", () => {
     ]);
     expect(snapshot?.updatedAt).toBe("2026-06-03T00:05:00.000Z");
     expect(snapshot?.status).toBe("allowed");
-    expect(snapshot?.planType).toBe("max");
-    expect(snapshot?.windows).toHaveLength(2);
+    expect(snapshot?.planType).toBeUndefined();
+    expect(snapshot?.windows).toHaveLength(1);
     expect(snapshot?.windows[0]?.usedPercent).toBe(55);
-    expect(snapshot?.windows[1]?.label).toBe("Weekly");
   });
 
-  it("picks the freshest snapshot regardless of input order (cross-thread merge)", () => {
+  it("picks the freshest complete snapshot regardless of cross-thread input order", () => {
     // Activities merged from multiple conversations on the same subscription are
     // not globally sorted; the newest `createdAt` must still win per window.
     const snapshot = deriveLatestRateLimitSnapshot([
@@ -190,9 +190,38 @@ describe("deriveLatestRateLimitSnapshot", () => {
       }),
     ]);
     expect(snapshot?.updatedAt).toBe("2026-06-03T00:05:00.000Z");
-    // Newest spend figure wins; the older thread still contributes its weekly window.
     expect(snapshot?.windows.find((w) => w.kind === "spend")?.detail).toBe("$358.77 / $1,000.00");
-    expect(snapshot?.windows.find((w) => w.kind === "weekly")?.usedPercent).toBe(80);
+    expect(snapshot?.windows.find((w) => w.kind === "weekly")).toBeUndefined();
+  });
+
+  it("does not retain a stale weekly row after the provider changes window shape", () => {
+    const snapshot = deriveLatestRateLimitSnapshot([
+      activity({
+        createdAt: "2026-07-13T00:00:00.000Z",
+        payload: {
+          snapshot: {
+            windows: [
+              { kind: "five_hour", label: "5-hour", usedPercent: 42, windowMinutes: 300 },
+              { kind: "weekly", label: "Weekly", usedPercent: 86, windowMinutes: 10_080 },
+            ],
+            planType: "team",
+          },
+        },
+      }),
+      activity({
+        createdAt: "2026-07-14T00:00:00.000Z",
+        payload: {
+          snapshot: {
+            windows: [{ kind: "weekly", label: "Weekly", usedPercent: 100, windowMinutes: 10_080 }],
+            planType: "team",
+          },
+        },
+      }),
+    ]);
+
+    expect(snapshot?.windows).toEqual([
+      { kind: "weekly", label: "Weekly", usedPercent: 100, windowMinutes: 10_080 },
+    ]);
   });
 
   it("skips activities whose snapshot has no usable window", () => {
@@ -304,6 +333,39 @@ describe("isRateLimitSnapshotStale", () => {
   it("goes stale when idle past the threshold", () => {
     expect(
       isRateLimitSnapshotStale(baseSnapshot, false, updatedMs + RATE_LIMIT_STALE_AFTER_MS + 1),
+    ).toBe(true);
+  });
+});
+
+describe("shouldRefreshRateLimitsOnActivation", () => {
+  const snapshot = {
+    windows: [{ kind: "weekly" as const, label: "Weekly", usedPercent: 86 }],
+    updatedAt: "2026-06-03T00:00:00.000Z",
+  };
+  const updatedMs = Date.parse(snapshot.updatedAt);
+
+  it("requests only when a snapshot is stale", () => {
+    expect(
+      shouldRefreshRateLimitsOnActivation(
+        snapshot,
+        null,
+        updatedMs + RATE_LIMIT_STALE_AFTER_MS + 1,
+      ),
+    ).toBe(true);
+    expect(
+      shouldRefreshRateLimitsOnActivation(
+        snapshot,
+        null,
+        updatedMs + RATE_LIMIT_STALE_AFTER_MS - 1,
+      ),
+    ).toBe(false);
+  });
+
+  it("applies a five-minute cooldown to activation churn", () => {
+    const nowMs = updatedMs + RATE_LIMIT_STALE_AFTER_MS + 1;
+    expect(shouldRefreshRateLimitsOnActivation(snapshot, nowMs - 1_000, nowMs)).toBe(false);
+    expect(
+      shouldRefreshRateLimitsOnActivation(snapshot, nowMs - RATE_LIMIT_STALE_AFTER_MS, nowMs),
     ).toBe(true);
   });
 });

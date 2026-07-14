@@ -33,6 +33,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as CodexErrors from "effect-codex-app-server/errors";
+import { describe } from "vite-plus/test";
 
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -46,6 +47,7 @@ import {
   type CodexThreadSnapshot,
 } from "./CodexSessionRuntime.ts";
 import { makeCodexAdapter } from "./CodexAdapter.ts";
+import { normalizeCodexRateLimits } from "./CodexRateLimits.ts";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 
 // Test-local service tag so the rest of the file can keep using `yield* CodexAdapter`.
@@ -57,6 +59,45 @@ const asThreadId = (value: string): ThreadId => ThreadId.make(value);
 const asTurnId = (value: string): TurnId => TurnId.make(value);
 const asEventId = (value: string): EventId => EventId.make(value);
 const asItemId = (value: string): ProviderItemId => ProviderItemId.make(value);
+
+describe("normalizeCodexRateLimits", () => {
+  it("classifies a weekly primary window by duration", () => {
+    const snapshot = normalizeCodexRateLimits({
+      primary: {
+        usedPercent: 100,
+        windowDurationMins: 10_080,
+        resetsAt: 1_784_491_531,
+      },
+      secondary: null,
+      planType: "team",
+    });
+
+    NodeAssert.deepStrictEqual(snapshot, {
+      windows: [
+        {
+          kind: "weekly",
+          label: "Weekly",
+          usedPercent: 100,
+          resetsAt: 1_784_491_531,
+          windowMinutes: 10_080,
+        },
+      ],
+      planType: "team",
+    });
+  });
+
+  it("retains the legacy slot mapping when duration metadata is absent", () => {
+    const snapshot = normalizeCodexRateLimits({
+      primary: { usedPercent: 25 },
+      secondary: { usedPercent: 75 },
+    });
+
+    NodeAssert.deepStrictEqual(snapshot?.windows, [
+      { kind: "five_hour", label: "5-hour", usedPercent: 25 },
+      { kind: "weekly", label: "Weekly", usedPercent: 75 },
+    ]);
+  });
+});
 
 class FakeCodexRuntime implements CodexSessionRuntimeShape {
   private readonly eventQueue = Effect.runSync(Queue.unbounded<ProviderEvent>());
@@ -114,6 +155,7 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
   );
 
   public readonly closeImpl = vi.fn(() => Promise.resolve(undefined));
+  public readonly requestRateLimitsRefreshImpl = vi.fn(() => Promise.resolve(undefined));
 
   readonly options: CodexSessionRuntimeOptions;
 
@@ -148,6 +190,8 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
   respondToUserInput(requestId: ApprovalRequestId, answers: ProviderUserInputAnswers) {
     return Effect.promise(() => this.respondToUserInputImpl(requestId, answers));
   }
+
+  requestRateLimitsRefresh = Effect.promise(() => this.requestRateLimitsRefreshImpl());
 
   get events() {
     return Stream.fromQueue(this.eventQueue);
@@ -308,6 +352,24 @@ const sessionErrorLayer = it.layer(
 );
 
 sessionErrorLayer("CodexAdapterLive session errors", (it) => {
+  it.effect("routes account refreshes through the newest live runtime", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("quota-refresh-thread"),
+        runtimeMode: "full-access",
+      });
+      const runtime = sessionRuntimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+
+      NodeAssert.ok(adapter.refreshRateLimits);
+      yield* adapter.refreshRateLimits();
+
+      NodeAssert.equal(runtime.requestRateLimitsRefreshImpl.mock.calls.length, 1);
+    }),
+  );
+
   it.effect("maps missing adapter sessions to ProviderAdapterSessionNotFoundError", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;

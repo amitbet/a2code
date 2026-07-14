@@ -16,8 +16,6 @@ import {
   ProviderInstanceId,
   type ProviderRuntimeEvent,
   type ProviderRequestKind,
-  type ProviderRateLimitSnapshot,
-  type ProviderRateLimitWindow,
   type ThreadTokenUsageSnapshot,
   type ProviderUserInputAnswers,
   RuntimeItemId,
@@ -27,11 +25,14 @@ import {
   ProviderSendTurnInput,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
+import * as Duration from "effect/Duration";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -53,6 +54,7 @@ import {
 } from "../Errors.ts";
 import { type CodexAdapterShape } from "../Services/CodexAdapter.ts";
 import { classifyAttachment, formatTextAttachmentBlock } from "../../attachmentContent.ts";
+import { nextCodexRateLimitResetRefreshAt, normalizeCodexRateLimits } from "./CodexRateLimits.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import {
@@ -154,52 +156,6 @@ const FATAL_CODEX_STDERR_SNIPPETS = ["failed to connect to websocket"];
 function isFatalCodexProcessStderrMessage(message: string): boolean {
   const normalized = message.toLowerCase();
   return FATAL_CODEX_STDERR_SNIPPETS.some((snippet) => normalized.includes(snippet));
-}
-
-function clampPercent(value: number): number {
-  if (!Number.isFinite(value)) {
-    return 0;
-  }
-  return Math.max(0, Math.min(100, value));
-}
-
-function normalizeCodexRateLimitWindow(
-  kind: ProviderRateLimitWindow["kind"],
-  label: string,
-  window:
-    | EffectCodexSchema.V2AccountRateLimitsUpdatedNotification__RateLimitWindow
-    | null
-    | undefined,
-): ProviderRateLimitWindow | undefined {
-  if (!window || typeof window.usedPercent !== "number") {
-    return undefined;
-  }
-  return {
-    kind,
-    label,
-    usedPercent: clampPercent(window.usedPercent),
-    ...(typeof window.resetsAt === "number" ? { resetsAt: window.resetsAt } : {}),
-    ...(typeof window.windowDurationMins === "number"
-      ? { windowMinutes: Math.max(0, Math.round(window.windowDurationMins)) }
-      : {}),
-  };
-}
-
-function normalizeCodexRateLimits(
-  snapshot: EffectCodexSchema.V2AccountRateLimitsUpdatedNotification["rateLimits"],
-): ProviderRateLimitSnapshot | undefined {
-  // Codex reports a primary 5-hour window and a secondary weekly window.
-  const windows = [
-    normalizeCodexRateLimitWindow("five_hour", "5-hour", snapshot.primary),
-    normalizeCodexRateLimitWindow("weekly", "Weekly", snapshot.secondary),
-  ].filter((window): window is ProviderRateLimitWindow => window !== undefined);
-  if (windows.length === 0) {
-    return undefined;
-  }
-  return {
-    windows,
-    ...(typeof snapshot.planType === "string" ? { planType: snapshot.planType } : {}),
-  };
 }
 
 function normalizeCodexTokenUsage(
@@ -1410,6 +1366,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   const fileSystem = yield* FileSystem.FileSystem;
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const crypto = yield* Crypto.Crypto;
+  const adapterScope = yield* Scope.Scope;
   const serverConfig = yield* Effect.service(ServerConfig);
   const nativeEventLogger =
     options?.nativeEventLogger ??
@@ -1422,6 +1379,44 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
   const sessions = new Map<ThreadId, CodexAdapterSessionContext>();
+  const scheduledResetRefreshRef = yield* Ref.make<
+    | {
+        readonly refreshAt: number;
+        readonly fiber: Fiber.Fiber<void, never>;
+      }
+    | undefined
+  >(undefined);
+
+  const requestRateLimitsRefresh = () => {
+    const session = Array.from(sessions.values())
+      .toReversed()
+      .find((candidate) => !candidate.stopped);
+    return session?.runtime.requestRateLimitsRefresh ?? Effect.void;
+  };
+  const refreshRateLimits: NonNullable<CodexAdapterShape["refreshRateLimits"]> =
+    requestRateLimitsRefresh;
+
+  const scheduleResetRateLimitRefresh = Effect.fn("CodexAdapter.scheduleResetRateLimitRefresh")(
+    function* (rateLimits: EffectCodexSchema.V2AccountRateLimitsUpdatedNotification["rateLimits"]) {
+      const nowMs = yield* Clock.currentTimeMillis;
+      const refreshAt = nextCodexRateLimitResetRefreshAt(rateLimits, nowMs);
+      if (refreshAt === undefined) {
+        return;
+      }
+      const scheduled = yield* Ref.get(scheduledResetRefreshRef);
+      if (scheduled?.refreshAt === refreshAt) {
+        return;
+      }
+      if (scheduled) {
+        yield* Fiber.interrupt(scheduled.fiber);
+      }
+      const fiber = yield* Effect.sleep(Duration.millis(refreshAt - nowMs)).pipe(
+        Effect.andThen(requestRateLimitsRefresh()),
+        Effect.forkIn(adapterScope),
+      );
+      yield* Ref.set(scheduledResetRefreshRef, { refreshAt, fiber });
+    },
+  );
 
   const startSession: CodexAdapterShape["startSession"] = (input) =>
     Effect.scoped(
@@ -1498,6 +1493,15 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
         const eventFiber = yield* Stream.runForEach(runtime.events, (event) =>
           Effect.gen(function* () {
             yield* writeNativeEvent(event);
+            if (event.method === "account/rateLimits/updated") {
+              const payload = readPayload(
+                EffectCodexSchema.V2AccountRateLimitsUpdatedNotification,
+                event.payload,
+              );
+              if (payload) {
+                yield* scheduleResetRateLimitRefresh(payload.rateLimits);
+              }
+            }
             const runtimeEvents = mapToRuntimeEvents(event, event.threadId);
             if (runtimeEvents.length === 0) {
               yield* Effect.logDebug("ignoring unhandled Codex provider event", {
@@ -1790,6 +1794,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     respondToUserInput,
     stopSession,
     listSessions,
+    refreshRateLimits,
     hasSession,
     stopAll,
     get streamEvents() {

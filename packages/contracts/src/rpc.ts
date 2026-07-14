@@ -203,6 +203,7 @@ export const WS_METHODS = {
   // Server meta
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
+  serverRefreshProviderRateLimits: "server.refreshProviderRateLimits",
   serverUpdateProvider: "server.updateProvider",
   serverUpsertKeybinding: "server.upsertKeybinding",
   serverRemoveKeybinding: "server.removeKeybinding",
@@ -265,6 +266,17 @@ export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProv
   success: ServerProviderUpdatedPayload,
   error: EnvironmentAuthorizationError,
 });
+
+export const WsServerRefreshProviderRateLimitsRpc = Rpc.make(
+  WS_METHODS.serverRefreshProviderRateLimits,
+  {
+    payload: Schema.Struct({
+      instanceId: ProviderInstanceId,
+    }),
+    success: Schema.Struct({}),
+    error: EnvironmentAuthorizationError,
+  },
+);
 
 export const WsServerUpdateProviderRpc = Rpc.make(WS_METHODS.serverUpdateProvider, {
   payload: ServerProviderUpdateInput,
@@ -684,6 +696,7 @@ export const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess,
 export const WsRpcGroup = RpcGroup.make(
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
+  WsServerRefreshProviderRateLimitsRpc,
   WsServerUpdateProviderRpc,
   WsServerUpsertKeybindingRpc,
   WsServerRemoveKeybindingRpc,

@@ -30,7 +30,7 @@ function latestRateLimitActivityForThread(
  * Latest `account.rate-limits.updated` activity for every thread bound to the
  * given provider instance, across all environments. Rate limits describe an
  * account/subscription rather than a single conversation, so the quota meter
- * merges these (newest values win per window) instead of showing only the
+ * selects the newest complete snapshot across them instead of showing only the
  * active thread's last-seen figures — which go stale while another conversation
  * on the same subscription keeps reporting fresher usage.
  *

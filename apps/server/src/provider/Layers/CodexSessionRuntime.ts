@@ -26,6 +26,7 @@ import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -150,6 +151,7 @@ export interface CodexSessionRuntimeShape {
     requestId: ApprovalRequestId,
     answers: ProviderUserInputAnswers,
   ) => Effect.Effect<void, CodexSessionRuntimeError>;
+  readonly requestRateLimitsRefresh: Effect.Effect<void>;
   readonly events: Stream.Stream<ProviderEvent, never>;
   readonly close: Effect.Effect<void>;
 }
@@ -234,6 +236,10 @@ type CodexServerNotification = {
     readonly params: CodexRpc.ServerNotificationParamsByMethod[M];
   };
 }[CodexRpc.ServerNotificationMethod];
+
+interface CodexRateLimitRefreshTrigger {
+  readonly fallback?: EffectCodexSchema.V2AccountRateLimitsUpdatedNotification;
+}
 
 function makeCodexServerNotification<M extends CodexRpc.ServerNotificationMethod>(
   method: M,
@@ -776,6 +782,7 @@ export const makeCodexSessionRuntime = (
       Effect.provide(clientContext),
     );
     const serverNotifications = yield* Queue.unbounded<CodexServerNotification>();
+    const rateLimitRefreshes = yield* Queue.sliding<CodexRateLimitRefreshTrigger>(1);
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
     const randomUUIDv4 = (purpose: CodexErrors.CodexAppServerIdentifierPurpose) =>
       crypto.randomUUIDv4.pipe(
@@ -823,6 +830,40 @@ export const makeCodexSessionRuntime = (
         message,
       });
 
+    const emitRateLimits = (payload: EffectCodexSchema.V2AccountRateLimitsUpdatedNotification) =>
+      emitEvent({
+        kind: "notification",
+        threadId: options.threadId,
+        method: "account/rateLimits/updated",
+        payload,
+      });
+
+    const requestRateLimitsRefresh = Queue.offer(rateLimitRefreshes, {}).pipe(Effect.asVoid);
+
+    const refreshRateLimits = Effect.fn("CodexSessionRuntime.refreshRateLimits")(function* (
+      trigger: CodexRateLimitRefreshTrigger,
+    ) {
+      const response = yield* client
+        .request("account/rateLimits/read", undefined)
+        .pipe(Effect.result);
+      if (Result.isSuccess(response)) {
+        yield* emitRateLimits({ rateLimits: response.success.rateLimits });
+        return;
+      }
+
+      yield* Effect.logDebug("Failed to refresh Codex account rate limits.", {
+        cause: response.failure,
+      });
+      if (trigger.fallback) {
+        yield* emitRateLimits(trigger.fallback);
+      }
+    });
+
+    yield* Stream.fromQueue(rateLimitRefreshes).pipe(
+      Stream.runForEach(refreshRateLimits),
+      Effect.forkIn(runtimeScope),
+    );
+
     const settlePendingApprovals = (decision: ProviderApprovalDecision) =>
       Ref.get(pendingApprovalsRef).pipe(
         Effect.flatMap((pendingApprovals) =>
@@ -849,6 +890,14 @@ export const makeCodexSessionRuntime = (
 
     const handleRawNotification = (notification: CodexServerNotification) =>
       Effect.gen(function* () {
+        if (notification.method === "account/rateLimits/updated") {
+          yield* Queue.offer(rateLimitRefreshes, { fallback: notification.params });
+          return;
+        }
+        if (notification.method === "account/updated") {
+          yield* Queue.offer(rateLimitRefreshes, {});
+        }
+
         const payload = notification.params;
         const route = readRouteFields(notification);
         const collabReceiverTurns = yield* Ref.get(collabReceiverTurnsRef);
@@ -1224,6 +1273,7 @@ export const makeCodexSessionRuntime = (
       yield* emitSessionEvent("session/connecting", "Starting Codex App Server session.");
       yield* client.request("initialize", buildCodexInitializeParams());
       yield* client.notify("initialized", undefined);
+      yield* requestRateLimitsRefresh;
 
       const requestedModel = normalizeCodexModelSlug(options.model);
 
@@ -1284,6 +1334,7 @@ export const makeCodexSessionRuntime = (
       );
       yield* Scope.close(runtimeScope, Exit.void);
       yield* Queue.shutdown(serverNotifications);
+      yield* Queue.shutdown(rateLimitRefreshes);
       yield* Queue.shutdown(events);
     });
 
@@ -1430,6 +1481,7 @@ export const makeCodexSessionRuntime = (
             },
           });
         }),
+      requestRateLimitsRefresh,
       events: Stream.fromQueue(events),
       close,
     } satisfies CodexSessionRuntimeShape;

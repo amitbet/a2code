@@ -876,7 +876,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // Rate limits describe the subscription, not this one conversation, so merge
   // the freshest snapshot across every thread on the selected instance instead
   // of reading only the active thread's last-seen figures.
-  const activeRateLimits = useAccountRateLimitSnapshot(selectedInstanceId);
+  const activeRateLimits = useAccountRateLimitSnapshot(environmentId, selectedInstanceId);
   const activeThreadProviderDisplayName = useMemo(() => {
     if (!activeThreadModelSelection) return null;
     const entry = providerStatuses.find(

@@ -50,33 +50,19 @@ export type RateLimitSnapshot = ProviderRateLimitSnapshot & {
   readonly updatedAt: string;
 };
 
-function windowKey(window: ProviderRateLimitWindow): string {
-  return `${window.kind}:${window.label}`;
-}
-
 /**
  * Return the most recent normalized rate-limit snapshot from a set of thread
  * activities, or null if the provider has not reported quota usage.
  *
  * Rate limits describe an account/subscription, not a single conversation, so
  * callers may pass activities merged across multiple threads (see
- * {@link selectLatestRateLimitActivitiesForInstance}). Because such input is
- * not globally ordered, we sort the rate-limit activities newest-first by
- * `createdAt` before merging — newest values win per window. For a single
- * thread's already-ascending activities this yields the same result as the
- * previous reverse walk.
+ * {@link selectLatestRateLimitActivitiesForInstance}). Each provider event is
+ * a complete normalized snapshot, so the newest usable event replaces older
+ * snapshots instead of retaining windows that the provider has removed.
  */
 export function deriveLatestRateLimitSnapshot(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): RateLimitSnapshot | null {
-  const windowsByKey = new Map<string, ProviderRateLimitWindow>();
-  let updatedAt: string | null = null;
-  let status: RateLimitSnapshot["status"] | undefined;
-  let planType: string | undefined;
-
-  // Order newest-first by `createdAt`. On ties, a later position in the input
-  // wins — preserving the prior reverse-walk behavior for a single thread's
-  // already-ascending activities.
   const rateLimitActivities = activities
     .map((activity, index) => ({ activity, index }))
     .filter((entry) => entry.activity?.kind === "account.rate-limits.updated")
@@ -89,9 +75,6 @@ export function deriveLatestRateLimitSnapshot(
     );
 
   for (const { activity } of rateLimitActivities) {
-    if (updatedAt === null) {
-      updatedAt = activity.createdAt;
-    }
     const payload = asRecord(activity.payload);
     const snapshot = asRecord(payload?.snapshot);
     if (!snapshot) {
@@ -101,35 +84,24 @@ export function deriveLatestRateLimitSnapshot(
     const windows = rawWindows
       .map(parseWindow)
       .filter((window): window is ProviderRateLimitWindow => window !== null);
-    for (const window of windows) {
-      const key = windowKey(window);
-      if (!windowsByKey.has(key)) {
-        windowsByKey.set(key, window);
-      }
+    if (windows.length === 0) {
+      continue;
     }
-    if (
-      status === undefined &&
-      (snapshot.status === "allowed" ||
-        snapshot.status === "allowed_warning" ||
-        snapshot.status === "rejected")
-    ) {
-      status = snapshot.status;
-    }
-    if (planType === undefined && typeof snapshot.planType === "string") {
-      planType = snapshot.planType;
-    }
+    const status =
+      snapshot.status === "allowed" ||
+      snapshot.status === "allowed_warning" ||
+      snapshot.status === "rejected"
+        ? snapshot.status
+        : undefined;
+    const planType = typeof snapshot.planType === "string" ? snapshot.planType : undefined;
+    return {
+      windows,
+      ...(status ? { status } : {}),
+      ...(planType ? { planType } : {}),
+      updatedAt: activity.createdAt,
+    };
   }
-
-  const windows = [...windowsByKey.values()];
-  if (updatedAt === null || windows.length === 0) {
-    return null;
-  }
-  return {
-    windows,
-    ...(status ? { status } : {}),
-    ...(planType ? { planType } : {}),
-    updatedAt,
-  };
+  return null;
 }
 
 /**
@@ -193,6 +165,21 @@ export function shouldShowRateLimitMeter(snapshot: RateLimitSnapshot | null): bo
 
 /** A snapshot is considered stale this long after its last update while idle. */
 export const RATE_LIMIT_STALE_AFTER_MS = 5 * 60_000;
+
+/**
+ * Activation refreshes are intentionally rate-limited to the same stale
+ * horizon. This keeps focus/visibility churn from becoming background polling.
+ */
+export function shouldRefreshRateLimitsOnActivation(
+  snapshot: RateLimitSnapshot | null,
+  lastRequestedAtMs: number | null,
+  nowMs: number,
+): boolean {
+  if (!snapshot || !isRateLimitSnapshotStale(snapshot, false, nowMs)) {
+    return false;
+  }
+  return lastRequestedAtMs === null || nowMs - lastRequestedAtMs >= RATE_LIMIT_STALE_AFTER_MS;
+}
 
 /**
  * Whether the snapshot should render in a "stale" (greyed) state. Never stale

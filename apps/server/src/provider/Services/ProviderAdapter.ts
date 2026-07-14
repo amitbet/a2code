@@ -116,6 +116,12 @@ export interface ProviderAdapterShape<TError> {
   readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
 
   /**
+   * Best-effort refresh of account-level rate limits, when the provider has a
+   * live protocol session that supports an authoritative read.
+   */
+  readonly refreshRateLimits?: () => Effect.Effect<void, TError>;
+
+  /**
    * Check whether this adapter owns an active session id.
    */
   readonly hasSession: (threadId: ThreadId) => Effect.Effect<boolean>;
