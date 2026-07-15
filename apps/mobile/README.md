@@ -90,7 +90,8 @@ The native lint task runs SwiftLint for Swift plus ktlint and detekt for Kotlin.
 ## EAS Builds
 
 GitHub Actions builds Android standalone APKs with the `preview` or `production` app
-variant. These APKs bundle the JS payload and do not require Metro. EAS remains available for
+variant. These APKs bundle the JS payload, do not require Metro, and disable Expo Updates so a
+fork artifact cannot load an OTA payload from the upstream Expo project. EAS remains available for
 cloud/internal builds and store-oriented production builds.
 
 For preview or production EAS environments, set `T3CODE_CLERK_PUBLISHABLE_KEY`,

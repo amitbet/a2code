@@ -8,6 +8,7 @@ const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
 
 const APP_VARIANT = resolveAppVariant(repoEnv.APP_VARIANT);
+const updatesEnabled = repoEnv.MOBILE_UPDATES_ENABLED !== "0";
 const isIosPersonalTeamBuild = repoEnv.T3CODE_IOS_PERSONAL_TEAM === "1";
 
 const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?.trim();
@@ -128,7 +129,7 @@ const config: ExpoConfig = {
   icon: "./assets/icon.png",
   userInterfaceStyle: "automatic",
   updates: {
-    enabled: true,
+    enabled: updatesEnabled,
     url: "https://u.expo.dev/d763fcb8-d37c-41ea-a773-b54a0ab4a454",
     checkAutomatically: "ON_LOAD",
     fallbackToCacheTimeout: 0,
