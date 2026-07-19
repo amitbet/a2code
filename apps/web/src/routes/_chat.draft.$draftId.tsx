@@ -1,13 +1,14 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
 import ChatView from "../components/ChatView";
-import { threadHasAuthoritativeUserMessage, threadHasStarted } from "../components/ChatView.logic";
+import { threadHasAuthoritativeUserMessage } from "../components/ChatView.logic";
 import {
   DraftId,
   markPromotedDraftThreadByRef,
   useComposerDraftStore,
 } from "../composerDraftStore";
 import { SidebarInset } from "../components/ui/sidebar";
+import { waitForDraftHeroTransition } from "../components/chat/draftHeroTransition";
 import { buildThreadRouteParams } from "../threadRoutes";
 import { useThread, useThreadRefs } from "../state/entities";
 
@@ -26,8 +27,6 @@ function DraftChatThreadRouteView() {
     : null;
   const serverThreadRef = draftSession?.promotedTo ?? inferredThreadRef;
   const serverThread = useThread(serverThreadRef);
-  const serverThreadStarted = threadHasStarted(serverThread);
-  const startedThreadRef = serverThreadStarted ? serverThreadRef : null;
   // The server can publish its session/turn before its user-message echo. We
   // may render that live server state in place, but navigating now would
   // remount ChatView and discard the only copy of the optimistic first prompt.
@@ -46,11 +45,22 @@ function DraftChatThreadRouteView() {
     if (!canonicalThreadRef) {
       return;
     }
-    void navigate({
-      to: "/$environmentId/$threadId",
-      params: buildThreadRouteParams(canonicalThreadRef),
-      replace: true,
+
+    let cancelled = false;
+    void waitForDraftHeroTransition().then(() => {
+      if (cancelled) {
+        return;
+      }
+      void navigate({
+        to: "/$environmentId/$threadId",
+        params: buildThreadRouteParams(canonicalThreadRef),
+        replace: true,
+      });
     });
+
+    return () => {
+      cancelled = true;
+    };
   }, [canonicalThreadRef, navigate]);
 
   useEffect(() => {
@@ -59,18 +69,6 @@ function DraftChatThreadRouteView() {
     }
     void navigate({ to: "/", replace: true });
   }, [canonicalThreadRef, draftSession, navigate]);
-
-  if (startedThreadRef) {
-    return (
-      <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground md:h-dvh">
-        <ChatView
-          environmentId={startedThreadRef.environmentId}
-          threadId={startedThreadRef.threadId}
-          routeKind="server"
-        />
-      </SidebarInset>
-    );
-  }
 
   if (!draftSession) {
     return null;
@@ -83,6 +81,7 @@ function DraftChatThreadRouteView() {
         environmentId={draftSession.environmentId}
         threadId={draftSession.threadId}
         routeKind="draft"
+        forceExpandedMobileComposer
       />
     </SidebarInset>
   );

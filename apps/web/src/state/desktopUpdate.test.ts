@@ -17,6 +17,7 @@ const baseState: DesktopUpdateState = {
   runningUnderArm64Translation: false,
   availableVersion: null,
   downloadedVersion: null,
+  releaseNotes: [],
   downloadPercent: null,
   checkedAt: null,
   message: null,

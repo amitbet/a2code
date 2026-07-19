@@ -42,6 +42,7 @@ export function payloadUpdateStateToDesktopUpdateState(
     runningUnderArm64Translation: info.runtimeInfo.runningUnderArm64Translation,
     availableVersion: payload.availableVersion,
     downloadedVersion: null,
+    releaseNotes: [],
     downloadPercent: null,
     checkedAt: payload.checkedAt,
     message: null,

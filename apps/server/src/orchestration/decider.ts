@@ -12,6 +12,7 @@ import type * as PlatformError from "effect/PlatformError";
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import {
   listThreadsByProjectId,
+  requireActiveProjectWorkspaceRootAbsent,
   requireProject,
   requireProjectAbsent,
   requireThread,
@@ -140,6 +141,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         projectId: command.projectId,
       });
+      yield* requireActiveProjectWorkspaceRootAbsent({
+        readModel,
+        command,
+        workspaceRoot: command.workspaceRoot,
+        exceptProjectId: command.projectId,
+      });
 
       return {
         ...(yield* withEventBase({
@@ -167,6 +174,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         projectId: command.projectId,
       });
+      if (command.workspaceRoot !== undefined) {
+        yield* requireActiveProjectWorkspaceRootAbsent({
+          readModel,
+          command,
+          workspaceRoot: command.workspaceRoot,
+          exceptProjectId: command.projectId,
+        });
+      }
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({

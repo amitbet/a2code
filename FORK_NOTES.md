@@ -3,6 +3,36 @@
 This file tracks fork-specific divergences that are likely to conflict when
 merging `upstream/main`.
 
+## 2026-07-19 upstream merge (draft hero, attachment hardening, mobile refresh) — migration notes
+
+Merged `upstream/main` through `1735e27d9`. The fork-specific seams below were
+re-audited, with these notable integrations:
+
+- **Draft hero + queued prompts.** Upstream's centered draft-hero composer and
+  branch-toolbar layout were retained. The fork queue panel now renders inside
+  the new composer anchor, immediately above `ChatComposer`; running turns still
+  enable the collapsed primary action and label it **Queue message**. Project
+  selection remains required for new draft sends.
+- **Attachment normalization hardening.** Upstream's stack-safe base64 data-URL
+  parser was combined with the fork's arbitrary-file extension allowlist and
+  file byte limits. Client timestamp canonicalization now applies before both
+  `thread.turn.start` and fork-added `thread.prompt.queue` attachment
+  normalization.
+- **Thread subscription replay.** Upstream's pre-attached buffered live stream
+  was adopted, while the fork's bounded `readEvents(afterSequence)` replay was
+  preserved. Do not restore the upstream `Number.MAX_SAFE_INTEGER` replay limit;
+  that reintroduces the stale-cursor backend OOM risk.
+- **Payload-only updater vs release notes.** Upstream added required
+  `DesktopUpdateState.releaseNotes` and nightly changelog UI. The fork still
+  keeps the electron installer/updater and update state machine deleted;
+  `payloadUpdateStateToDesktopUpdateState` returns an empty `releaseNotes` list
+  because the payload manifest does not currently carry changelog metadata.
+- **Branding and workflows.** Kept the fork's A2 Code production/web icons and
+  marketing identity while adopting upstream's legal pages, Grok marketing,
+  responsive layout, and nightly/dev asset pipeline. `.github/workflows` remains
+  byte-identical to the pre-merge fork tip and contains only `ci.yml` and
+  `release.yml`.
+
 ## 2026-06-20 upstream merge (client architecture rewrite) — migration notes
 
 The `upstream/main` merge on 2026-06-20 (up to `97e5cd3bf`) brought two sweeping
