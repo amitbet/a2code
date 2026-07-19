@@ -360,6 +360,80 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
+  it("keeps only the ten newest unarchived threads in each project", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const projectId = asProjectId("project-thread-limit");
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-project-thread-limit-create"),
+        projectId,
+        title: "Thread Limit",
+        workspaceRoot: "/tmp/project-thread-limit",
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    for (let index = 0; index < 11; index += 1) {
+      await system.run(
+        engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`cmd-thread-limit-${index}-create`),
+          threadId: ThreadId.make(`thread-limit-${index}`),
+          projectId,
+          title: `Thread ${index}`,
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "approval-required",
+          branch: null,
+          worktreePath: null,
+          createdAt: `2026-01-01T00:00:${String(index).padStart(2, "0")}.000Z`,
+        }),
+      );
+    }
+
+    let projectThreads = (await system.readModel()).threads.filter(
+      (thread) => thread.projectId === projectId,
+    );
+    expect(projectThreads.filter((thread) => thread.archivedAt === null)).toHaveLength(10);
+    expect(
+      projectThreads.find((thread) => thread.id === "thread-limit-0")?.archivedAt,
+    ).not.toBeNull();
+
+    await system.run(
+      engine.dispatch({
+        type: "thread.fork",
+        commandId: CommandId.make("cmd-thread-limit-fork"),
+        threadId: ThreadId.make("thread-limit-fork"),
+        sourceThreadId: ThreadId.make("thread-limit-10"),
+        title: "Forked Thread",
+        createdAt: "2026-01-01T00:00:11.000Z",
+      }),
+    );
+
+    projectThreads = (await system.readModel()).threads.filter(
+      (thread) => thread.projectId === projectId,
+    );
+    expect(projectThreads.filter((thread) => thread.archivedAt === null)).toHaveLength(10);
+    expect(
+      projectThreads.find((thread) => thread.id === "thread-limit-1")?.archivedAt,
+    ).not.toBeNull();
+    expect(
+      projectThreads.find((thread) => thread.id === "thread-limit-fork")?.archivedAt,
+    ).toBeNull();
+
+    await system.dispose();
+  });
+
   it("replays append-only events from sequence", async () => {
     const system = await createOrchestrationSystem();
     const { engine } = system;

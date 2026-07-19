@@ -118,6 +118,30 @@ it.layer(TestLayer, { excludeTestServices: true })("WorkspaceFileSystemLive", (i
       }),
     );
 
+    it.effect("reads files through a directory symlink inside the workspace", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const cwd = yield* makeTempDir;
+        const linkedRepository = yield* makeTempDir;
+        yield* writeTextFile(linkedRepository, "src/index.ts", "export const linked = true;\n");
+        yield* fileSystem.symlink(linkedRepository, path.join(cwd, "linked-repository"));
+
+        const result = yield* workspaceFileSystem.readFile({
+          cwd,
+          relativePath: "linked-repository/src/index.ts",
+        });
+
+        expect(result).toEqual({
+          relativePath: "linked-repository/src/index.ts",
+          contents: "export const linked = true;\n",
+          byteLength: 28,
+          truncated: false,
+        });
+      }),
+    );
+
     it.effect("rejects directories without manufacturing an I/O cause", () =>
       Effect.gen(function* () {
         const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;

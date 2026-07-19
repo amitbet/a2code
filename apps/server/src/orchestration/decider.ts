@@ -59,6 +59,35 @@ type DecideOrchestrationCommandResult =
   | PlannedOrchestrationEvent
   | ReadonlyArray<PlannedOrchestrationEvent>;
 
+const MAX_UNARCHIVED_THREADS_PER_PROJECT = 10;
+
+function compareOldestThread(
+  left: OrchestrationReadModel["threads"][number],
+  right: OrchestrationReadModel["threads"][number],
+): number {
+  if (left.createdAt !== right.createdAt) {
+    return left.createdAt < right.createdAt ? -1 : 1;
+  }
+  if (left.id === right.id) {
+    return 0;
+  }
+  return left.id < right.id ? -1 : 1;
+}
+
+function listThreadsToArchiveBeforeCreate(
+  readModel: OrchestrationReadModel,
+  projectId: OrchestrationReadModel["projects"][number]["id"],
+): ReadonlyArray<OrchestrationReadModel["threads"][number]> {
+  const unarchivedThreads = listThreadsByProjectId(readModel, projectId)
+    .filter((thread) => thread.deletedAt === null && thread.archivedAt === null)
+    .sort(compareOldestThread);
+  const archiveCount = Math.max(
+    0,
+    unarchivedThreads.length - MAX_UNARCHIVED_THREADS_PER_PROJECT + 1,
+  );
+  return unarchivedThreads.slice(0, archiveCount);
+}
+
 const decideCommandSequence = Effect.fn("decideCommandSequence")(function* ({
   commands,
   readModel,
@@ -222,6 +251,22 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      const threadsToArchive = listThreadsToArchiveBeforeCreate(readModel, command.projectId);
+      if (threadsToArchive.length > 0) {
+        return yield* decideCommandSequence({
+          readModel,
+          commands: [
+            ...threadsToArchive.map(
+              (thread): Extract<OrchestrationCommand, { type: "thread.archive" }> => ({
+                type: "thread.archive",
+                commandId: command.commandId,
+                threadId: thread.id,
+              }),
+            ),
+            command,
+          ],
+        });
+      }
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -256,6 +301,22 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      const threadsToArchive = listThreadsToArchiveBeforeCreate(readModel, sourceThread.projectId);
+      if (threadsToArchive.length > 0) {
+        return yield* decideCommandSequence({
+          readModel,
+          commands: [
+            ...threadsToArchive.map(
+              (thread): Extract<OrchestrationCommand, { type: "thread.archive" }> => ({
+                type: "thread.archive",
+                commandId: command.commandId,
+                threadId: thread.id,
+              }),
+            ),
+            command,
+          ],
+        });
+      }
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",

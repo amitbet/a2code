@@ -186,8 +186,11 @@ const createFinder = Effect.fn("WorkspaceSearchIndex.createFinder")(function* (c
         disableMmapCache: true,
         disableContentIndexing: true,
         aiMode: false,
-        enableFsRootScanning: true,
-        enableHomeDirScanning: true,
+        // This index is scoped to the selected workspace. Scanning `/` or the
+        // user's home directory adds unrelated files, permissions, and watcher
+        // load, and can make a normal workspace fail its initial scan.
+        enableFsRootScanning: false,
+        enableHomeDirScanning: false,
       }),
     catch: (cause) =>
       new WorkspaceSearchIndexCreateFailed({

@@ -165,17 +165,35 @@ export const make = Effect.gen(function* () {
         }),
     });
     const relativeRealPath = path.relative(realWorkspaceRoot, realTargetPath);
-    if (
+    const resolvesOutsideWorkspace =
       relativeRealPath.startsWith(`..${path.sep}`) ||
       relativeRealPath === ".." ||
-      path.isAbsolute(relativeRealPath)
-    ) {
-      return yield* new WorkspaceFilePathEscapeError({
-        workspaceRoot: input.cwd,
-        relativePath: input.relativePath,
-        resolvedWorkspaceRoot: realWorkspaceRoot,
-        resolvedPath: realTargetPath,
+      path.isAbsolute(relativeRealPath);
+    // A directory symlink inside a workspace is commonly used to compose a
+    // multi-repository checkout. Permit files reached through that directory,
+    // while continuing to reject a file symlink that directly exposes an
+    // arbitrary path outside the workspace.
+    if (resolvesOutsideWorkspace) {
+      const targetPathStat = yield* Effect.tryPromise({
+        try: () => NodeFSP.lstat(target.absolutePath),
+        catch: (cause) =>
+          new WorkspaceFileSystemOperationError({
+            workspaceRoot: input.cwd,
+            relativePath: input.relativePath,
+            resolvedPath: target.absolutePath,
+            operationPath: target.absolutePath,
+            operation: "stat",
+            cause,
+          }),
       });
+      if (targetPathStat.isSymbolicLink()) {
+        return yield* new WorkspaceFilePathEscapeError({
+          workspaceRoot: input.cwd,
+          relativePath: input.relativePath,
+          resolvedWorkspaceRoot: realWorkspaceRoot,
+          resolvedPath: realTargetPath,
+        });
+      }
     }
 
     return yield* Effect.acquireUseRelease(

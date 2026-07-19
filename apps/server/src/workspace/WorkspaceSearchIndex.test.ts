@@ -11,6 +11,28 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it.effect("scans only the requested workspace root", () =>
+  Effect.gen(function* () {
+    const finder = {
+      destroy: vi.fn(),
+      isScanning: vi.fn(() => false),
+    } as unknown as FileFinder;
+    const createSpy = vi
+      .spyOn(FileFinder, "create")
+      .mockReturnValueOnce({ ok: true, value: finder });
+
+    yield* Effect.scoped(WorkspaceSearchIndex.make("/workspace/project"));
+
+    expect(createSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        basePath: "/workspace/project",
+        enableFsRootScanning: false,
+        enableHomeDirScanning: false,
+      }),
+    );
+  }),
+);
+
 it.effect("preserves unexpected FileFinder creation failures", () =>
   Effect.gen(function* () {
     const cause = new Error("native initialization failed");
