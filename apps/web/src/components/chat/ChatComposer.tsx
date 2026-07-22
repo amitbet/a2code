@@ -583,7 +583,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeThreadId,
     activeThreadEnvironmentId: _activeThreadEnvironmentId,
     activeThread,
-    isServerThread: _isServerThread,
+    isServerThread,
     isLocalDraftThread: _isLocalDraftThread,
     forceExpandedOnMobile,
     projectSelectionRequired,
@@ -803,6 +803,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     selectedInstanceId,
     threadModelSelection: activeThreadModelSelection,
     projectModelSelection: activeProjectDefaultModelSelection,
+    // Local drafts expose a synthetic thread selection so the rest of the UI
+    // has a model before promotion. It is not an existing-thread override and
+    // must not suppress the provider defaults configured for new threads.
+    applyProviderModelDefaults: !isServerThread,
     settings,
   });
 

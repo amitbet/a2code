@@ -981,6 +981,8 @@ export function deriveEffectiveComposerModelState(input: {
   selectedInstanceId?: ProviderInstanceId | null | undefined;
   threadModelSelection: ModelSelection | null | undefined;
   projectModelSelection: ModelSelection | null | undefined;
+  /** Whether provider-level defaults may fill an otherwise option-less selection. */
+  applyProviderModelDefaults: boolean;
   settings: UnifiedSettings;
 }): EffectiveComposerModelState {
   const baseModelCandidate =
@@ -1047,12 +1049,9 @@ export function deriveEffectiveComposerModelState(input: {
       input.projectModelSelection,
       effectiveInstanceId,
     ) ??
-    (input.threadModelSelection
-      ? null
-      : providerSelectionsFromDefaults(
-          input.settings.providerModelDefaults,
-          effectiveInstanceId,
-        )) ??
+    (input.applyProviderModelDefaults
+      ? providerSelectionsFromDefaults(input.settings.providerModelDefaults, effectiveInstanceId)
+      : null) ??
     null;
 
   return {
@@ -3524,6 +3523,7 @@ export function useEffectiveComposerModelState(input: {
   selectedInstanceId?: ProviderInstanceId | null | undefined;
   threadModelSelection: ModelSelection | null | undefined;
   projectModelSelection: ModelSelection | null | undefined;
+  applyProviderModelDefaults: boolean;
   settings: UnifiedSettings;
 }): EffectiveComposerModelState {
   const draft = useComposerDraftModelState(input.threadRef ?? input.draftId ?? DraftId.make(""));
@@ -3537,10 +3537,12 @@ export function useEffectiveComposerModelState(input: {
         selectedInstanceId: input.selectedInstanceId,
         threadModelSelection: input.threadModelSelection,
         projectModelSelection: input.projectModelSelection,
+        applyProviderModelDefaults: input.applyProviderModelDefaults,
         settings: input.settings,
       }),
     [
       draft,
+      input.applyProviderModelDefaults,
       input.providers,
       input.settings,
       input.projectModelSelection,

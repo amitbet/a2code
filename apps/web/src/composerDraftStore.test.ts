@@ -1755,6 +1755,7 @@ describe("deriveEffectiveComposerModelState provider defaults", () => {
       selectedInstanceId: CODEX_INSTANCE,
       threadModelSelection: null,
       projectModelSelection: null,
+      applyProviderModelDefaults: true,
       settings: {
         ...DEFAULT_UNIFIED_SETTINGS,
         providerModelDefaults: {
@@ -1788,6 +1789,7 @@ describe("deriveEffectiveComposerModelState provider defaults", () => {
       selectedInstanceId: CODEX_INSTANCE,
       threadModelSelection: null,
       projectModelSelection: null,
+      applyProviderModelDefaults: true,
       settings: {
         ...DEFAULT_UNIFIED_SETTINGS,
         providerModelDefaults: {
@@ -1822,6 +1824,7 @@ describe("deriveEffectiveComposerModelState provider defaults", () => {
       selectedInstanceId: CODEX_INSTANCE,
       threadModelSelection: null,
       projectModelSelection: null,
+      applyProviderModelDefaults: true,
       settings: {
         ...DEFAULT_UNIFIED_SETTINGS,
         providerModelDefaults: {
@@ -1865,6 +1868,7 @@ describe("deriveEffectiveComposerModelState provider defaults", () => {
       selectedInstanceId: CODEX_SECONDARY_INSTANCE,
       threadModelSelection: null,
       projectModelSelection: null,
+      applyProviderModelDefaults: true,
       settings: {
         ...DEFAULT_UNIFIED_SETTINGS,
         providerModelDefaults: {
@@ -1893,6 +1897,7 @@ describe("deriveEffectiveComposerModelState provider defaults", () => {
       selectedInstanceId: CODEX_INSTANCE,
       threadModelSelection: createModelSelection(CODEX_INSTANCE, "gpt-5.4"),
       projectModelSelection: null,
+      applyProviderModelDefaults: false,
       settings: {
         ...DEFAULT_UNIFIED_SETTINGS,
         providerModelDefaults: {
@@ -1905,6 +1910,34 @@ describe("deriveEffectiveComposerModelState provider defaults", () => {
     });
 
     expect(state.modelOptions).toBeNull();
+  });
+
+  it("applies provider defaults to new drafts with a synthetic model selection", () => {
+    const state = deriveEffectiveComposerModelState({
+      draft: null,
+      providers,
+      selectedProvider: CODEX_DRIVER,
+      selectedInstanceId: CODEX_INSTANCE,
+      threadModelSelection: createModelSelection(CODEX_INSTANCE, "gpt-5.4"),
+      projectModelSelection: null,
+      applyProviderModelDefaults: true,
+      settings: {
+        ...DEFAULT_UNIFIED_SETTINGS,
+        providerModelDefaults: {
+          [CODEX_INSTANCE]: toSelections({
+            reasoningEffort: "high",
+            serviceTier: "default",
+          }),
+        },
+      },
+    });
+
+    expect(state.modelOptions).toEqual({
+      [CODEX_INSTANCE]: toSelections({
+        reasoningEffort: "high",
+        serviceTier: "default",
+      }),
+    });
   });
 });
 
