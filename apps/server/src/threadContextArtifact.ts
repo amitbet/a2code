@@ -4,23 +4,21 @@
  *
  * It pairs the pure {@link buildThreadTranscript} serializer with the
  * attachment store: the transcript is written to the attachments directory and
- * returned as a {@link ChatAttachment} so it can ride the normal attachment
- * pipeline (the provider adapters already inline text attachments for every
- * provider).
+ * returned with its absolute path so the provider can be told to read it on
+ * demand. Generated context deliberately does not ride the normal attachment
+ * pipeline: inlining a large preview makes agents likely to ignore the complete
+ * file and wastes context-window space.
  *
- * Current consumer: cross-provider thread forking (the source context is
- * replayed into the fork's first message). The same helper is intended to back
- * future features such as referencing one thread from another or exporting a
- * conversation, since it has no fork-specific coupling.
+ * Consumers include cross-provider thread forking and references from one
+ * thread to another. The helper has no fork-specific coupling and can also back
+ * exports or other context handoffs.
  *
  * @module threadContextArtifact
  */
 import {
-  type ChatAttachment,
   type OrchestrationLatestTurn,
   type OrchestrationMessage,
   type OrchestrationThreadActivity,
-  PROVIDER_SEND_TURN_MAX_ATTACHMENT_BYTES,
 } from "@t3tools/contracts";
 import { buildThreadTranscript } from "@t3tools/shared/threadTranscript";
 import * as Effect from "effect/Effect";
@@ -31,24 +29,12 @@ import { createAttachmentId, resolveAttachmentPath } from "./attachmentStore.ts"
 
 const TRANSCRIPT_MIME_TYPE = "text/markdown";
 
-/**
- * Truncate the transcript so the persisted artifact stays within the attachment
- * size contract. Large transcripts are rare; when they do occur the adapter's
- * own inline-preview truncation keeps the prompt bounded, but the on-disk file
- * must still satisfy {@link PROVIDER_SEND_TURN_MAX_ATTACHMENT_BYTES}.
- */
-function clampTranscriptBytes(transcript: string): Uint8Array {
-  const bytes = new TextEncoder().encode(transcript);
-  if (bytes.byteLength <= PROVIDER_SEND_TURN_MAX_ATTACHMENT_BYTES) {
-    return bytes;
-  }
-  const notice = "\n\n[Transcript truncated to fit the attachment size limit.]\n";
-  const noticeBytes = new TextEncoder().encode(notice);
-  const head = bytes.subarray(0, PROVIDER_SEND_TURN_MAX_ATTACHMENT_BYTES - noticeBytes.byteLength);
-  const combined = new Uint8Array(head.byteLength + noticeBytes.byteLength);
-  combined.set(head, 0);
-  combined.set(noticeBytes, head.byteLength);
-  return combined;
+export interface ThreadContextArtifact {
+  readonly id: string;
+  readonly name: string;
+  readonly mimeType: string;
+  readonly sizeBytes: number;
+  readonly absolutePath: string;
 }
 
 export interface CreateThreadContextArtifactInput {
@@ -76,62 +62,68 @@ export interface CreateThreadContextArtifactInput {
 
 /**
  * Build a transcript artifact for `messages`, persist it under
- * `attachmentsDir`, and return the {@link ChatAttachment} reference. Returns
- * `undefined` when a safe attachment id or path cannot be derived (the caller
- * should proceed without the artifact rather than fail the turn).
+ * `attachmentsDir`, and return its path metadata. Unlike user attachments,
+ * context artifacts are not constrained by the provider attachment-size
+ * contract because only their path is sent to the provider. Returns `undefined`
+ * when a safe artifact id or path cannot be derived (the caller should proceed
+ * without the artifact rather than fail the turn).
  */
-export const createThreadContextArtifact = (input: CreateThreadContextArtifactInput) =>
-  Effect.gen(function* () {
-    const { fileSystem, path } = input;
-    const attachmentDetailsById = new Map<string, { absolutePath: string }>();
-    for (const message of input.messages) {
-      for (const attachment of message.attachments ?? []) {
-        if (attachmentDetailsById.has(attachment.id)) {
-          continue;
-        }
-        const absolutePath = resolveAttachmentPath({
-          attachmentsDir: input.attachmentsDir,
-          attachment,
-        });
-        if (absolutePath) {
-          attachmentDetailsById.set(attachment.id, { absolutePath });
-        }
+export const createThreadContextArtifact = Effect.fn("createThreadContextArtifact")(function* (
+  input: CreateThreadContextArtifactInput,
+) {
+  const { fileSystem, path } = input;
+  const attachmentDetailsById = new Map<string, { absolutePath: string }>();
+  for (const message of input.messages) {
+    for (const attachment of message.attachments ?? []) {
+      if (attachmentDetailsById.has(attachment.id)) {
+        continue;
+      }
+      const absolutePath = resolveAttachmentPath({
+        attachmentsDir: input.attachmentsDir,
+        attachment,
+      });
+      if (absolutePath) {
+        attachmentDetailsById.set(attachment.id, { absolutePath });
       }
     }
+  }
 
-    const transcript = buildThreadTranscript(
-      {
-        messages: input.messages,
-        ...(input.activities !== undefined ? { activities: input.activities } : {}),
-        ...(input.latestTurn !== undefined ? { latestTurn: input.latestTurn } : {}),
-      },
-      {
-        ...(input.sourceTitle !== undefined ? { sourceTitle: input.sourceTitle } : {}),
-        ...(input.intro !== undefined ? { intro: input.intro } : {}),
-        ...(attachmentDetailsById.size > 0 ? { attachmentDetailsById } : {}),
-      },
-    );
-    const bytes = clampTranscriptBytes(transcript);
+  const transcript = buildThreadTranscript(
+    {
+      messages: input.messages,
+      ...(input.activities !== undefined ? { activities: input.activities } : {}),
+      ...(input.latestTurn !== undefined ? { latestTurn: input.latestTurn } : {}),
+    },
+    {
+      ...(input.sourceTitle !== undefined ? { sourceTitle: input.sourceTitle } : {}),
+      ...(input.intro !== undefined ? { intro: input.intro } : {}),
+      ...(attachmentDetailsById.size > 0 ? { attachmentDetailsById } : {}),
+      maxToolResultChars: Number.MAX_SAFE_INTEGER,
+    },
+  );
+  const bytes = new TextEncoder().encode(transcript);
 
-    const attachmentId = createAttachmentId(input.threadId);
-    if (!attachmentId) {
-      return undefined;
-    }
-    const attachment: ChatAttachment = {
-      type: "file",
-      id: attachmentId,
-      name: input.fileName,
-      mimeType: TRANSCRIPT_MIME_TYPE,
-      sizeBytes: bytes.byteLength,
-    };
-    const attachmentPath = resolveAttachmentPath({
-      attachmentsDir: input.attachmentsDir,
-      attachment,
-    });
-    if (!attachmentPath) {
-      return undefined;
-    }
-    yield* fileSystem.makeDirectory(path.dirname(attachmentPath), { recursive: true });
-    yield* fileSystem.writeFile(attachmentPath, bytes);
-    return attachment;
+  const attachmentId = createAttachmentId(input.threadId);
+  if (!attachmentId) {
+    return undefined;
+  }
+  const artifact = {
+    id: attachmentId,
+    name: input.fileName,
+    mimeType: TRANSCRIPT_MIME_TYPE,
+    sizeBytes: bytes.byteLength,
+  };
+  const attachmentPath = resolveAttachmentPath({
+    attachmentsDir: input.attachmentsDir,
+    attachment: artifact,
   });
+  if (!attachmentPath) {
+    return undefined;
+  }
+  yield* fileSystem.makeDirectory(path.dirname(attachmentPath), { recursive: true });
+  yield* fileSystem.writeFile(attachmentPath, bytes);
+  return {
+    ...artifact,
+    absolutePath: attachmentPath,
+  } satisfies ThreadContextArtifact;
+});

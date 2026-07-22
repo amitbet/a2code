@@ -207,11 +207,14 @@ the next merge; the per-feature sections below were updated to match.
     which previously started blank). The source thread's message history is
     serialized to Markdown (`buildThreadTranscript`, in `@t3tools/shared`),
     persisted into the attachment store as `forked-conversation.md`
-    (`createThreadContextArtifact`), and prepended to the fork's first message
-    `attachments`. The provider adapters already inline text attachments for
-    every provider, so the new session inherits the prior conversation with no
-    provider-specific code. A failure to build the artifact degrades to a
-    context-less fork (logged warning) rather than failing the turn.
+    (`createThreadContextArtifact`), and referenced by absolute path in the
+    fork's first provider prompt. Its contents are intentionally not inlined, so
+    the agent must inspect the complete file with its read/search tools and the
+    prompt does not spend context on a large preview. The persisted transcript
+    is not subject to the regular 10 MiB provider-attachment limit, and its tool
+    results do not use the serializer's normal per-result preview limit. A
+    failure to build the artifact degrades to a context-less fork (logged
+    warning) rather than failing the turn.
 - **`nativeFork` capability.** `ProviderAdapterCapabilities.nativeFork`
   (`provider/Services/ProviderAdapter.ts`) is the single switch. Each adapter
   declares it: Codex `true`, all others (`Claude`, `Cursor`, `Grok`,
@@ -237,9 +240,9 @@ the next merge; the per-feature sections below were updated to match.
   visible transcript is still a separate projection that is not copied by the
   fork — whether prior messages render depends on `ProviderRuntimeIngestion`
   replaying the `thread/fork` response's historical turns. The **replay** path
-  surfaces context as the attached `forked-conversation.md` rather than as
+  surfaces context through a path to `forked-conversation.md` rather than as
   rehydrated messages; making that a first-class visible chip on the fork's
-  first message (vs. a turn-level attachment) is a deferred enhancement.
+  first message is a deferred enhancement.
 - Files:
   - `packages/contracts/src/orchestration.ts` — **modified**: `ThreadForkCommand`
     (`thread.fork`: `threadId`, `sourceThreadId`, `title`, and the optional
@@ -257,7 +260,8 @@ the next merge; the per-feature sections below were updated to match.
     serializer (no I/O), shared between server and web.
   - `apps/server/src/threadContextArtifact.ts` — **fork-added**:
     `createThreadContextArtifact` writes a transcript into the attachment store
-    and returns a `ChatAttachment`.
+    without the provider attachment-size clamp and returns its absolute path
+    metadata.
   - `apps/server/src/orchestration/decider.ts` — **modified**: `thread.fork`
     case validates source exists / new absent, copies source metadata
     (`modelSelection` now `command.modelSelection ?? source.modelSelection`), and
@@ -285,8 +289,8 @@ the next merge; the per-feature sections below were updated to match.
     **modified**: on the fork's first user turn, decides native-vs-replay from
     the target instance + `nativeFork` capability; passes `forkFromThreadId` to
     `ensureSessionForThread` **only** for native forks, and for replay forks
-    builds + attaches the `forked-conversation.md` transcript artifact to the
-    first turn. Acquires `ServerConfig`/`FileSystem`/`Path` for the artifact.
+    builds `forked-conversation.md` and appends a path-only read instruction to
+    the first turn. Acquires `ServerConfig`/`FileSystem`/`Path` for the artifact.
   - `apps/server/src/provider/Layers/CodexSessionRuntime.ts` — **modified**:
     `CodexResumeCursorSchema` gains optional `fork`; `openCodexThread` adds a
     `thread/fork` branch; `CodexThreadOpenMethod`/`CodexThreadOpenResponse`
@@ -348,9 +352,11 @@ the next merge; the per-feature sections below were updated to match.
 
 - A second consumer of the thread-artifact primitive: an inline
   `@thread_ref:<id>` token in a message pulls the referenced thread's transcript
-  in as context, reusing `createThreadContextArtifact`. Works across
-  models/providers. **Copy thread ref** in the sidebar thread context menu
-  copies the token.
+  in as context, reusing `createThreadContextArtifact`. The full transcript is
+  stored on disk and only a mandatory read/search instruction plus its absolute
+  path is sent to the provider; no transcript preview is inlined. Works across
+  models/providers. **Copy thread ref** in the sidebar thread context menu copies
+  the token.
 - Files:
   - `packages/shared/src/threadReference.ts` (+ `./threadReference` export in
     `package.json`, + `threadReference.test.ts`) — **fork-added**: pure token
@@ -358,14 +364,15 @@ the next merge; the per-feature sections below were updated to match.
   - `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts` —
     **modified**: `buildSendTurnRequestForThread` parses `@thread_ref` tokens
     from the message text, resolves each thread (skips self/unknown, caps at
-    `MAX_THREAD_REFERENCES`), and appends a transcript artifact per reference.
+    `MAX_THREAD_REFERENCES`), persists a complete transcript artifact per
+    reference, and appends their path-only instructions to the provider prompt.
   - `apps/web/src/components/Sidebar.tsx` — **modified**: `Copy thread ref`
     context-menu item + `copyThreadRefToClipboard`.
   - `apps/web/src/components/composerInlineTokenPaste.ts` — **modified**:
     preserves pasted `@thread_ref:<id>` tokens as literal prompt text instead
     of converting them into generic file-mention Markdown links.
 - **Merge guard:** `ProviderCommandReactor.test.ts` has a regression test
-  ("attaches a referenced thread transcript when a message contains
+  ("stores and path-references a thread transcript when a message contains
   thread_ref:<id>") alongside the two fork tests ("uses provider-native fork
   only when the same target instance supports native forks" and "replays a fork
   transcript artifact when the fork targets a different provider"). These fail if

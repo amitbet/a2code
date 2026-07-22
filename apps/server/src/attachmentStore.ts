@@ -2,13 +2,17 @@
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 
-import type { ChatAttachment } from "@t3tools/contracts";
-
 import {
   normalizeAttachmentRelativePath,
   resolveAttachmentRelativePath,
 } from "./attachmentPaths.ts";
 import { inferAttachmentExtension } from "./imageMime.ts";
+
+export interface AttachmentPathDescriptor {
+  readonly id: string;
+  readonly name: string;
+  readonly mimeType: string;
+}
 
 const ATTACHMENT_ID_THREAD_SEGMENT_MAX_CHARS = 80;
 const ATTACHMENT_ID_THREAD_SEGMENT_PATTERN = "[a-z0-9_]+(?:-[a-z0-9_]+)*";
@@ -53,7 +57,7 @@ export function parseThreadSegmentFromAttachmentId(attachmentId: string): string
   return match[1]?.toLowerCase() ?? null;
 }
 
-export function attachmentRelativePath(attachment: ChatAttachment): string {
+export function attachmentRelativePath(attachment: AttachmentPathDescriptor): string {
   const extension = inferAttachmentExtension({
     mimeType: attachment.mimeType,
     fileName: attachment.name,
@@ -63,7 +67,7 @@ export function attachmentRelativePath(attachment: ChatAttachment): string {
 
 export function resolveAttachmentPath(input: {
   readonly attachmentsDir: string;
-  readonly attachment: ChatAttachment;
+  readonly attachment: AttachmentPathDescriptor;
 }): string | null {
   return resolveAttachmentRelativePath({
     attachmentsDir: input.attachmentsDir,

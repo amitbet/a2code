@@ -45,7 +45,10 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import { ServerConfig } from "../../config.ts";
-import { createThreadContextArtifact } from "../../threadContextArtifact.ts";
+import {
+  createThreadContextArtifact,
+  type ThreadContextArtifact,
+} from "../../threadContextArtifact.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 
@@ -96,21 +99,37 @@ const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 const DEFAULT_THREAD_TITLE = "New thread";
 
 // Cross-provider fork replay: when a fork's target provider can't natively fork
-// the source conversation, the source transcript is serialized into this
-// attachment and carried on the fork's first message.
+// the source conversation, the source transcript is serialized to disk and its
+// path is carried on the fork's first message.
 const FORK_CONTEXT_FILE_NAME = "forked-conversation.md";
 const FORK_CONTEXT_INTRO =
   "This thread was forked from another conversation (possibly on a different provider). " +
   "The Markdown below is that prior conversation's transcript — treat it as background " +
   "context for the request that follows.";
 
-// Inline `thread_ref:<id>` references attach the referenced thread's transcript.
+// Inline `thread_ref:<id>` references persist the referenced thread's transcript.
 const THREAD_REFERENCE_INTRO =
   "The user referenced another thread. The Markdown below is that thread's transcript — " +
   "treat it as background context for the request that follows.";
 // Cap how many referenced threads a single message can pull in, to bound the
-// attachment fan-out (and token cost) of one turn.
+// artifact fan-out of one turn.
 const MAX_THREAD_REFERENCES = 5;
+
+function formatThreadContextPathInstructions(
+  artifacts: ReadonlyArray<ThreadContextArtifact>,
+): string | undefined {
+  if (artifacts.length === 0) {
+    return undefined;
+  }
+  return [
+    "Complete conversation transcripts are available at the paths below.",
+    "Before answering, you must use your file-reading or search tools to inspect every listed transcript. Their contents are intentionally not inlined.",
+    ...artifacts.map(
+      (artifact) =>
+        `- ${JSON.stringify(artifact.name)} (${artifact.sizeBytes} bytes): ${JSON.stringify(artifact.absolutePath)}`,
+    ),
+  ].join("\n");
+}
 
 export function providerErrorLabel(value: string | undefined): string {
   const normalized = value?.trim();
@@ -664,12 +683,11 @@ const make = Effect.gen(function* () {
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
-    const normalizedInput = toNonEmptyProviderInput(input.messageText);
     // Cross-provider (or non-native) fork: replay the source transcript as an
-    // attached artifact so the new provider session inherits prior context.
+    // on-disk artifact so the new provider session can load prior context.
     // A failure to build it degrades to a context-less fork rather than failing
     // the turn.
-    const forkContextAttachment =
+    const forkContextArtifact =
       forkUsesReplay && forkSource !== undefined
         ? yield* createThreadContextArtifact({
             attachmentsDir: serverConfig.attachmentsDir,
@@ -698,7 +716,7 @@ const make = Effect.gen(function* () {
     const referencedThreadIds = parseThreadReferenceIds(input.messageText)
       .filter((referencedId) => referencedId !== input.threadId)
       .slice(0, MAX_THREAD_REFERENCES);
-    const referenceAttachments: ChatAttachment[] = [];
+    const referenceArtifacts: ThreadContextArtifact[] = [];
     for (const referencedId of referencedThreadIds) {
       const referenced = yield* resolveThread(ThreadId.make(referencedId));
       if (!referenced) {
@@ -725,15 +743,21 @@ const make = Effect.gen(function* () {
         ),
       );
       if (referenceArtifact !== undefined) {
-        referenceAttachments.push(referenceArtifact);
+        referenceArtifacts.push(referenceArtifact);
       }
     }
-    const baseAttachments = input.attachments ?? [];
-    const normalizedAttachments = [
-      ...(forkContextAttachment !== undefined ? [forkContextAttachment] : []),
-      ...referenceAttachments,
-      ...baseAttachments,
+    const contextArtifacts = [
+      ...(forkContextArtifact !== undefined ? [forkContextArtifact] : []),
+      ...referenceArtifacts,
     ];
+    const contextPathInstructions = formatThreadContextPathInstructions(contextArtifacts);
+    const normalizedInput = toNonEmptyProviderInput(
+      contextPathInstructions === undefined
+        ? input.messageText
+        : `${input.messageText.trim()}\n\n${contextPathInstructions}`,
+    );
+    const baseAttachments = input.attachments ?? [];
+    const normalizedAttachments = [...baseAttachments];
     const activeSession = yield* providerService
       .listSessions()
       .pipe(

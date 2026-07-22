@@ -60,7 +60,6 @@ import * as Clock from "effect/Clock";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
-import { resolveAttachmentPathById } from "../../attachmentStore.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asApprovalRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.make(value);
@@ -87,6 +86,23 @@ async function waitFor(
   };
 
   return poll();
+}
+
+function contextArtifactPathFromInput(input: string | undefined, fileName: string): string | null {
+  const prefix = `- ${JSON.stringify(fileName)} (`;
+  const line = input?.split("\n").find((candidate) => candidate.startsWith(prefix));
+  const pathSeparator = "): ";
+  const pathStart = line?.indexOf(pathSeparator);
+  if (line === undefined || pathStart === undefined || pathStart < 0) {
+    return null;
+  }
+  const encodedPath = line.slice(pathStart + pathSeparator.length);
+  try {
+    const parsed = JSON.parse(encodedPath);
+    return typeof parsed === "string" ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 describe("ProviderCommandReactor", () => {
@@ -1160,28 +1176,20 @@ describe("ProviderCommandReactor", () => {
     expect(startInput?.forkFromThreadId).toBeUndefined();
 
     const sendInput = harness.sendTurn.mock.calls[0]?.[0] as
-      | { attachments?: ReadonlyArray<{ id: string; name: string; mimeType: string }> }
+      | { input?: string; attachments?: ReadonlyArray<unknown> }
       | undefined;
-    const artifact = sendInput?.attachments?.[0];
-    expect(artifact).toMatchObject({
-      name: "forked-conversation.md",
-      mimeType: "text/markdown",
-    });
-    expect(sendInput?.attachments).toHaveLength(1);
+    expect(sendInput?.attachments).toBeUndefined();
+    expect(sendInput?.input).toContain("Their contents are intentionally not inlined.");
+    expect(sendInput?.input).not.toContain("billing reconciliation.");
 
-    const artifactPath = artifact
-      ? resolveAttachmentPathById({
-          attachmentsDir: NodePath.join(harness.stateDir, "attachments"),
-          attachmentId: artifact.id,
-        })
-      : null;
+    const artifactPath = contextArtifactPathFromInput(sendInput?.input, "forked-conversation.md");
     expect(artifactPath).toBeTruthy();
     expect(NodeFS.readFileSync(artifactPath!, "utf8")).toContain(
       "Remember the rollout risk about billing reconciliation.",
     );
   });
 
-  it("attaches a referenced thread transcript when a message contains thread_ref:<id>", async () => {
+  it("stores and path-references a thread transcript when a message contains thread_ref:<id>", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
     const attachmentContents = "account_id,total\nacct_1,42\n";
@@ -1255,19 +1263,16 @@ describe("ProviderCommandReactor", () => {
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
 
     const sendInput = harness.sendTurn.mock.calls[0]?.[0] as
-      | { attachments?: ReadonlyArray<{ id: string; name: string; mimeType: string }> }
+      | { input?: string; attachments?: ReadonlyArray<unknown> }
       | undefined;
-    const artifact = sendInput?.attachments?.find(
-      (attachment) => attachment.name === "referenced-thread-thread-1.md",
-    );
-    expect(artifact).toMatchObject({ mimeType: "text/markdown" });
+    expect(sendInput?.attachments).toBeUndefined();
+    expect(sendInput?.input).toContain("Their contents are intentionally not inlined.");
+    expect(sendInput?.input).not.toContain("Referenced billing reconciliation context.");
 
-    const artifactPath = artifact
-      ? resolveAttachmentPathById({
-          attachmentsDir: NodePath.join(harness.stateDir, "attachments"),
-          attachmentId: artifact.id,
-        })
-      : null;
+    const artifactPath = contextArtifactPathFromInput(
+      sendInput?.input,
+      "referenced-thread-thread-1.md",
+    );
     expect(artifactPath).toBeTruthy();
     const transcript = NodeFS.readFileSync(artifactPath!, "utf8");
     expect(transcript).toContain("Referenced billing reconciliation context.");
