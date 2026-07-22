@@ -9,6 +9,7 @@ import {
   createEditor,
   PASTE_COMMAND,
 } from "lexical";
+import { formatThreadReference } from "@t3tools/shared/threadReference";
 
 import { registerComposerInlineTokenPaste } from "./composerInlineTokenPaste";
 
@@ -69,5 +70,44 @@ describe("registerComposerInlineTokenPaste", () => {
     expect(editor.getEditorState().read(() => $getRoot().getTextContent())).toBe(
       "<mention:.changeset/improve-deploy-error-logging.md> ",
     );
+  });
+
+  it("preserves pasted thread references as literal prompt text", () => {
+    vi.stubGlobal("ClipboardEvent", TestClipboardEvent);
+    const editor = createEditor();
+    const threadReference = formatThreadReference("9017ec25-7cc5-4a90-8767-e6de24321fa8");
+    const plainTextFallback = vi.fn(() => {
+      const selection = $getSelection();
+      if (!$isRangeSelection(selection)) return false;
+      selection.insertText(threadReference);
+      return true;
+    });
+
+    editor.update(
+      () => {
+        const paragraph = $createParagraphNode();
+        $getRoot().append(paragraph);
+        paragraph.selectEnd();
+      },
+      { discrete: true },
+    );
+    registerComposerInlineTokenPaste(editor, {
+      createMentionNode: (path) => $createTextNode(`<mention:${path}>`),
+      getExpandedAbsoluteOffsetForPoint: () => 0,
+    });
+    editor.registerCommand(PASTE_COMMAND, plainTextFallback, COMMAND_PRIORITY_EDITOR);
+
+    const event = new TestClipboardEvent(threadReference);
+    let handled = false;
+    editor.update(
+      () => {
+        handled = editor.dispatchCommand(PASTE_COMMAND, event as ClipboardEvent);
+      },
+      { discrete: true },
+    );
+
+    expect(handled).toBe(true);
+    expect(plainTextFallback).toHaveBeenCalledOnce();
+    expect(editor.getEditorState().read(() => $getRoot().getTextContent())).toBe(threadReference);
   });
 });

@@ -361,6 +361,9 @@ the next merge; the per-feature sections below were updated to match.
     `MAX_THREAD_REFERENCES`), and appends a transcript artifact per reference.
   - `apps/web/src/components/Sidebar.tsx` — **modified**: `Copy thread ref`
     context-menu item + `copyThreadRefToClipboard`.
+  - `apps/web/src/components/composerInlineTokenPaste.ts` — **modified**:
+    preserves pasted `@thread_ref:<id>` tokens as literal prompt text instead
+    of converting them into generic file-mention Markdown links.
 - **Merge guard:** `ProviderCommandReactor.test.ts` has a regression test
   ("attaches a referenced thread transcript when a message contains
   thread_ref:<id>") alongside the two fork tests ("uses provider-native fork
@@ -368,6 +371,8 @@ the next merge; the per-feature sections below were updated to match.
   transcript artifact when the fork targets a different provider"). These fail if
   an upstream merge drops the reactor wiring. The pure serializer/token helpers
   also have unit tests in `packages/shared` (fork-added files, so merge-safe).
+  `ComposerPromptEditor.test.ts` verifies that the clipboard-to-composer path
+  keeps a thread reference literal so the server parser can still recognize it.
 
 ### Thread export (zip)
 
