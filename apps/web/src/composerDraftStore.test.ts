@@ -119,6 +119,7 @@ import {
   useComposerDraftStore,
   DraftId,
   deriveEffectiveComposerModelState,
+  shouldApplyProviderModelDefaults,
 } from "./composerDraftStore";
 import { removeLocalStorageItem, setLocalStorageItem } from "./hooks/useLocalStorage";
 import {
@@ -1938,6 +1939,42 @@ describe("deriveEffectiveComposerModelState provider defaults", () => {
         serviceTier: "default",
       }),
     });
+  });
+});
+
+describe("shouldApplyProviderModelDefaults", () => {
+  it("applies defaults to local drafts and untouched forks", () => {
+    expect(
+      shouldApplyProviderModelDefaults({
+        isServerThread: false,
+        forkedFromId: null,
+        messageCount: 0,
+      }),
+    ).toBe(true);
+    expect(
+      shouldApplyProviderModelDefaults({
+        isServerThread: true,
+        forkedFromId: ThreadId.make("source-thread"),
+        messageCount: 0,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not apply defaults to established server threads", () => {
+    expect(
+      shouldApplyProviderModelDefaults({
+        isServerThread: true,
+        forkedFromId: null,
+        messageCount: 0,
+      }),
+    ).toBe(false);
+    expect(
+      shouldApplyProviderModelDefaults({
+        isServerThread: true,
+        forkedFromId: ThreadId.make("source-thread"),
+        messageCount: 1,
+      }),
+    ).toBe(false);
   });
 });
 

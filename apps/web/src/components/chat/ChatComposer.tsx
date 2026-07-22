@@ -49,6 +49,7 @@ import {
   type ComposerImageAttachment,
   type DraftId,
   type PersistedComposerImageAttachment,
+  shouldApplyProviderModelDefaults,
   useComposerDraftStore,
   useComposerThreadDraft,
   useEffectiveComposerModelState,
@@ -803,10 +804,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     selectedInstanceId,
     threadModelSelection: activeThreadModelSelection,
     projectModelSelection: activeProjectDefaultModelSelection,
-    // Local drafts expose a synthetic thread selection so the rest of the UI
-    // has a model before promotion. It is not an existing-thread override and
-    // must not suppress the provider defaults configured for new threads.
-    applyProviderModelDefaults: !isServerThread,
+    // Local drafts expose a synthetic selection, while untouched forks are
+    // eagerly persisted with their source model. Neither is an established
+    // thread override, so configured defaults must still fill missing traits.
+    applyProviderModelDefaults: shouldApplyProviderModelDefaults({
+      isServerThread,
+      forkedFromId: activeThread?.forkedFromId,
+      messageCount: activeThread?.messages.length ?? 0,
+    }),
     settings,
   });
 

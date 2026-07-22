@@ -503,6 +503,14 @@ export interface EffectiveComposerModelState {
   modelOptions: ProviderOptionSelectionsByProvider | null;
 }
 
+export function shouldApplyProviderModelDefaults(input: {
+  isServerThread: boolean;
+  forkedFromId: ThreadId | null | undefined;
+  messageCount: number;
+}): boolean {
+  return !input.isServerThread || (input.forkedFromId != null && input.messageCount === 0);
+}
+
 interface ComposerDraftModelState {
   activeProvider: ProviderInstanceId | null;
   modelSelectionByProvider: Partial<Record<ProviderInstanceId, ModelSelection>>;
