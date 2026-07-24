@@ -3,6 +3,88 @@
 This file tracks fork-specific divergences that are likely to conflict when
 merging `upstream/main`.
 
+## 2026-07-24 upstream merge (sidebar v2 settled/snoozed, glass UI refresh, Auto runtime mode) — migration notes
+
+Merged `upstream/main` through `41a430a88`. Notable integrations:
+
+- **Migration numbering is now permanently offset from upstream.** Upstream
+  added its own migrations `33_ProjectionThreadsSettled` and
+  `34_ProjectionThreadsSnoozed`, colliding with the fork's 33–35. Because the
+  Migrator tracks the latest applied id, renumbering the _fork's_ migrations
+  would have silently skipped upstream's on existing fork DBs (already at 35).
+  So the **upstream** migrations were renumbered to `36`/`37` instead. Rule
+  going forward: fork ids 33–35 are frozen; every new upstream migration id
+  ≥ 33 must be renumbered to the fork's next free id when merging. All four
+  colliding migrations are idempotent (`PRAGMA table_info` guards), so a
+  renumber is safe to re-run.
+- **Bounded replay: upstream partially converged.** The shell subscription in
+  `ws.ts` was adopted wholesale from upstream — it now computes the replay gap
+  against `orchestrationEngine.latestSequence` and falls back to a fresh
+  snapshot when the gap exceeds `SHELL_RESUME_MAX_GAP`, which addresses the
+  same stale-cursor OOM the fork's bounded replay guarded against. The
+  **thread-detail** path still diverges: upstream reads
+  `readEvents(afterSequence, Number.MAX_SAFE_INTEGER)`; the fork keeps the
+  store's default bounded `readEvents(afterSequence)`. Upstream's new
+  `requestCompletionMarker` ("synchronized" marker) plumbing was adopted in
+  both paths.
+- **Settled/snoozed thread lifecycle (sidebar v2).** Upstream threads now carry
+  `settledOverride`/`settledAt` (required, decoding-defaulted) and
+  `snoozedUntil`/`snoozedAt` (optional) through contracts, projector, pipeline,
+  snapshot query, persistence, and client reducers — everywhere the fork adds
+  `pinnedAt`/`forkedFromId`/`queuedPrompts`, so those files will keep
+  conflicting. All were resolved additively (fork fields + upstream fields).
+- **SidebarChrome extraction.** Upstream moved the sidebar header/footer/brand
+  out of `Sidebar.tsx` into `apps/web/src/components/sidebar/SidebarChrome.tsx`
+  with a hardcoded T3 wordmark. The fork's branding was re-applied _inside the
+  new module_: `AppWordmark` (`APP_MONOGRAM`) + `APP_NAME_SUFFIX` + the
+  `Version {APP_VERSION}` tooltip, keeping upstream's stage-backdrop styling.
+  `Sidebar.tsx` no longer imports `../branding`.
+- **Add-project hook kept; upstream logic ported in.** Upstream's
+  `CommandPalette.tsx` inline add-project body gained provider-aware
+  `defaultModelSelection` (`resolveDefaultProviderModelSelection` over the
+  target environment's providers, falling back to primary providers) instead of
+  hardcoded codex. That change was ported into
+  `apps/web/src/hooks/useAddProjectFromPath.ts`; the palette keeps the thin
+  close-on-success wrapper.
+- **Composer glass shell.** Upstream rewrapped the composer in
+  `chat-composer-glass-shell`/`chat-composer-glass-host` divs inside
+  `ChatView.tsx`. The fork queue panel was re-injected inside the new
+  `attachDraftHeroComposerAnchorRef` div, immediately above `<ChatComposer>`.
+  The collapsed primary action keeps the fork's queue behavior (**Queue
+  message**, enabled while running) plus upstream's new
+  `noProviderAvailable`/`environmentUnavailable` guards.
+- **Claude SDK telemetry: fork no-ops superseded.** Upstream now handles all
+  SDK stream subtypes (`task_updated` no-op with its own comment, `api_retry`
+  as a session heartbeat, `session_state_changed` state mapping, priority-gated
+  `notification`, plus consumed UX-internal subtypes). The fork's silent no-op
+  cases and its narrower `task_updated` regression test were dropped in favor
+  of upstream's handling and its comprehensive subtype test. The old "Claude
+  SDK telemetry handling" seam below is obsolete except for future additions.
+- **Desktop state dir structure.** Adopted upstream's `configuredBaseDir`
+  handling (explicit `--home-dir`/`T3CODE_HOME` puts even dev state under
+  `userdata`), keeping the fork's `.a2code` base dir and `a2code`/`A2 Code`
+  user-data dir names. Upstream tests asserting `.t3` paths and `T3 Code`
+  display names were re-pointed at the fork values
+  (`DesktopEnvironment.test.ts`, `branding.test.ts`).
+- **Updater stays payload-only.** Upstream added a Windows silent-install
+  confirm dialog in `SidebarUpdatePill.tsx` and a platform-aware warning in
+  `getDesktopUpdateInstallConfirmationMessage`. The message function adopted
+  upstream's shape (A2 Code branding); the pill keeps the fork's single-click
+  no-confirmation apply. `DesktopUpdates.test.ts` remains the fork's
+  payload-facade version (upstream's electron-updater test rewrite was
+  discarded); its settings stub gained upstream's new `setMainWindowBounds`
+  member.
+- **Upstream test fixtures needed fork fields** (`queuedPrompts: []`,
+  `forkedFromId`/`pinnedAt` columns) in `decider.settled.test.ts`,
+  `decider.snoozed.test.ts`, `ProjectionRepositories.test.ts`; fork fixtures
+  needed upstream fields (`settledOverride`/`settledAt`, engine
+  `latestSequence`) in `ClientProjection.test.ts` and
+  `serverRuntimeStartup.test.ts`. Expect the same dance next merge.
+- **AGENTS.md policy conflict.** Upstream rewrote Task Completion Requirements
+  around CI-gated verification and `test-t3-app`/`test-t3-mobile` skills. The
+  fork keeps its own policy (local `vp check` + `vp run typecheck` + tests)
+  because the fork CI is build-only and does not gate.
+
 ## 2026-07-19 upstream merge (draft hero, attachment hardening, mobile refresh) — migration notes
 
 Merged `upstream/main` through `1735e27d9`. The fork-specific seams below were
@@ -131,8 +213,9 @@ the next merge; the per-feature sections below were updated to match.
   steer continue to do so; for idle/ready sessions the same command starts the
   next turn. This keeps the feature provider-neutral across Codex, Claude,
   Cursor, Grok, and OpenCode.
-- Merge note: migration `034_ProjectionQueuedPrompts` is fork-added. Renumber or
-  reconcile if upstream adds a migration with id `34`.
+- Merge note: migration `034_ProjectionQueuedPrompts` is fork-added. Fork ids
+  33-35 are frozen (see the 2026-07-24 merge notes): renumber **upstream's**
+  colliding migrations to the fork's next free id, never the fork's.
 - Files:
   - `packages/contracts/src/orchestration.ts` — **modified**: queued prompt
     schema on `OrchestrationThread`, prompt queue/remove/steer commands, and
@@ -318,8 +401,9 @@ the next merge; the per-feature sections below were updated to match.
   falling back to the existing sidebar thread sort. The sidebar renders a pin
   icon immediately to the left of pinned thread titles.
 - Entry point: sidebar thread context menu, **Pin thread** / **Unpin thread**.
-- Merge note: migration `035_ProjectionThreadsPinnedAt` is fork-added. Renumber
-  or reconcile if upstream adds a migration with id `35`.
+- Merge note: migration `035_ProjectionThreadsPinnedAt` is fork-added. Fork ids
+  33-35 are frozen (see the 2026-07-24 merge notes): renumber **upstream's**
+  colliding migrations to the fork's next free id, never the fork's.
 - Files:
   - `packages/contracts/src/orchestration.ts` — **modified**: optional
     `pinnedAt` on thread detail/shell schemas and thread metadata update command
@@ -781,10 +865,13 @@ build:desktop` → `vp run dist:payload:asset`, using the
 ### Claude SDK telemetry handling
 
 - File: `apps/server/src/provider/Layers/ClaudeAdapter.ts`
-- The fork currently keeps some SDK telemetry cases as silent no-ops:
-  `thinking_tokens`, `task_updated`, and `api_retry`.
-- Upstream may add adjacent cases in the same switch. Preserve the fork behavior
-  unless there is a deliberate product decision to surface those events in the
+- **Obsolete as of the 2026-07-24 merge:** upstream now handles the SDK stream
+  subtypes the fork used to no-op (`task_updated`, `api_retry`,
+  `session_state_changed`, `notification`, and several consumed UX-internal
+  subtypes), and the fork adopted that handling plus upstream's comprehensive
+  subtype test. No fork-specific cases remain in this switch.
+- Upstream may add adjacent cases in the same switch. Prefer upstream's
+  handling unless there is a deliberate product decision to diverge in the
   UI.
 
 ### Chat timeline search wiring
@@ -819,10 +906,13 @@ build:desktop` → `vp run dist:payload:asset`, using the
   `createThreadContextArtifact`/`formatThreadContextPathInstructions`. Keep
   `forked_from_id` in the full-detail queries; shell queries intentionally omit
   it.
-- Migration seam: `033_ProjectionThreadsForkedFrom` is fork-added. If upstream
-  adds its own migration `33`, renumber ours to the next free id (and update
-  `Migrations.ts`). The migration is idempotent (guards on `PRAGMA
-table_info`), so re-running after a renumber is safe.
+- Migration seam: `033_ProjectionThreadsForkedFrom` is fork-added. Fork ids
+  33-35 are frozen because existing fork DBs already recorded them (see the
+  2026-07-24 merge notes): when upstream adds a migration with id >= 33,
+  renumber **upstream's** file/registry entry to the fork's next free id
+  (upstream's 33/34 became the fork's 36/37). The fork migrations are
+  idempotent (guards on `PRAGMA table_info`), so re-running after a renumber
+  is safe.
 - Lower-level provider-native fork plumbing remains in
   `ProviderService`/`CodexSessionRuntime`, but the user-facing regular fork and
   queued-prompt Fork action deliberately do not select it. They both create a
