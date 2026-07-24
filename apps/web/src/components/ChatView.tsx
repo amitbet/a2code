@@ -5812,22 +5812,22 @@ function ChatViewContent(props: ChatViewProps) {
                                     variant="outline"
                                     disabled={prompt.pending}
                                     onClick={() => {
-                                      void onSteerQueuedPrompt(prompt.messageId);
+                                      void onForkQueuedPrompt(prompt.messageId);
                                     }}
                                   >
-                                    <SendHorizontalIcon className="size-3.5" />
-                                    Steer
+                                    <GitBranchPlusIcon className="size-3.5" />
+                                    Fork
                                   </Button>
                                   <Button
                                     size="xs"
                                     variant="outline"
                                     disabled={prompt.pending}
                                     onClick={() => {
-                                      void onForkQueuedPrompt(prompt.messageId);
+                                      void onSteerQueuedPrompt(prompt.messageId);
                                     }}
                                   >
-                                    <GitBranchPlusIcon className="size-3.5" />
-                                    Fork
+                                    <SendHorizontalIcon className="size-3.5" />
+                                    Steer
                                   </Button>
                                   <Button
                                     aria-label="Remove queued prompt"
