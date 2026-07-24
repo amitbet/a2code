@@ -146,6 +146,8 @@ describe("OrchestrationEngine", () => {
           createdAt: "2026-03-03T00:00:02.000Z",
           updatedAt: "2026-03-03T00:00:03.000Z",
           archivedAt: null,
+          settledOverride: null,
+          settledAt: null,
           deletedAt: null,
           messages: [],
           proposedPlans: [],
@@ -220,6 +222,7 @@ describe("OrchestrationEngine", () => {
     const runtime = ManagedRuntime.make(layer);
 
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
+    expect(await runtime.runPromise(engine.latestSequence)).toBe(7);
     const result = await runtime.runPromise(
       engine.dispatch({
         type: "thread.meta.update",
@@ -230,6 +233,7 @@ describe("OrchestrationEngine", () => {
     );
 
     expect(result.sequence).toBe(8);
+    expect(await runtime.runPromise(engine.latestSequence)).toBe(8);
     expect(fullSnapshotReadCount).toBe(0);
 
     await runtime.dispose();

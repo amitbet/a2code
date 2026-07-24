@@ -28,6 +28,8 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     updatedAt: "2026-02-13T00:00:00.000Z",
     archivedAt: null,
     pinnedAt: null,
+    settledOverride: null,
+    settledAt: null,
     deletedAt: null,
     latestTurn: null,
     branch: null,

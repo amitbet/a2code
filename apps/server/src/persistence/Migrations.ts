@@ -48,6 +48,8 @@ import Migration0032 from "./Migrations/032_AuthPairingProofKeyThumbprint.ts";
 import Migration0033 from "./Migrations/033_ProjectionThreadsForkedFrom.ts";
 import Migration0034 from "./Migrations/034_ProjectionQueuedPrompts.ts";
 import Migration0035 from "./Migrations/035_ProjectionThreadsPinnedAt.ts";
+import Migration0036 from "./Migrations/036_ProjectionThreadsSettled.ts";
+import Migration0037 from "./Migrations/037_ProjectionThreadsSnoozed.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -95,6 +97,8 @@ export const migrationEntries = [
   [33, "ProjectionThreadsForkedFrom", Migration0033],
   [34, "ProjectionQueuedPrompts", Migration0034],
   [35, "ProjectionThreadsPinnedAt", Migration0035],
+  [36, "ProjectionThreadsSettled", Migration0036],
+  [37, "ProjectionThreadsSnoozed", Migration0037],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
@@ -129,15 +133,11 @@ export interface RunMigrationsOptions {
 export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
 }: RunMigrationsOptions = {}) {
-  yield* Effect.log(
-    toMigrationInclusive === undefined
-      ? "Running all migrations..."
-      : `Running migrations 1 through ${toMigrationInclusive}...`,
-  );
   const executedMigrations = yield* run({ loader: makeMigrationLoader(toMigrationInclusive) });
-  yield* Effect.log("Migrations ran successfully").pipe(
-    Effect.annotateLogs({ migrations: executedMigrations.map(([id, name]) => `${id}_${name}`) }),
-  );
+  const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
+  yield* migrations.length === 0
+    ? Effect.logDebug("Database schema is current")
+    : Effect.log("Migrations ran successfully").pipe(Effect.annotateLogs({ migrations }));
   return executedMigrations;
 });
 

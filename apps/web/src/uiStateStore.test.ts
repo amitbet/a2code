@@ -2,6 +2,7 @@ import { ProjectId, ThreadId } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  clearThreadUnread,
   legacyProjectCwdPreferenceKey,
   markThreadUnread,
   markThreadVisited,
@@ -22,6 +23,7 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     projectExpandedById: {},
     projectOrder: [],
     threadLastVisitedAtById: {},
+    unreadThreadIds: {},
     threadChangedFilesExpandedById: {},
     defaultAdvertisedEndpointKey: null,
     ...overrides,
@@ -39,7 +41,7 @@ describe("uiStateStore pure functions", () => {
     expect(markThreadVisited(visited, threadId, "not-a-date")).toBe(visited);
   });
 
-  it("marks a completed thread unread using the server completion timestamp", () => {
+  it("marks a thread unread with an explicit flag that survives the visit watermark", () => {
     const threadId = ThreadId.make("thread-1");
     const initialState = makeUiState({
       threadLastVisitedAtById: {
@@ -47,10 +49,24 @@ describe("uiStateStore pure functions", () => {
       },
     });
 
-    const next = markThreadUnread(initialState, threadId, "2026-02-25T12:30:00.000Z");
+    const next = markThreadUnread(initialState, threadId);
 
-    expect(next.threadLastVisitedAtById[threadId]).toBe("2026-02-25T12:29:59.999Z");
-    expect(markThreadUnread(next, threadId, null)).toBe(next);
+    expect(next.unreadThreadIds[threadId]).toBe(true);
+    // The read watermark is left untouched: unread is a distinct signal.
+    expect(next.threadLastVisitedAtById[threadId]).toBe("2026-02-25T12:35:00.000Z");
+    // Marking an already-unread thread unread is a no-op (stable reference).
+    expect(markThreadUnread(next, threadId)).toBe(next);
+  });
+
+  it("clears the explicit unread flag when a thread is visited", () => {
+    const threadId = ThreadId.make("thread-1");
+    const unread = markThreadUnread(makeUiState(), threadId);
+
+    const cleared = clearThreadUnread(unread, threadId);
+
+    expect(cleared.unreadThreadIds[threadId]).toBeUndefined();
+    // Clearing an already-read thread is a no-op (stable reference).
+    expect(clearThreadUnread(cleared, threadId)).toBe(cleared);
   });
 
   it("resolves project expansion from logical, physical, and legacy preference keys", () => {
@@ -116,7 +132,7 @@ describe("uiStateStore pure functions", () => {
     );
   });
 
-  it("stores only collapsed changed-file turns", () => {
+  it("stores explicit changed-file expansion choices", () => {
     const threadId = ThreadId.make("thread-1");
     const collapsed = setThreadChangedFilesExpanded(makeUiState(), threadId, "turn-1", false);
 
@@ -128,7 +144,11 @@ describe("uiStateStore pure functions", () => {
     expect(
       setThreadChangedFilesExpanded(collapsed, threadId, "turn-1", true)
         .threadChangedFilesExpandedById,
-    ).toEqual({});
+    ).toEqual({
+      [threadId]: {
+        "turn-1": true,
+      },
+    });
   });
 
   it("stores the endpoint preference by stable key", () => {
@@ -154,7 +174,9 @@ describe("parsePersistedState", () => {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
         invalid: "not-a-date",
       },
+      unreadThreadIds: ["environment:thread-2", "", 42 as unknown as string],
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
+      threadChangedFilesExpansionVersion: 1,
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
           "turn-1": false,
@@ -171,13 +193,29 @@ describe("parsePersistedState", () => {
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
+      unreadThreadIds: {
+        "environment:thread-2": true,
+      },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
+      threadChangedFilesExpandedById: {
+        "environment:thread-1": {
+          "turn-1": false,
+          "turn-2": true,
+        },
+      },
+    });
+  });
+
+  it("ignores changed-file expansion values saved with legacy folder semantics", () => {
+    const parsed = parsePersistedState({
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
           "turn-1": false,
         },
       },
     });
+
+    expect(parsed.threadChangedFilesExpandedById).toEqual({});
   });
 
   it("migrates legacy CWD project preferences into local alias keys", () => {
@@ -255,6 +293,9 @@ describe("uiStateStore persistence", () => {
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
+      unreadThreadIds: {
+        "environment:thread-2": true,
+      },
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
           "turn-1": false,
@@ -277,20 +318,18 @@ describe("uiStateStore persistence", () => {
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
+      unreadThreadIds: ["environment:thread-2"],
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
+      threadChangedFilesExpansionVersion: 1,
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
           "turn-1": false,
+          "turn-2": true,
         },
       },
     });
     expect(parsePersistedState(persisted)).toEqual({
       ...state,
-      threadChangedFilesExpandedById: {
-        "environment:thread-1": {
-          "turn-1": false,
-        },
-      },
     });
   });
 

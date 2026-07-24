@@ -3,6 +3,7 @@ import { defineConfig, mergeConfig } from "vite-plus";
 
 import baseConfig from "../../vite.config.ts";
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
+import packageJson from "./package.json" with { type: "json" };
 
 const externalRuntimePackages = new Set(["@ff-labs/fff-node", "ffi-rs", "node-pty"]);
 const externalRuntimePackagePrefixes = ["@ff-labs/fff-bin-"];
@@ -34,6 +35,7 @@ export function shouldBundleCliDependency(id: string): boolean {
 }
 
 const repoEnv = loadRepoEnv();
+const cliBuildChannel = packageJson.version.includes("-nightly.") ? "nightly" : "latest";
 
 export default mergeConfig(
   baseConfig,
@@ -60,6 +62,7 @@ export default mergeConfig(
         js: "#!/usr/bin/env node\n",
       },
       define: {
+        __T3CODE_BUILD_CHANNEL__: JSON.stringify(cliBuildChannel),
         __T3CODE_BUILD_RELAY_URL__: JSON.stringify(repoEnv.T3CODE_RELAY_URL?.trim() ?? ""),
         __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
           repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() ?? "",

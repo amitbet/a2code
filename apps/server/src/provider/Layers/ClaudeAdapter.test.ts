@@ -356,6 +356,25 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("derives auto permission mode from auto runtime policy without skip flag", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "auto",
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(createInput?.options.permissionMode, "auto");
+      assert.equal(createInput?.options.allowDangerouslySkipPermissions, undefined);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("loads Claude filesystem settings sources for SDK sessions", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -498,6 +517,29 @@ describe("ClaudeAdapterLive", () => {
         modelSelection: createModelSelection(
           ProviderInstanceId.make("claudeAgent"),
           "claude-fable-5",
+          [{ id: "effort", value: "xhigh" }],
+        ),
+        runtimeMode: "full-access",
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(createInput?.options.effort, "xhigh");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("preserves xhigh effort for Claude Opus 5", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "claude-opus-5",
           [{ id: "effort", value: "xhigh" }],
         ),
         runtimeMode: "full-access",
@@ -1778,15 +1820,14 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("ignores Claude task_updated patches without surfacing a warning", () => {
+  it.effect("consumes undeclared and UX-internal system subtypes without warning rows", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
-
-      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 6).pipe(
-        Stream.runCollect,
-        Effect.forkChild,
-      );
+      const runtimeEvents: Array<ProviderRuntimeEvent> = [];
+      const runtimeEventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.sync(() => runtimeEvents.push(event)),
+      ).pipe(Effect.forkChild);
 
       yield* adapter.startSession({
         threadId: THREAD_ID,
@@ -1794,40 +1835,112 @@ describe("ClaudeAdapterLive", () => {
         runtimeMode: "full-access",
       });
 
-      // A task_updated patch carries no dedicated runtime event; it must not
-      // produce a runtime.warning the way an unmodeled subtype would.
+      // Undeclared wire-only roster snapshot + every typed UX-internal
+      // subtype and top-level type consumed silently: none may surface as
+      // unknown-subtype warnings.
+      for (const message of [
+        {
+          type: "system",
+          subtype: "background_tasks_changed",
+          tasks: [{ task_id: "t1", task_type: "local_agent", description: "Say hi" }],
+          session_id: "session",
+          uuid: "roster",
+        },
+        {
+          type: "system",
+          subtype: "task_updated",
+          task_id: "t1",
+          patch: { status: "running" },
+          session_id: "session",
+          uuid: "tu",
+        },
+        { type: "system", subtype: "commands_changed", session_id: "session", uuid: "cc" },
+        { type: "system", subtype: "model_refusal_fallback", session_id: "session", uuid: "mrf" },
+        { type: "system", subtype: "local_command_output", session_id: "session", uuid: "lco" },
+        { type: "system", subtype: "plugin_install", session_id: "session", uuid: "pi" },
+        { type: "system", subtype: "memory_recall", session_id: "session", uuid: "mr" },
+        { type: "system", subtype: "elicitation_complete", session_id: "session", uuid: "ec" },
+        { type: "prompt_suggestion", suggestion: "try this", session_id: "session", uuid: "ps" },
+        {
+          type: "system",
+          subtype: "notification",
+          key: "context",
+          text: "low priority note",
+          priority: "low",
+          session_id: "session",
+          uuid: "notif",
+        },
+      ]) {
+        harness.query.emit(message as unknown as SDKMessage);
+      }
+      // High-priority notifications DO surface as a warning row.
       harness.query.emit({
         type: "system",
-        subtype: "task_updated",
-        task_id: "task-updated-1",
-        patch: {
-          status: "paused",
-          is_backgrounded: true,
-        },
-        session_id: "sdk-session-task-updated",
-        uuid: "task-updated-event-1",
+        subtype: "notification",
+        key: "limit",
+        text: "context window nearly full",
+        priority: "high",
+        session_id: "session",
+        uuid: "notif-high",
       } as unknown as SDKMessage);
-
-      // Follow with a recognized task_progress so the bounded stream still fills.
+      // session_state_changed maps to the matching session states.
+      for (const [state, uuid] of [
+        ["running", "ssc-run"],
+        ["requires_action", "ssc-req"],
+        ["idle", "ssc-idle"],
+      ]) {
+        harness.query.emit({
+          type: "system",
+          subtype: "session_state_changed",
+          state,
+          session_id: "session",
+          uuid,
+        } as unknown as SDKMessage);
+      }
+      // api_retry maps to a session heartbeat, not a warning row.
       harness.query.emit({
         type: "system",
-        subtype: "task_progress",
-        task_id: "task-updated-1",
-        description: "Still working",
-        usage: {
-          total_tokens: 42,
-          tool_uses: 1,
-          duration_ms: 100,
-        },
-        session_id: "sdk-session-task-updated",
-        uuid: "task-updated-progress-1",
+        subtype: "api_retry",
+        attempt: 3,
+        max_retries: 10,
+        retry_delay_ms: 1000,
+        error_status: 502,
+        error: { type: "api_error" },
+        session_id: "session",
+        uuid: "retry",
       } as unknown as SDKMessage);
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
 
-      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
-      const warning = runtimeEvents.find((event) => event.type === "runtime.warning");
-      assert.equal(warning, undefined);
-      const progressEvent = runtimeEvents.find((event) => event.type === "task.progress");
-      assert.equal(progressEvent?.type, "task.progress");
+      const warnings = runtimeEvents.filter((event) => event.type === "runtime.warning");
+      // Exactly one warning: the high-priority notification. Nothing else.
+      assert.deepEqual(
+        warnings.map((event) => event.payload.message),
+        ["context window nearly full"],
+      );
+      const sessionStates = runtimeEvents
+        .filter((event) => event.type === "session.state.changed")
+        .map((event) =>
+          event.type === "session.state.changed"
+            ? `${event.payload.state}:${event.payload.reason ?? ""}`
+            : "",
+        )
+        .filter(
+          (entry) => entry.startsWith("running:session_state") || entry.includes("session_state"),
+        );
+      assert.deepEqual(sessionStates, [
+        "running:session_state:running",
+        "waiting:session_state:requires_action",
+        "ready:session_state:idle",
+      ]);
+      const heartbeat = runtimeEvents.find(
+        (event) =>
+          event.type === "session.state.changed" &&
+          typeof event.payload.reason === "string" &&
+          event.payload.reason.startsWith("api_retry:"),
+      );
+      assert.equal(heartbeat?.type, "session.state.changed");
+      runtimeEventsFiber.interruptUnsafe();
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -3286,7 +3399,7 @@ describe("ClaudeAdapterLive", () => {
         attachments: [],
       });
 
-      assert.deepEqual(harness.query.setModelCalls, ["claude-opus-4-6"]);
+      assert.deepEqual(harness.query.setModelCalls, ["claude-opus-4-6[1m]"]);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -3384,10 +3497,11 @@ describe("ClaudeAdapterLive", () => {
       yield* adapter.sendTurn({
         threadId: session.threadId,
         input: "hello again",
-        modelSelection: {
-          instanceId: ProviderInstanceId.make("claudeAgent"),
-          model: "claude-opus-4-6",
-        },
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "claude-opus-4-6",
+          [{ id: "contextWindow", value: "200k" }],
+        ),
         attachments: [],
       });
 

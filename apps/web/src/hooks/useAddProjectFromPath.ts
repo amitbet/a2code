@@ -4,7 +4,8 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { DEFAULT_MODEL, type EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
+import { useAtomValue } from "@effect/atom-react";
+import type { EnvironmentId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback } from "react";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
@@ -17,8 +18,11 @@ import {
 } from "../lib/projectPaths";
 import { getLatestThreadForProject } from "../lib/threadSort";
 import { newProjectId } from "../lib/utils";
+import { resolveDefaultProviderModelSelection } from "../providerInstances";
 import { useProjects, useThreadShells } from "../state/entities";
+import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
 import { projectEnvironment } from "../state/projects";
+import { primaryServerProvidersAtom } from "../state/server";
 import { useAtomCommand } from "../state/use-atom-command";
 import { buildThreadRouteParams } from "../threadRoutes";
 import { useNewThreadHandler } from "./useHandleNewThread";
@@ -40,6 +44,9 @@ export interface AddProjectFromPathInput {
 export function useAddProjectFromPath(): (input: AddProjectFromPathInput) => Promise<boolean> {
   const projects = useProjects();
   const threads = useThreadShells();
+  const { environments } = useEnvironments();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const providers = useAtomValue(primaryServerProvidersAtom);
   const sidebarThreadSortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
   const navigate = useNavigate();
   const handleNewThread = useNewThreadHandler();
@@ -113,6 +120,10 @@ export function useAddProjectFromPath(): (input: AddProjectFromPathInput) => Pro
       }
 
       const projectId = newProjectId();
+      const targetEnvironmentProviders =
+        environments.find((environment) => environment.environmentId === input.environmentId)
+          ?.serverConfig?.providers ??
+        (input.environmentId === primaryEnvironmentId ? providers : []);
       const createResult = await createProject({
         environmentId: input.environmentId,
         input: {
@@ -120,10 +131,10 @@ export function useAddProjectFromPath(): (input: AddProjectFromPathInput) => Pro
           title: inferProjectTitleFromPath(cwd),
           workspaceRoot: cwd,
           createWorkspaceRootIfMissing: true,
-          defaultModelSelection: {
-            instanceId: ProviderInstanceId.make("codex"),
-            model: DEFAULT_MODEL,
-          },
+          defaultModelSelection: resolveDefaultProviderModelSelection(
+            targetEnvironmentProviders,
+            null,
+          ),
         },
       });
       if (createResult._tag === "Failure") {
@@ -156,6 +167,16 @@ export function useAddProjectFromPath(): (input: AddProjectFromPathInput) => Pro
       }
       return true;
     },
-    [createProject, handleNewThread, navigate, projects, sidebarThreadSortOrder, threads],
+    [
+      createProject,
+      environments,
+      handleNewThread,
+      navigate,
+      primaryEnvironmentId,
+      projects,
+      providers,
+      sidebarThreadSortOrder,
+      threads,
+    ],
   );
 }

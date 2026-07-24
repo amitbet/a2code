@@ -52,6 +52,8 @@ function makeThread(
     ...input,
     pinnedAt: input.pinnedAt ?? null,
     queuedPrompts: input.queuedPrompts ?? [],
+    settledOverride: input.settledOverride ?? null,
+    settledAt: input.settledAt ?? null,
   };
 }
 
@@ -449,6 +451,20 @@ describe("buildThreadFeed", () => {
       type: "activity-group",
       activities: [{ status: "failure" }],
     });
+  });
+
+  it("appends active work as a normal timeline row", () => {
+    const startedAt = "2026-04-01T00:00:01.000Z";
+    const presented = deriveThreadFeedPresentation([], null, new Set(), new Set(), startedAt);
+
+    expect(presented).toEqual([
+      {
+        type: "working",
+        id: "working-indicator-row",
+        createdAt: startedAt,
+      },
+    ]);
+    expect(deriveThreadFeedPresentation(presented, null, new Set())).toEqual([]);
   });
 
   it("models work-log overflow as list rows", () => {

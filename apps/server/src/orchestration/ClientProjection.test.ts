@@ -41,6 +41,8 @@ const snapshot = {
     archivedAt: null,
     deletedAt: null,
     pinnedAt: null,
+    settledOverride: null,
+    settledAt: null,
     messages: [],
     proposedPlans: [],
     activities: [rateLimitActivity],

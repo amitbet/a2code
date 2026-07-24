@@ -78,6 +78,10 @@ export function applyThreadDetailEvent(
           updatedAt: event.payload.updatedAt,
           archivedAt: null,
           pinnedAt: null,
+          settledOverride: null,
+          settledAt: null,
+          snoozedUntil: null,
+          snoozedAt: null,
           deletedAt: null,
           messages: [],
           proposedPlans: [],
@@ -105,6 +109,50 @@ export function applyThreadDetailEvent(
       return {
         kind: "updated",
         thread: { ...thread, archivedAt: null, updatedAt: event.payload.updatedAt },
+      };
+
+    case "thread.settled":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          settledOverride: "settled",
+          settledAt: event.payload.settledAt,
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+
+    case "thread.unsettled":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          settledOverride: event.payload.reason === "user" ? "active" : null,
+          settledAt: null,
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+
+    case "thread.snoozed":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          snoozedUntil: event.payload.snoozedUntil,
+          snoozedAt: event.payload.snoozedAt,
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+
+    case "thread.unsnoozed":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          snoozedUntil: null,
+          snoozedAt: null,
+          updatedAt: event.payload.updatedAt,
+        },
       };
 
     // ── Thread metadata ─────────────────────────────────────────────

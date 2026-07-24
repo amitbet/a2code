@@ -186,6 +186,8 @@ it.effect(
                 updatedAt: "2026-07-09T09:35:59.391Z",
                 archivedAt: null,
                 pinnedAt: null,
+                settledOverride: null,
+                settledAt: null,
                 session: {
                   threadId,
                   status: "running",
@@ -207,6 +209,7 @@ it.effect(
         }),
         Effect.provideService(OrchestrationEngine.OrchestrationEngineService, {
           readEvents: () => Stream.empty,
+          latestSequence: Effect.succeed(0),
           dispatch: (command) =>
             Ref.update(dispatches, (existing) => [...existing, command]).pipe(
               Effect.as({ sequence: 1 }),
@@ -292,6 +295,7 @@ it.effect("resolveAutoBootstrapWelcomeTargets returns existing project and threa
             Effect.as({ sequence: 1 }),
           ),
         streamDomainEvents: Stream.empty,
+        latestSequence: Effect.succeed(0),
       } satisfies OrchestrationEngine.OrchestrationEngineService["Service"]),
       Effect.provide(NodeServices.layer),
     );
@@ -335,6 +339,7 @@ it.effect("resolveAutoBootstrapWelcomeTargets creates a project and thread when 
             Effect.as({ sequence: 1 }),
           ),
         streamDomainEvents: Stream.empty,
+        latestSequence: Effect.succeed(0),
       } satisfies OrchestrationEngine.OrchestrationEngineService["Service"]),
       Effect.provide(NodeServices.layer),
     );
@@ -384,6 +389,7 @@ it.effect("resolveAutoBootstrapWelcomeTargets preserves typed UUID generation fa
             Effect.as({ sequence: 1 }),
           ),
         streamDomainEvents: Stream.empty,
+        latestSequence: Effect.succeed(0),
       } satisfies OrchestrationEngine.OrchestrationEngineService["Service"]),
       Effect.provideService(Crypto.Crypto, {
         ...crypto,
