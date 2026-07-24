@@ -1198,12 +1198,12 @@ describe("ProviderCommandReactor", () => {
     );
   });
 
-  it("uses the thread-reference context pipeline for a queued-prompt fork", async () => {
-    const harness = await createHarness();
-    const now = "2026-01-01T00:00:00.000Z";
+  effectIt.effect("uses the thread-reference context pipeline for a queued-prompt fork", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createHarness());
+      const now = "2026-01-01T00:00:00.000Z";
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
+      yield* harness.engine.dispatch({
         type: "thread.turn.start",
         commandId: CommandId.make("cmd-turn-start-queued-fork-source"),
         threadId: ThreadId.make("thread-1"),
@@ -1216,14 +1216,12 @@ describe("ProviderCommandReactor", () => {
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
-      }),
-    );
-    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
-    harness.startSession.mockClear();
-    harness.sendTurn.mockClear();
+      });
+      yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+      harness.startSession.mockClear();
+      harness.sendTurn.mockClear();
 
-    await Effect.runPromise(
-      harness.engine.dispatch({
+      yield* harness.engine.dispatch({
         type: "thread.prompt.queue",
         commandId: CommandId.make("cmd-queue-prompt-for-fork"),
         threadId: ThreadId.make("thread-1"),
@@ -1236,10 +1234,8 @@ describe("ProviderCommandReactor", () => {
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
         createdAt: now,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
+      });
+      yield* harness.engine.dispatch({
         type: "thread.prompt.fork",
         commandId: CommandId.make("cmd-fork-queued-prompt"),
         threadId: ThreadId.make("thread-queued-prompt-fork"),
@@ -1247,26 +1243,26 @@ describe("ProviderCommandReactor", () => {
         messageId: asMessageId("user-message-queued-fork-target"),
         title: "Thread (fork)",
         createdAt: now,
-      }),
-    );
+      });
 
-    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
-    const sendInput = harness.sendTurn.mock.calls[0]?.[0] as
-      | { input?: string; threadId?: ThreadId }
-      | undefined;
-    expect(sendInput?.threadId).toBe(ThreadId.make("thread-queued-prompt-fork"));
-    expect(sendInput?.input).toContain("Verify the deployment configuration.");
-    expect(sendInput?.input).not.toContain("deployment region is eu-west-1.");
+      yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+      const sendInput = harness.sendTurn.mock.calls[0]?.[0] as
+        | { input?: string; threadId?: ThreadId }
+        | undefined;
+      expect(sendInput?.threadId).toBe(ThreadId.make("thread-queued-prompt-fork"));
+      expect(sendInput?.input).toContain("Verify the deployment configuration.");
+      expect(sendInput?.input).not.toContain("deployment region is eu-west-1.");
 
-    const artifactPath = contextArtifactPathFromInput(
-      sendInput?.input,
-      "referenced-thread-thread-1.md",
-    );
-    expect(artifactPath).toBeTruthy();
-    expect(NodeFS.readFileSync(artifactPath!, "utf8")).toContain(
-      "The deployment region is eu-west-1.",
-    );
-  });
+      const artifactPath = contextArtifactPathFromInput(
+        sendInput?.input,
+        "referenced-thread-thread-1.md",
+      );
+      expect(artifactPath).toBeTruthy();
+      expect(NodeFS.readFileSync(artifactPath!, "utf8")).toContain(
+        "The deployment region is eu-west-1.",
+      );
+    }),
+  );
 
   it("stores and path-references a thread transcript when a message contains thread_ref:<id>", async () => {
     const harness = await createHarness();

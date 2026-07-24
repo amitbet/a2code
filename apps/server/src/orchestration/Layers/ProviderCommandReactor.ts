@@ -638,9 +638,11 @@ const make = Effect.gen(function* () {
       thread.messages.filter((entry) => entry.role === "user").length === 1;
     const forkedFromId = thread.forkedFromId ?? undefined;
 
-    yield* ensureSessionForThread(input.threadId, input.createdAt, {
-      ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
-    });
+    yield* ensureSessionForThread(
+      input.threadId,
+      input.createdAt,
+      input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : undefined,
+    );
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
