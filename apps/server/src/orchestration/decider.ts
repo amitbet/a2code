@@ -671,6 +671,64 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.prompt.fork": {
+      const sourceThread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.sourceThreadId,
+      });
+      const prompt = sourceThread.queuedPrompts.find(
+        (entry) => entry.messageId === command.messageId,
+      );
+      if (!prompt) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Queued prompt '${command.messageId}' does not exist on thread '${command.sourceThreadId}'.`,
+        });
+      }
+      return yield* decideCommandSequence({
+        readModel,
+        commands: [
+          {
+            type: "thread.fork",
+            commandId: command.commandId,
+            threadId: command.threadId,
+            sourceThreadId: command.sourceThreadId,
+            title: command.title,
+            createdAt: command.createdAt,
+          },
+          {
+            type: "thread.prompt.remove",
+            commandId: command.commandId,
+            threadId: command.sourceThreadId,
+            messageId: command.messageId,
+            createdAt: command.createdAt,
+          },
+          {
+            type: "thread.turn.start",
+            commandId: command.commandId,
+            threadId: command.threadId,
+            message: {
+              messageId: prompt.messageId,
+              role: "user",
+              text: prompt.text,
+              attachments: [...prompt.attachments],
+            },
+            ...(prompt.modelSelection !== undefined
+              ? { modelSelection: prompt.modelSelection }
+              : {}),
+            ...(prompt.titleSeed !== undefined ? { titleSeed: prompt.titleSeed } : {}),
+            runtimeMode: prompt.runtimeMode,
+            interactionMode: prompt.interactionMode,
+            ...(prompt.sourceProposedPlan !== undefined
+              ? { sourceProposedPlan: prompt.sourceProposedPlan }
+              : {}),
+            createdAt: command.createdAt,
+          },
+        ],
+      });
+    }
+
     case "thread.turn.interrupt": {
       yield* requireThread({
         readModel,

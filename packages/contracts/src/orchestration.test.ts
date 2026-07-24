@@ -401,6 +401,28 @@ it.effect("decodes thread.fork with an optional target model selection", () =>
   }),
 );
 
+it.effect("decodes thread.prompt.fork", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationCommand({
+      type: "thread.prompt.fork",
+      commandId: "cmd-prompt-fork",
+      threadId: "thread-fork",
+      sourceThreadId: "thread-source",
+      messageId: "message-queued",
+      title: "Source thread (fork)",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    assert.strictEqual(parsed.type, "thread.prompt.fork");
+    if (parsed.type !== "thread.prompt.fork") {
+      return;
+    }
+    assert.strictEqual(parsed.threadId, "thread-fork");
+    assert.strictEqual(parsed.sourceThreadId, "thread-source");
+    assert.strictEqual(parsed.messageId, "message-queued");
+  }),
+);
+
 it.effect("decodes thread archived and unarchived events", () =>
   Effect.gen(function* () {
     const archived = yield* decodeOrchestrationEvent({

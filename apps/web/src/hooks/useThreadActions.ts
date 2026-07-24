@@ -6,6 +6,7 @@ import {
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
   EnvironmentId,
+  type MessageId,
   type ModelSelection,
   type ScopedThreadRef,
   ThreadId,
@@ -82,6 +83,9 @@ export function useThreadActions() {
     reportFailure: false,
   });
   const forkThreadMutation = useAtomCommand(threadEnvironment.fork);
+  const forkThreadPromptMutation = useAtomCommand(threadEnvironment.forkPrompt, {
+    reportFailure: false,
+  });
   const stopThreadSession = useAtomCommand(threadEnvironment.stopSession);
   const removeWorktree = useAtomCommand(vcsEnvironment.removeWorktree, {
     reportFailure: false,
@@ -423,6 +427,35 @@ export function useThreadActions() {
     [forkThreadMutation, resolveThreadTarget, router],
   );
 
+  const forkQueuedPrompt = useCallback(
+    async (target: ScopedThreadRef, messageId: MessageId) => {
+      const resolved = resolveThreadTarget(target);
+      if (!resolved) return AsyncResult.success(undefined);
+      const { thread } = resolved;
+      const forkThreadId = newThreadId();
+      const forkResult = await forkThreadPromptMutation({
+        environmentId: target.environmentId,
+        input: {
+          threadId: forkThreadId,
+          sourceThreadId: thread.id,
+          messageId,
+          title: `${thread.title} (fork)`,
+        },
+      });
+      if (forkResult._tag === "Failure") {
+        return forkResult;
+      }
+      const forkRef = scopeThreadRef(target.environmentId, forkThreadId);
+      await waitForServerThread(forkRef);
+      await router.navigate({
+        to: "/$environmentId/$threadId",
+        params: buildThreadRouteParams(forkRef),
+      });
+      return forkResult;
+    },
+    [forkThreadPromptMutation, resolveThreadTarget, router],
+  );
+
   const confirmAndDeleteThread = useCallback(
     async (target: ScopedThreadRef) => {
       const localApi = readLocalApi();
@@ -458,6 +491,7 @@ export function useThreadActions() {
       deleteThread,
       confirmAndDeleteThread,
       forkThread,
+      forkQueuedPrompt,
       setThreadPinned,
     }),
     [
@@ -465,6 +499,7 @@ export function useThreadActions() {
       confirmAndDeleteThread,
       deleteThread,
       forkThread,
+      forkQueuedPrompt,
       setThreadPinned,
       unarchiveThread,
     ],

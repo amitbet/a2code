@@ -18,14 +18,13 @@ upstream app.
   context is persisted in full and the agent receives a mandatory path-reading
   instruction instead of a large inline preview.
   - **Fork** creates a new thread in the same git environment so you can explore
-    another avenue without disturbing the original. When the fork stays on a
-    provider that can branch its own conversation natively (Codex), it does
-    that — a lossless continuation. Otherwise (and for **any cross-provider
-    fork**, e.g. Codex→Claude) it carries the source context forward as a
-    serialized on-disk transcript referenced by the fork's first message. From
-    the thread right-click menu (**Fork thread**) and the **`/fork`** composer
-    command; to switch model/provider on a fork today, pick the target in the
-    composer's model picker before sending the first message.
+    another avenue without disturbing the original. Every fork treats its source
+    as an implicit thread reference: on the fork's first message, the complete
+    settled source transcript is serialized to disk and the agent is instructed
+    to read it before answering. This is provider-neutral and uses the same
+    context path as an explicit thread reference. Available from the thread
+    right-click menu (**Fork thread**), the **`/fork`** composer command, and the
+    queued-prompt **Fork** action.
   - **Reference** pulls one thread's context into another conversation. Use the
     thread right-click **Copy thread ref** action to copy an `@thread_ref:<id>`
     token, paste it into any thread's message, and on send the server stores that

@@ -43,6 +43,7 @@ export type StartThreadTurnInput = CommandInput<"thread.turn.start">;
 export type QueueThreadPromptInput = CommandInput<"thread.prompt.queue">;
 export type RemoveThreadPromptInput = CommandInput<"thread.prompt.remove">;
 export type SteerThreadPromptInput = CommandInput<"thread.prompt.steer">;
+export type ForkThreadPromptInput = CommandInput<"thread.prompt.fork">;
 export type InterruptThreadTurnInput = CommandInput<"thread.turn.interrupt">;
 export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond">;
 export type RespondToThreadUserInputInput = CommandInput<"thread.user-input.respond">;
@@ -245,6 +246,18 @@ export const steerThreadPrompt: (input: SteerThreadPromptInput) => CommandEffect
   return yield* dispatch({
     ...input,
     type: "thread.prompt.steer",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const forkThreadPrompt: (input: ForkThreadPromptInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.forkThreadPrompt",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.prompt.fork",
     commandId: metadata.commandId,
     createdAt: metadata.createdAt,
   });

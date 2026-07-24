@@ -360,6 +360,124 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
+  it("forks a queued prompt with source context and starts it on the fork", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+    const projectId = asProjectId("project-prompt-fork");
+    const sourceThreadId = ThreadId.make("thread-prompt-fork-source");
+    const forkThreadId = ThreadId.make("thread-prompt-fork-target");
+    const messageId = asMessageId("message-prompt-fork");
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-project-prompt-fork"),
+        projectId,
+        title: "Prompt Fork Project",
+        workspaceRoot: "/tmp/project-prompt-fork",
+        defaultModelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-thread-prompt-fork-source"),
+        threadId: sourceThreadId,
+        projectId,
+        title: "Source thread",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "full-access",
+        branch: "feature/prompt-fork",
+        worktreePath: "/tmp/project-prompt-fork-worktree",
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "thread.prompt.queue",
+        commandId: CommandId.make("cmd-prompt-fork-queue"),
+        threadId: sourceThreadId,
+        message: {
+          messageId,
+          role: "user",
+          text: "Investigate this in parallel.",
+          attachments: [
+            {
+              type: "file",
+              id: "attachment-prompt-fork",
+              name: "context.txt",
+              mimeType: "text/plain",
+              sizeBytes: 42,
+            },
+          ],
+        },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "full-access",
+        createdAt,
+      }),
+    );
+
+    await system.run(
+      engine.dispatch({
+        type: "thread.prompt.fork",
+        commandId: CommandId.make("cmd-prompt-fork"),
+        threadId: forkThreadId,
+        sourceThreadId,
+        messageId,
+        title: "Source thread (fork)",
+        createdAt,
+      }),
+    );
+
+    const readModel = await system.readModel();
+    const sourceThread = readModel.threads.find((thread) => thread.id === sourceThreadId);
+    const forkThread = readModel.threads.find((thread) => thread.id === forkThreadId);
+    expect(sourceThread?.queuedPrompts).toHaveLength(0);
+    expect(forkThread).toMatchObject({
+      projectId,
+      title: "Source thread (fork)",
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5-codex",
+      },
+      runtimeMode: "full-access",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      branch: "feature/prompt-fork",
+      worktreePath: "/tmp/project-prompt-fork-worktree",
+    });
+    expect(forkThread?.messages).toContainEqual(
+      expect.objectContaining({
+        id: messageId,
+        role: "user",
+        text: "Investigate this in parallel.",
+        attachments: [
+          {
+            type: "file",
+            id: "attachment-prompt-fork",
+            name: "context.txt",
+            mimeType: "text/plain",
+            sizeBytes: 42,
+          },
+        ],
+      }),
+    );
+
+    await system.dispose();
+  });
+
   it("keeps only the ten newest unarchived threads in each project", async () => {
     const system = await createOrchestrationSystem();
     const { engine } = system;

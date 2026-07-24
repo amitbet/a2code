@@ -738,6 +738,18 @@ const ThreadPromptSteerCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadPromptForkCommand = Schema.Struct({
+  type: Schema.Literal("thread.prompt.fork"),
+  commandId: CommandId,
+  // The newly-created thread id for the fork.
+  threadId: ThreadId,
+  // The running thread that owns the queued prompt and supplies fork context.
+  sourceThreadId: ThreadId,
+  messageId: MessageId,
+  title: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
+});
+
 const ClientThreadTurnStartCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.start"),
   commandId: CommandId,
@@ -814,6 +826,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadPromptQueueCommand,
   ThreadPromptRemoveCommand,
   ThreadPromptSteerCommand,
+  ThreadPromptForkCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
@@ -839,6 +852,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ClientThreadPromptQueueCommand,
   ThreadPromptRemoveCommand,
   ThreadPromptSteerCommand,
+  ThreadPromptForkCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,

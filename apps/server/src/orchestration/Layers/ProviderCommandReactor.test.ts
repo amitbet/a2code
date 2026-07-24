@@ -161,7 +161,6 @@ describe("ProviderCommandReactor", () => {
     readonly baseDir?: string;
     readonly threadModelSelection?: ModelSelection;
     readonly sessionModelSwitch?: "unsupported" | "in-session";
-    readonly nativeForkByInstance?: Readonly<Record<string, boolean>>;
     readonly requiresNewThreadForModelChange?: boolean;
   }) {
     const now = "2026-01-01T00:00:00.000Z";
@@ -323,7 +322,7 @@ describe("ProviderCommandReactor", () => {
       getCapabilities: (_provider) =>
         Effect.succeed({
           sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
-          nativeFork: input?.nativeForkByInstance?.[String(_provider)] ?? false,
+          nativeFork: false,
         }),
       getInstanceInfo: (instanceId) => {
         const raw = String(instanceId);
@@ -1033,19 +1032,17 @@ describe("ProviderCommandReactor", () => {
     ).toBeUndefined();
   });
 
-  it("uses provider-native fork only when the same target instance supports native forks", async () => {
-    const harness = await createHarness({
-      nativeForkByInstance: { codex: true },
-    });
+  it("replays a same-provider fork through the thread-reference context pipeline", async () => {
+    const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
-        commandId: CommandId.make("cmd-turn-start-native-source"),
+        commandId: CommandId.make("cmd-turn-start-same-provider-source"),
         threadId: ThreadId.make("thread-1"),
         message: {
-          messageId: asMessageId("user-message-native-source"),
+          messageId: asMessageId("user-message-same-provider-source"),
           role: "user",
           text: "Remember the source-thread deployment context.",
           attachments: [],
@@ -1062,8 +1059,8 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.fork",
-        commandId: CommandId.make("cmd-thread-fork-native"),
-        threadId: ThreadId.make("thread-fork-native"),
+        commandId: CommandId.make("cmd-thread-fork-same-provider"),
+        threadId: ThreadId.make("thread-fork-same-provider"),
         sourceThreadId: ThreadId.make("thread-1"),
         title: "Thread (fork)",
         createdAt: now,
@@ -1073,10 +1070,10 @@ describe("ProviderCommandReactor", () => {
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.turn.start",
-        commandId: CommandId.make("cmd-turn-start-native-fork"),
-        threadId: ThreadId.make("thread-fork-native"),
+        commandId: CommandId.make("cmd-turn-start-same-provider-fork"),
+        threadId: ThreadId.make("thread-fork-same-provider"),
         message: {
-          messageId: asMessageId("user-message-native-fork"),
+          messageId: asMessageId("user-message-same-provider-fork"),
           role: "user",
           text: "Continue from there.",
           attachments: [],
@@ -1091,24 +1088,33 @@ describe("ProviderCommandReactor", () => {
 
     expect(harness.startSession).toHaveBeenCalledTimes(1);
     expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
-      threadId: ThreadId.make("thread-fork-native"),
+      threadId: ThreadId.make("thread-fork-same-provider"),
       provider: ProviderDriverKind.make("codex"),
       providerInstanceId: ProviderInstanceId.make("codex"),
-      forkFromThreadId: ThreadId.make("thread-1"),
     });
-    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
-      threadId: ThreadId.make("thread-fork-native"),
-    });
-    expect(
-      (harness.sendTurn.mock.calls[0]?.[0] as { attachments?: ReadonlyArray<unknown> } | undefined)
-        ?.attachments,
-    ).toBeUndefined();
+    expect(harness.startSession.mock.calls[0]?.[1]).not.toHaveProperty("forkFromThreadId");
+
+    const sendInput = harness.sendTurn.mock.calls[0]?.[0] as
+      | { input?: string; attachments?: ReadonlyArray<unknown>; threadId?: ThreadId }
+      | undefined;
+    expect(sendInput?.threadId).toBe(ThreadId.make("thread-fork-same-provider"));
+    expect(sendInput?.attachments).toBeUndefined();
+    expect(sendInput?.input).toContain("Their contents are intentionally not inlined.");
+    expect(sendInput?.input).not.toContain("source-thread deployment context.");
+
+    const artifactPath = contextArtifactPathFromInput(
+      sendInput?.input,
+      "referenced-thread-thread-1.md",
+    );
+    expect(artifactPath).toBeTruthy();
+    expect(NodeFS.readFileSync(artifactPath!, "utf8")).toContain(
+      "Remember the source-thread deployment context.",
+    );
   });
 
-  it("replays a fork transcript artifact when the fork targets a different provider", async () => {
+  it("uses the same thread-reference context pipeline across providers", async () => {
     const harness = await createHarness({
       threadModelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
-      nativeForkByInstance: { codex: true, claudeAgent: false },
     });
     const now = "2026-01-01T00:00:00.000Z";
 
@@ -1182,10 +1188,83 @@ describe("ProviderCommandReactor", () => {
     expect(sendInput?.input).toContain("Their contents are intentionally not inlined.");
     expect(sendInput?.input).not.toContain("billing reconciliation.");
 
-    const artifactPath = contextArtifactPathFromInput(sendInput?.input, "forked-conversation.md");
+    const artifactPath = contextArtifactPathFromInput(
+      sendInput?.input,
+      "referenced-thread-thread-1.md",
+    );
     expect(artifactPath).toBeTruthy();
     expect(NodeFS.readFileSync(artifactPath!, "utf8")).toContain(
       "Remember the rollout risk about billing reconciliation.",
+    );
+  });
+
+  it("uses the thread-reference context pipeline for a queued-prompt fork", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-queued-fork-source"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-queued-fork-source"),
+          role: "user",
+          text: "The deployment region is eu-west-1.",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    harness.startSession.mockClear();
+    harness.sendTurn.mockClear();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.prompt.queue",
+        commandId: CommandId.make("cmd-queue-prompt-for-fork"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-queued-fork-target"),
+          role: "user",
+          text: "Verify the deployment configuration.",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.prompt.fork",
+        commandId: CommandId.make("cmd-fork-queued-prompt"),
+        threadId: ThreadId.make("thread-queued-prompt-fork"),
+        sourceThreadId: ThreadId.make("thread-1"),
+        messageId: asMessageId("user-message-queued-fork-target"),
+        title: "Thread (fork)",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const sendInput = harness.sendTurn.mock.calls[0]?.[0] as
+      | { input?: string; threadId?: ThreadId }
+      | undefined;
+    expect(sendInput?.threadId).toBe(ThreadId.make("thread-queued-prompt-fork"));
+    expect(sendInput?.input).toContain("Verify the deployment configuration.");
+    expect(sendInput?.input).not.toContain("deployment region is eu-west-1.");
+
+    const artifactPath = contextArtifactPathFromInput(
+      sendInput?.input,
+      "referenced-thread-thread-1.md",
+    );
+    expect(artifactPath).toBeTruthy();
+    expect(NodeFS.readFileSync(artifactPath!, "utf8")).toContain(
+      "The deployment region is eu-west-1.",
     );
   });
 

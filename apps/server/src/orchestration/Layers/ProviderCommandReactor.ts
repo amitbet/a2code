@@ -98,16 +98,8 @@ const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 const DEFAULT_THREAD_TITLE = "New thread";
 
-// Cross-provider fork replay: when a fork's target provider can't natively fork
-// the source conversation, the source transcript is serialized to disk and its
-// path is carried on the fork's first message.
-const FORK_CONTEXT_FILE_NAME = "forked-conversation.md";
-const FORK_CONTEXT_INTRO =
-  "This thread was forked from another conversation (possibly on a different provider). " +
-  "The Markdown below is that prior conversation's transcript — treat it as background " +
-  "context for the request that follows.";
-
-// Inline `thread_ref:<id>` references persist the referenced thread's transcript.
+// Fork sources and inline `thread_ref:<id>` references share this context path:
+// persist the referenced thread's transcript, then tell the provider to read it.
 const THREAD_REFERENCE_INTRO =
   "The user referenced another thread. The Markdown below is that thread's transcript — " +
   "treat it as background context for the request that follows.";
@@ -400,10 +392,6 @@ const make = Effect.gen(function* () {
     createdAt: string,
     options?: {
       readonly modelSelection?: ModelSelection;
-      // Provider-native fork: only set for a fork whose target provider instance
-      // matches the source and declares `nativeFork`. Honored once, on the
-      // thread's first session start (ProviderService one-shots the fork cursor).
-      readonly forkFromThreadId?: ThreadId;
     },
   ) {
     const thread = yield* resolveThread(threadId);
@@ -521,11 +509,7 @@ const make = Effect.gen(function* () {
       projects: project ? [project] : [],
     });
 
-    const startProviderSession = (input?: {
-      readonly resumeCursor?: unknown;
-      readonly provider?: ProviderDriverKind;
-      readonly forkFromThreadId?: ThreadId;
-    }) =>
+    const startProviderSession = (input?: { readonly resumeCursor?: unknown }) =>
       providerService.startSession(threadId, {
         threadId,
         ...(preferredProvider ? { provider: preferredProvider } : {}),
@@ -533,9 +517,6 @@ const make = Effect.gen(function* () {
         ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
         modelSelection: desiredModelSelection,
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
-        ...(input?.forkFromThreadId !== undefined
-          ? { forkFromThreadId: input.forkFromThreadId }
-          : {}),
         runtimeMode: desiredRuntimeMode,
       });
 
@@ -632,9 +613,7 @@ const make = Effect.gen(function* () {
       return restartedSession.threadId;
     }
 
-    const startedSession = yield* startProviderSession(
-      options?.forkFromThreadId ? { forkFromThreadId: options.forkFromThreadId } : undefined,
-    );
+    const startedSession = yield* startProviderSession();
     yield* bindSessionToThread(startedSession);
     return startedSession.threadId;
   });
@@ -653,68 +632,29 @@ const make = Effect.gen(function* () {
         new Error(`Thread '${input.threadId}' was not found in read model.`),
       );
     }
-    // Fork handling only matters on the first user turn: a provider-native fork
-    // is one-shot at first session start, and the replay transcript is carried
-    // on the first message. After that the target provider owns the context.
+    // Treat a fork as an implicit reference to its source on the first user
+    // turn. After that, the target provider owns the conversation context.
     const isFirstUserMessageTurn =
       thread.messages.filter((entry) => entry.role === "user").length === 1;
     const forkedFromId = thread.forkedFromId ?? undefined;
-    const forkSource =
-      isFirstUserMessageTurn && forkedFromId !== undefined
-        ? yield* resolveThread(forkedFromId)
-        : undefined;
-    const forkTargetInstanceId =
-      input.modelSelection?.instanceId ?? thread.modelSelection.instanceId;
-    let forkUsesNative = false;
-    if (forkSource !== undefined && forkSource.modelSelection.instanceId === forkTargetInstanceId) {
-      // Same provider instance owns the source conversation: prefer a backend
-      // fork when the adapter advertises it. Otherwise fall through to replay.
-      const targetCapabilities = yield* providerService
-        .getCapabilities(forkTargetInstanceId)
-        .pipe(Effect.option);
-      forkUsesNative = Option.isSome(targetCapabilities) && targetCapabilities.value.nativeFork;
-    }
-    const forkUsesReplay = forkSource !== undefined && !forkUsesNative;
 
     yield* ensureSessionForThread(input.threadId, input.createdAt, {
       ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
-      ...(forkUsesNative && forkedFromId !== undefined ? { forkFromThreadId: forkedFromId } : {}),
     });
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
-    // Cross-provider (or non-native) fork: replay the source transcript as an
-    // on-disk artifact so the new provider session can load prior context.
-    // A failure to build it degrades to a context-less fork rather than failing
-    // the turn.
-    const forkContextArtifact =
-      forkUsesReplay && forkSource !== undefined
-        ? yield* createThreadContextArtifact({
-            attachmentsDir: serverConfig.attachmentsDir,
-            threadId: input.threadId,
-            messages: forkSource.messages,
-            activities: forkSource.activities,
-            latestTurn: forkSource.latestTurn,
-            fileName: FORK_CONTEXT_FILE_NAME,
-            sourceTitle: forkSource.title,
-            intro: FORK_CONTEXT_INTRO,
-            fileSystem,
-            path,
-          }).pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning("provider command reactor failed to build fork context artifact", {
-                threadId: input.threadId,
-                sourceThreadId: forkedFromId,
-                cause: Cause.pretty(cause),
-              }).pipe(Effect.as(undefined)),
-            ),
-          )
-        : undefined;
-    // Inline `@thread_ref:<id>` tokens pull another thread's transcript in as
-    // context, reusing the same artifact pipeline as fork replay. Self and
-    // unknown references are skipped; the count is capped per turn.
-    const referencedThreadIds = parseThreadReferenceIds(input.messageText)
-      .filter((referencedId) => referencedId !== input.threadId)
+    // Forks and explicit `@thread_ref:<id>` tokens use one reference pipeline.
+    // Put the implicit fork reference first so it survives the per-turn cap,
+    // and de-duplicate it when the prompt also references the source explicitly.
+    const referencedThreadIds = [
+      ...(isFirstUserMessageTurn && forkedFromId !== undefined ? [forkedFromId] : []),
+      ...parseThreadReferenceIds(input.messageText),
+    ]
+      .filter(
+        (referencedId, index, all) =>
+          referencedId !== input.threadId && all.indexOf(referencedId) === index,
+      )
       .slice(0, MAX_THREAD_REFERENCES);
     const referenceArtifacts: ThreadContextArtifact[] = [];
     for (const referencedId of referencedThreadIds) {
@@ -746,11 +686,7 @@ const make = Effect.gen(function* () {
         referenceArtifacts.push(referenceArtifact);
       }
     }
-    const contextArtifacts = [
-      ...(forkContextArtifact !== undefined ? [forkContextArtifact] : []),
-      ...referenceArtifacts,
-    ];
-    const contextPathInstructions = formatThreadContextPathInstructions(contextArtifacts);
+    const contextPathInstructions = formatThreadContextPathInstructions(referenceArtifacts);
     const normalizedInput = toNonEmptyProviderInput(
       contextPathInstructions === undefined
         ? input.messageText

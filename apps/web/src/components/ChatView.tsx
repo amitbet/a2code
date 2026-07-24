@@ -142,6 +142,7 @@ import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import {
   ChevronDownIcon,
+  GitBranchPlusIcon,
   PencilIcon,
   SendHorizontalIcon,
   TriangleAlertIcon,
@@ -161,6 +162,7 @@ import {
 import { newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
 import { useEnvironmentSettings } from "../hooks/useSettings";
+import { useThreadActions } from "../hooks/useThreadActions";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
 import { getTerminalFocusOwner } from "../lib/terminalFocus";
 import { resolveNewDraftStartFromOrigin } from "../lib/chatThreadActions";
@@ -1150,6 +1152,7 @@ function ChatViewContent(props: ChatViewProps) {
     reportFailure: false,
   });
   const steerThreadPrompt = useAtomCommand(threadEnvironment.steerPrompt, { reportFailure: false });
+  const { forkQueuedPrompt } = useThreadActions();
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, {
     reportFailure: false,
   });
@@ -2672,6 +2675,23 @@ function ChatViewContent(props: ChatViewProps) {
       }
     },
     [activeThreadId, environmentId, isServerThread, steerThreadPrompt, setThreadError],
+  );
+  const onForkQueuedPrompt = useCallback(
+    async (messageId: MessageId) => {
+      if (!isServerThread || activeThreadId === null) return;
+      const result = await forkQueuedPrompt(
+        scopeThreadRef(environmentId, activeThreadId),
+        messageId,
+      );
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        setThreadError(
+          activeThreadId,
+          error instanceof Error ? error.message : "Failed to fork queued prompt.",
+        );
+      }
+    },
+    [activeThreadId, environmentId, forkQueuedPrompt, isServerThread, setThreadError],
   );
 
   const focusComposer = useCallback(() => {
@@ -5797,6 +5817,17 @@ function ChatViewContent(props: ChatViewProps) {
                                   >
                                     <SendHorizontalIcon className="size-3.5" />
                                     Steer
+                                  </Button>
+                                  <Button
+                                    size="xs"
+                                    variant="outline"
+                                    disabled={prompt.pending}
+                                    onClick={() => {
+                                      void onForkQueuedPrompt(prompt.messageId);
+                                    }}
+                                  >
+                                    <GitBranchPlusIcon className="size-3.5" />
+                                    Fork
                                   </Button>
                                   <Button
                                     aria-label="Remove queued prompt"
