@@ -988,6 +988,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
         <AssistantTimelineRow row={row} />
       ) : null}
       {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
+      {row.kind === "user-input" ? <UserInputAnswerTimelineRow row={row} /> : null}
       {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
     </div>
   );
@@ -1227,6 +1228,56 @@ function ProposedPlanTimelineRow({
         cwd={ctx.markdownCwd}
         workspaceRoot={ctx.workspaceRoot}
       />
+    </div>
+  );
+}
+
+function UserInputAnswerTimelineRow({
+  row,
+}: {
+  row: Extract<TimelineRow, { kind: "user-input" }>;
+}) {
+  const { answers } = row.exchange;
+  return (
+    <div className="group flex flex-col items-end gap-1">
+      <div className="relative max-w-[80%] rounded-2xl border border-primary/30 bg-primary/8 p-3">
+        <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium text-primary">
+          <MessageCircleIcon className="h-3.5 w-3.5" />
+          <span>Answered</span>
+        </div>
+        <div className="flex flex-col gap-3">
+          {answers.map((answer, index) => (
+            <div key={`${answer.question}:${index}`} className="flex flex-col gap-1">
+              {answer.header ? (
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  {answer.header}
+                </span>
+              ) : null}
+              <span className="text-[13px] text-foreground/80">{answer.question}</span>
+              {answer.answered ? (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {answer.values.map((value) => (
+                    <span
+                      key={value}
+                      className="inline-flex items-center gap-1 rounded-md border border-primary/30 bg-primary/10 px-2 py-0.5 text-[12px] font-medium text-foreground"
+                    >
+                      <CheckIcon className="h-3 w-3 text-primary" />
+                      {value}
+                    </span>
+                  ))}
+                  {answer.custom ? (
+                    <span className="text-[10px] uppercase tracking-wide text-muted-foreground/70">
+                      custom
+                    </span>
+                  ) : null}
+                </div>
+              ) : (
+                <span className="text-[12px] italic text-muted-foreground/70">No answer</span>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -2045,12 +2096,6 @@ function buildToolCallExpandedBody(
 }
 
 function workEntryIconName(workEntry: TimelineWorkEntry): WorkEntryIconName {
-  if (
-    workEntry.sourceActivityKind === "user-input.requested" ||
-    workEntry.sourceActivityKind === "user-input.resolved"
-  ) {
-    return "message-circle";
-  }
   if (workEntry.requestKind === "command") return "terminal";
   if (workEntry.requestKind === "file-read") return "eye";
   if (workEntry.requestKind === "file-change") return "square-pen";

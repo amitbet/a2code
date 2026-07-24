@@ -13,6 +13,7 @@ import {
   derivePendingApprovals,
   derivePendingUserInputs,
   deriveTimelineEntries,
+  deriveUserInputExchanges,
   deriveWorkLogEntries,
   findLatestProposedPlan,
   findSidebarProposedPlan,
@@ -306,6 +307,181 @@ describe("derivePendingUserInputs", () => {
     ];
 
     expect(derivePendingUserInputs(activities)).toEqual([]);
+  });
+});
+
+describe("deriveUserInputExchanges", () => {
+  it("pairs resolved answers with the originating questions", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "user-input-req",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "user-input.requested",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          requestId: "req-1",
+          questions: [
+            {
+              id: "Which library should we use?",
+              header: "Library",
+              question: "Which library should we use?",
+              options: [
+                { label: "date-fns", description: "Lightweight" },
+                { label: "luxon", description: "Full featured" },
+              ],
+              multiSelect: false,
+            },
+            {
+              id: "Which features?",
+              header: "Features",
+              question: "Which features?",
+              options: [
+                { label: "parsing", description: "Parse" },
+                { label: "formatting", description: "Format" },
+              ],
+              multiSelect: true,
+            },
+          ],
+        },
+      }),
+      makeActivity({
+        id: "user-input-res",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "user-input.resolved",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          requestId: "req-1",
+          answers: {
+            "Which library should we use?": "date-fns",
+            "Which features?": ["parsing", "formatting"],
+          },
+        },
+      }),
+    ];
+
+    expect(deriveUserInputExchanges(activities)).toEqual([
+      {
+        id: "user-input-res",
+        requestId: "req-1",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        turnId: "turn-1",
+        answers: [
+          {
+            header: "Library",
+            question: "Which library should we use?",
+            values: ["date-fns"],
+            custom: false,
+            answered: true,
+          },
+          {
+            header: "Features",
+            question: "Which features?",
+            values: ["parsing", "formatting"],
+            custom: false,
+            answered: true,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("flags free-text answers as custom and marks aborted requests unanswered", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "user-input-req",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "user-input.requested",
+        tone: "info",
+        payload: {
+          requestId: "req-1",
+          questions: [
+            {
+              id: "Pick a color",
+              header: "Color",
+              question: "Pick a color",
+              options: [{ label: "red", description: "Red" }],
+              multiSelect: false,
+            },
+          ],
+        },
+      }),
+      makeActivity({
+        id: "user-input-res",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "user-input.resolved",
+        tone: "info",
+        payload: {
+          requestId: "req-1",
+          answers: { "Pick a color": "chartreuse" },
+        },
+      }),
+    ];
+
+    const [exchange] = deriveUserInputExchanges(activities);
+    expect(exchange?.answers).toEqual([
+      {
+        header: "Color",
+        question: "Pick a color",
+        values: ["chartreuse"],
+        custom: true,
+        answered: true,
+      },
+    ]);
+
+    const aborted = deriveUserInputExchanges([
+      activities[0]!,
+      makeActivity({
+        id: "user-input-res-empty",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "user-input.resolved",
+        tone: "info",
+        payload: { requestId: "req-1", answers: {} },
+      }),
+    ]);
+    expect(aborted[0]?.answers).toEqual([
+      {
+        header: "Color",
+        question: "Pick a color",
+        values: [],
+        custom: false,
+        answered: false,
+      },
+    ]);
+  });
+
+  it("falls back to answer keys when the questions are unknown", () => {
+    const exchanges = deriveUserInputExchanges([
+      makeActivity({
+        id: "user-input-res",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "user-input.resolved",
+        tone: "info",
+        payload: {
+          requestId: "req-orphan",
+          answers: { "Untracked question": "some answer" },
+        },
+      }),
+    ]);
+
+    expect(exchanges).toEqual([
+      {
+        id: "user-input-res",
+        requestId: "req-orphan",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        turnId: null,
+        answers: [
+          {
+            header: null,
+            question: "Untracked question",
+            values: ["some answer"],
+            custom: true,
+            answered: true,
+          },
+        ],
+      },
+    ]);
   });
 });
 

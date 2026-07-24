@@ -50,6 +50,15 @@ export function getRowSearchText(row: MessagesTimelineRow): string {
       }
       return parts.join("\n");
     }
+    case "user-input": {
+      const parts: string[] = [];
+      for (const answer of row.exchange.answers) {
+        if (answer.header) parts.push(answer.header);
+        parts.push(answer.question);
+        if (answer.values.length) parts.push(answer.values.join(" "));
+      }
+      return parts.join("\n");
+    }
     case "work-toggle":
       return "";
     case "working":

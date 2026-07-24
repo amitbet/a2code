@@ -137,7 +137,36 @@ export type TimelineEntry =
       kind: "work";
       createdAt: string;
       entry: WorkLogEntry;
+    }
+  | {
+      id: string;
+      kind: "user-input";
+      createdAt: string;
+      exchange: UserInputExchange;
     };
+
+/** A single question paired with the answer the user submitted for it. */
+export interface UserInputExchangeAnswer {
+  /** Short question header (e.g. "Auth method"), when the original question is known. */
+  header: string | null;
+  /** Full question text. Falls back to the answer key when the question is unknown. */
+  question: string;
+  /** Selected option label(s) or free-text answer, normalized to a list. */
+  values: ReadonlyArray<string>;
+  /** True when the answer was free-text rather than one of the offered options. */
+  custom: boolean;
+  /** False when no answer was submitted (e.g. the request was aborted). */
+  answered: boolean;
+}
+
+/** A resolved AskUserQuestion interaction: the questions plus the user's answers. */
+export interface UserInputExchange {
+  id: string;
+  requestId: string;
+  createdAt: string;
+  turnId: TurnId | null;
+  answers: ReadonlyArray<UserInputExchangeAnswer>;
+}
 
 export function workLogEntryIsToolLike(entry: WorkLogEntry): boolean {
   if (entry.tone === "tool" || entry.tone === "thinking" || entry.tone === "error") {
@@ -507,6 +536,114 @@ export function derivePendingUserInputs(
   );
 }
 
+function normalizeUserInputAnswerValues(value: unknown): string[] {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? [trimmed] : [];
+  }
+  if (Array.isArray(value)) {
+    const normalized: string[] = [];
+    for (const entry of value) {
+      if (typeof entry !== "string") continue;
+      const trimmed = entry.trim();
+      if (trimmed.length > 0) normalized.push(trimmed);
+    }
+    return normalized;
+  }
+  return [];
+}
+
+function buildUserInputExchangeAnswers(
+  questions: ReadonlyArray<UserInputQuestion> | undefined,
+  answers: Record<string, unknown>,
+): UserInputExchangeAnswer[] {
+  const toAnswer = (
+    questionText: string,
+    question: UserInputQuestion | undefined,
+    rawValue: unknown,
+  ): UserInputExchangeAnswer => {
+    const values = normalizeUserInputAnswerValues(rawValue);
+    const optionLabels = question?.options.map((option) => option.label) ?? [];
+    return {
+      header: question?.header ?? null,
+      question: question?.question || questionText,
+      values,
+      custom: values.some((value) => !optionLabels.includes(value)),
+      answered: values.length > 0,
+    };
+  };
+
+  // Prefer the original question order when the questions are known; otherwise
+  // fall back to whatever keys the answers payload provides.
+  if (questions && questions.length > 0) {
+    const seen = new Set<string>();
+    const paired = questions.map((question) => {
+      seen.add(question.id);
+      return toAnswer(question.question, question, answers[question.id]);
+    });
+    const extra = Object.keys(answers)
+      .filter((key) => !seen.has(key))
+      .map((key) => toAnswer(key, undefined, answers[key]));
+    return [...paired, ...extra];
+  }
+
+  return Object.keys(answers).map((key) => toAnswer(key, undefined, answers[key]));
+}
+
+/**
+ * Pair resolved AskUserQuestion interactions with their originating questions so
+ * the timeline can render the user's answers as a distinct message.
+ */
+export function deriveUserInputExchanges(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): UserInputExchange[] {
+  const questionsByRequestId = new Map<string, ReadonlyArray<UserInputQuestion>>();
+  const exchanges: UserInputExchange[] = [];
+  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+
+  for (const activity of ordered) {
+    const payload =
+      activity.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : null;
+    const requestId = payload && typeof payload.requestId === "string" ? payload.requestId : null;
+    if (!requestId) {
+      continue;
+    }
+
+    if (activity.kind === "user-input.requested") {
+      const questions = parseUserInputQuestions(payload);
+      if (questions) {
+        questionsByRequestId.set(requestId, questions);
+      }
+      continue;
+    }
+
+    if (activity.kind === "user-input.resolved") {
+      const rawAnswers =
+        payload && payload.answers && typeof payload.answers === "object"
+          ? (payload.answers as Record<string, unknown>)
+          : {};
+      const answers = buildUserInputExchangeAnswers(
+        questionsByRequestId.get(requestId),
+        rawAnswers,
+      );
+      if (answers.length === 0) {
+        continue;
+      }
+      exchanges.push({
+        id: activity.id,
+        requestId,
+        createdAt: activity.createdAt,
+        turnId: activity.turnId ?? null,
+        answers,
+      });
+    }
+  }
+
+  return exchanges.toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
+}
+
 export function deriveActivePlanState(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   latestTurnId: TurnId | undefined,
@@ -634,6 +771,9 @@ export function deriveWorkLogEntries(
     if (activity.kind === "task.started") continue;
     if (activity.kind === "context-window.updated") continue;
     if (activity.kind === "account.rate-limits.updated") continue;
+    // Rendered as a distinct answer message (see deriveUserInputExchanges).
+    if (activity.kind === "user-input.requested") continue;
+    if (activity.kind === "user-input.resolved") continue;
     if (activity.summary === "Checkpoint captured") continue;
     if (isPlanBoundaryToolActivity(activity)) continue;
     entries.push(toDerivedWorkLogEntry(activity));
@@ -1342,6 +1482,7 @@ export function deriveTimelineEntries(
   messages: ReadonlyArray<ChatMessage>,
   proposedPlans: ReadonlyArray<ProposedPlan>,
   workEntries: ReadonlyArray<WorkLogEntry>,
+  userInputExchanges: ReadonlyArray<UserInputExchange> = [],
 ): TimelineEntry[] {
   const messageRows: TimelineEntry[] = messages.map((message) => ({
     id: message.id,
@@ -1361,7 +1502,13 @@ export function deriveTimelineEntries(
     createdAt: entry.createdAt,
     entry,
   }));
-  return [...messageRows, ...proposedPlanRows, ...workRows].toSorted((a, b) =>
+  const userInputRows: TimelineEntry[] = userInputExchanges.map((exchange) => ({
+    id: exchange.id,
+    kind: "user-input",
+    createdAt: exchange.createdAt,
+    exchange,
+  }));
+  return [...messageRows, ...proposedPlanRows, ...workRows, ...userInputRows].toSorted((a, b) =>
     a.createdAt.localeCompare(b.createdAt),
   );
 }

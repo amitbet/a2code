@@ -76,6 +76,7 @@ import {
 import {
   derivePendingApprovals,
   derivePendingUserInputs,
+  deriveUserInputExchanges,
   derivePhase,
   deriveTimelineEntries,
   deriveActiveWorkStartedAt,
@@ -1960,6 +1961,10 @@ function ChatViewContent(props: ChatViewProps) {
     () => derivePendingUserInputs(threadActivities),
     [threadActivities],
   );
+  const userInputExchanges = useMemo(
+    () => deriveUserInputExchanges(threadActivities),
+    [threadActivities],
+  );
   const activePendingUserInput = pendingUserInputs[0] ?? null;
   const activePendingDraftAnswers = useMemo(
     () =>
@@ -2309,8 +2314,13 @@ function ChatViewContent(props: ChatViewProps) {
   }, [attachmentPreviewHandoffByMessageId, displayServerMessages, optimisticUserMessages]);
   const timelineEntries = useMemo(
     () =>
-      deriveTimelineEntries(timelineMessages, activeThread?.proposedPlans ?? [], workLogEntries),
-    [activeThread?.proposedPlans, timelineMessages, workLogEntries],
+      deriveTimelineEntries(
+        timelineMessages,
+        activeThread?.proposedPlans ?? [],
+        workLogEntries,
+        userInputExchanges,
+      ),
+    [activeThread?.proposedPlans, timelineMessages, workLogEntries, userInputExchanges],
   );
   const [dockedDraftHeroThreadKey, setDockedDraftHeroThreadKey] = useState<string | null>(null);
   const draftHeroDockRequested =
