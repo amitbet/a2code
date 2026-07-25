@@ -263,6 +263,40 @@ the next merge; the per-feature sections below were updated to match.
   the raw row text (message bodies, proposed-plan markdown, work-log
   labels/commands/details, fold labels).
 
+### Answered user-input exchanges (questions + answers in the timeline)
+
+- Renders resolved `AskUserQuestion` interactions as their own timeline
+  messages: once the user answers a user-input request, the questions are paired
+  with the submitted answers and shown as a distinct "Answered" row (question
+  header + full text + selected option(s) / free-text value), separate from the
+  agent work log. Landed in commit `f3ef1bec8`.
+- Files (all fork-added surface unless noted):
+  - `apps/web/src/session-logic.ts` — **modified**: `deriveUserInputExchanges(
+activities)` pairs `user-input.requested` questions with the matching
+    `user-input.resolved` answers by `requestId` (ordered via
+    `compareActivitiesByOrder`), plus `buildUserInputExchangeAnswers` and the
+    `UserInputExchange` / `UserInputExchangeAnswer` types and the `kind:
+"user-input"` timeline-row variant. Exchanges with zero answers (e.g.
+    aborted requests) are dropped.
+  - `apps/web/src/session-logic.test.ts` — **modified**: covers the pairing
+    logic (header/values normalization, custom free-text, unanswered requests).
+  - `apps/web/src/components/chat/MessagesTimeline.logic.ts` — **modified**:
+    classifies `user-input` rows and **excludes them from the work log** so an
+    answered exchange reads as a conversation message, not a tool step.
+  - `apps/web/src/components/chat/MessagesTimeline.tsx` — **modified**: renders
+    the row via `UserInputAnswerTimelineRow` for `row.kind === "user-input"`.
+  - `apps/web/src/components/chat/chatSearch.ts` — **modified**: includes
+    user-input row text in the in-chat find index (see "In-chat find" above).
+  - `apps/web/src/components/ChatView.tsx` — **modified**: wires it in via
+    `useMemo(() => deriveUserInputExchanges(threadActivities), …)` and feeds the
+    exchanges into the timeline rows.
+- **Merge seam:** `MessagesTimeline.tsx`, `MessagesTimeline.logic.ts`, and
+  `ChatView.tsx` are all files upstream rewrites (they conflicted in the
+  2026-07-24 merge). Survived that merge intact, but re-apply the row
+  classification, the `UserInputAnswerTimelineRow` render branch, the search
+  indexing, and the `deriveUserInputExchanges` wiring if a future merge clobbers
+  any of them. `session-logic.test.ts` is the behavioral guard.
+
 ### Thread forking (`/fork` + context menu)
 
 - Creates a new thread that inherits the source thread's provider conversation
@@ -883,6 +917,10 @@ build:desktop` → `vp run dist:payload:asset`, using the
   `rows`/`listRef` plumbing may conflict. Preserve the search wiring (see the
   "In-chat find" feature above) when resolving, re-applying it on top of any
   upstream structural refactor.
+- Same file also owns the `UserInputAnswerTimelineRow` render branch and its
+  row classification lives in `MessagesTimeline.logic.ts` (see the "Answered
+  user-input exchanges" feature above) — preserve both when resolving timeline
+  conflicts.
 
 ### Thread forking orchestration
 

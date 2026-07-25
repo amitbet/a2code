@@ -1215,6 +1215,7 @@ function ChatViewContent(props: ChatViewProps) {
     routeKind === "server" ? routeThreadRef : props.draftId;
   const serverThread = useThread(routeThreadRef);
   const markThreadVisited = useUiStateStore((store) => store.markThreadVisited);
+  const clearThreadUnread = useUiStateStore((store) => store.clearThreadUnread);
   const activeThreadLastVisitedAt = useUiStateStore(
     (store) => store.threadLastVisitedAtById[routeThreadKey],
   );
@@ -1868,17 +1869,23 @@ function ChatViewContent(props: ChatViewProps) {
 
   useEffect(() => {
     if (!serverThread?.id) return;
+    const threadKey = scopedThreadKey(scopeThreadRef(serverThread.environmentId, serverThread.id));
+    // Opening/viewing a thread clears any explicit "Mark unread" flag. This runs
+    // before the watermark guard below so re-opening a manually-unread thread
+    // clears it even when the read watermark is already current. `unreadThreadIds`
+    // is deliberately not a dependency, so marking the *currently open* thread
+    // unread does not re-run this effect and the flag survives.
+    clearThreadUnread(threadKey);
+
     const threadUpdatedAt = Date.parse(serverThread.updatedAt);
     if (Number.isNaN(threadUpdatedAt)) return;
     const lastVisitedAt = activeThreadLastVisitedAt ? Date.parse(activeThreadLastVisitedAt) : NaN;
     if (!Number.isNaN(lastVisitedAt) && lastVisitedAt >= threadUpdatedAt) return;
 
-    markThreadVisited(
-      scopedThreadKey(scopeThreadRef(serverThread.environmentId, serverThread.id)),
-      serverThread.updatedAt,
-    );
+    markThreadVisited(threadKey, serverThread.updatedAt);
   }, [
     activeThreadLastVisitedAt,
+    clearThreadUnread,
     markThreadVisited,
     serverThread?.environmentId,
     serverThread?.id,
