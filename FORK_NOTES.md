@@ -460,6 +460,32 @@ activities)` pairs `user-input.requested` questions with the matching
     dispatches through `thread.meta.update`.
   - `apps/web/src/components/Sidebar.tsx` — **modified**: context-menu actions
     and pin icon beside thread titles.
+- Mobile surface (`apps/mobile`, added 2026-07-25 — `pinnedAt` already flowed
+  through the shared shell schemas, these changes only add UI + ordering):
+  - `src/features/home/useThreadListActions.ts` — **modified**: `pin`/`unpin`
+    actions through `threadEnvironment.updateMetadata`; exports
+    `toggleThreadPinned`.
+  - `src/features/threads/thread-list-items.tsx` (v1 rows) and
+    `thread-list-v2-items.tsx` (v2 rows) — **modified**: Pin/Unpin in the
+    long-press `ControlPillMenu`, `pin.fill` indicator on pinned rows,
+    `onTogglePinThread` prop.
+  - `src/features/threads/threadListV2.ts` — **modified**:
+    `sortThreadsForListV2` floats a pinned block (latest pin first) above the
+    static creation-order list (guarded by `threadListV2.test.ts`). The v1
+    grouped Home list was already pin-aware via the shared `sortThreads`.
+  - `src/features/home/{HomeScreen,HomeRouteScreen}.tsx`,
+    `src/features/threads/ThreadNavigationSidebar.tsx` — **modified**: thread
+    the callback into every row render site.
+  - `src/components/AppSymbol.tsx` — **modified**: maps `pin`, `pin.fill`,
+    `pin.slash` SF symbols to tabler icons for Android.
+  - Caution (mobile typechecks with tsc, not tsgo): `apps/mobile`'s
+    `typecheck` script deliberately runs official `tsc --noEmit`. Running
+    `tsgo` directly on `apps/mobile` can report ~65 spurious
+    `navigation.navigate` "parameter of type 'never'" errors — tsgo's
+    react-navigation static-API inference (`RootNavigator extends
+RootStackType` in `src/Stack.tsx`) is unstable near its complexity limit
+    and flips with unrelated byte-level changes. Trust `vp run typecheck`
+    (which uses the package script); do not switch mobile to tsgo.
 
 ### Thread references (`@thread_ref:<id>`)
 

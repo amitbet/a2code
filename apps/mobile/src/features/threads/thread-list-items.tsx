@@ -406,10 +406,15 @@ export const PendingTaskListRow = memo(function PendingTaskListRow(props: {
 
 /* ─── Thread row ─────────────────────────────────────────────────────── */
 
-const THREAD_ROW_MENU_ACTIONS: MenuAction[] = [
-  { id: "archive", title: "Archive", image: "archivebox" },
-  { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
-];
+function threadRowMenuActions(pinned: boolean): MenuAction[] {
+  return [
+    pinned
+      ? { id: "unpin", title: "Unpin", image: "pin.slash" }
+      : { id: "pin", title: "Pin", image: "pin" },
+    { id: "archive", title: "Archive", image: "archivebox" },
+    { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
+  ];
+}
 
 export const ThreadListRow = memo(function ThreadListRow(props: {
   readonly variant: ThreadListVariant;
@@ -424,6 +429,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
   readonly onArchiveThread: (thread: EnvironmentThreadShell) => void;
   readonly onDeleteThread: (thread: EnvironmentThreadShell) => void;
+  readonly onTogglePinThread: (thread: EnvironmentThreadShell) => void;
   readonly onSwipeableWillOpen: (methods: SwipeableMethods) => void;
   readonly onSwipeableClose: (methods: SwipeableMethods) => void;
   readonly simultaneousSwipeGesture?: ComponentProps<
@@ -445,7 +451,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   const pressedBackgroundColor = useThemeColor("--color-subtle");
   const selectedBackgroundColor = useThemeColor("--color-user-bubble");
 
-  const { thread, onSelectThread, onArchiveThread, onDeleteThread } = props;
+  const { thread, onSelectThread, onArchiveThread, onDeleteThread, onTogglePinThread } = props;
   const status = resolveThreadStatus(thread);
   const pr = useThreadPr(thread, props.projectCwd);
   const timestamp = relativeTime(
@@ -474,13 +480,26 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
     }),
     [handleArchive, thread.title],
   );
+  const handleTogglePin = useCallback(() => onTogglePinThread(thread), [onTogglePinThread, thread]);
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
       if (nativeEvent.event === "archive") handleArchive();
       if (nativeEvent.event === "delete") handleDelete();
+      if (nativeEvent.event === "pin" || nativeEvent.event === "unpin") handleTogglePin();
     },
-    [handleArchive, handleDelete],
+    [handleArchive, handleDelete, handleTogglePin],
   );
+  const isPinned = thread.pinnedAt != null;
+  const menuActions = useMemo(() => threadRowMenuActions(isPinned), [isPinned]);
+  const pinIndicator = isPinned ? (
+    <SymbolView
+      accessibilityLabel="Pinned"
+      name="pin.fill"
+      size={11}
+      tintColor={selected ? "#ffffff" : iconSubtleColor}
+      type="monochrome"
+    />
+  ) : null;
 
   const statusPill = effectiveStatus ? (
     <View className={`${effectiveStatus.pillClassName} rounded-full px-1.5 py-0.5`}>
@@ -559,6 +578,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
                 {thread.title}
               </Text>
               <View className="flex-row items-center gap-2">
+                {pinIndicator}
                 {statusPill}
                 <Text className="text-base tabular-nums text-foreground-tertiary">{timestamp}</Text>
                 <SymbolView
@@ -611,6 +631,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
               {thread.title}
             </Text>
             <View className="flex-row items-center gap-2">
+              {pinIndicator}
               {statusPill}
               <Text
                 className={cn(
@@ -654,7 +675,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
         // ControlPillMenu injects onLongPress into the row and anchors the
         // token-styled dropdown to it; taps and swipes are untouched.
         <ControlPillMenu
-          actions={THREAD_ROW_MENU_ACTIONS}
+          actions={menuActions}
           onPressAction={handleMenuAction}
           shouldOpenOnLongPress
         >

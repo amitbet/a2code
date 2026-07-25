@@ -8,6 +8,7 @@ import { Platform, Pressable, useWindowDimensions, View } from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 
 import { AppText as Text } from "../../components/AppText";
+import { SymbolView } from "../../components/AppSymbol";
 import { ControlPillMenu } from "../../components/ControlPill";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
 import { ProviderIcon } from "../../components/ProviderIcon";
@@ -47,23 +48,41 @@ function threadTimeLabel(thread: EnvironmentThreadShell): string {
   return relativeTime(thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt);
 }
 
-// Menus stay lifecycle-focused: settle/un-settle plus delete. Archive keeps
-// its own surface (thread screen / settings) rather than crowding the row.
-const CARD_MENU_ACTIONS: MenuAction[] = [
-  { id: "settle", title: "Settle", image: "checkmark" },
-  { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
-];
+// Menus stay lifecycle-focused: pin, settle/un-settle, plus delete. Archive
+// keeps its own surface (thread screen / settings) rather than crowding the
+// row.
+function pinMenuAction(pinned: boolean): MenuAction {
+  return pinned
+    ? { id: "unpin", title: "Unpin", image: "pin.slash" }
+    : { id: "pin", title: "Pin", image: "pin" };
+}
 
-const SLIM_MENU_ACTIONS: MenuAction[] = [
-  { id: "unsettle", title: "Un-settle", image: "arrow.uturn.backward" },
-  { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
-];
+function cardMenuActions(pinned: boolean): MenuAction[] {
+  return [
+    pinMenuAction(pinned),
+    { id: "settle", title: "Settle", image: "checkmark" },
+    { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
+  ];
+}
 
-// Pre-settlement servers: no lifecycle items, archive fills the gap.
-const LEGACY_MENU_ACTIONS: MenuAction[] = [
-  { id: "archive", title: "Archive", image: "archivebox" },
-  { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
-];
+function slimMenuActions(pinned: boolean): MenuAction[] {
+  return [
+    pinMenuAction(pinned),
+    { id: "unsettle", title: "Un-settle", image: "arrow.uturn.backward" },
+    { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
+  ];
+}
+
+// Pre-settlement servers: no lifecycle items, archive fills the gap. Pin is
+// safe here — thread.meta.update long predates the fork's pinnedAt field, and
+// older servers ignore the unknown field rather than failing.
+function legacyMenuActions(pinned: boolean): MenuAction[] {
+  return [
+    pinMenuAction(pinned),
+    { id: "archive", title: "Archive", image: "archivebox" },
+    { id: "delete", title: "Delete", image: "trash", attributes: { destructive: true } },
+  ];
+}
 
 /** Rounded-row radius shared with the v1 sidebar rows. */
 const SIDEBAR_V2_ROW_RADIUS = 12;
@@ -113,6 +132,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly onSettleThread: (thread: EnvironmentThreadShell) => void;
   readonly onUnsettleThread: (thread: EnvironmentThreadShell) => void;
   readonly onArchiveThread: (thread: EnvironmentThreadShell) => void;
+  readonly onTogglePinThread: (thread: EnvironmentThreadShell) => void;
   /** False on environments whose server predates thread.settle/unsettle:
       swipe + menu fall back to Archive instead of failing on use. */
   readonly settlementSupported: boolean;
@@ -138,6 +158,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     onSettleThread,
     onUnsettleThread,
     onArchiveThread,
+    onTogglePinThread,
     onChangeRequestState,
   } = props;
 
@@ -152,6 +173,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const drawerColor = useThemeColor("--color-drawer");
   const pressedBackgroundColor = useThemeColor("--color-subtle");
   const selectedBackgroundColor = useThemeColor("--color-user-bubble");
+  const pinTintColor = useThemeColor("--color-icon-subtle");
   const sidebarPane = props.pane === "sidebar";
   const selected = props.selected === true;
 
@@ -163,14 +185,26 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const handleSettle = useCallback(() => onSettleThread(thread), [onSettleThread, thread]);
   const handleUnsettle = useCallback(() => onUnsettleThread(thread), [onUnsettleThread, thread]);
   const handleArchive = useCallback(() => onArchiveThread(thread), [onArchiveThread, thread]);
+  const handleTogglePin = useCallback(() => onTogglePinThread(thread), [onTogglePinThread, thread]);
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
       if (nativeEvent.event === "settle") handleSettle();
       if (nativeEvent.event === "unsettle") handleUnsettle();
       if (nativeEvent.event === "archive") handleArchive();
       if (nativeEvent.event === "delete") handleDelete();
+      if (nativeEvent.event === "pin" || nativeEvent.event === "unpin") handleTogglePin();
     },
-    [handleArchive, handleDelete, handleSettle, handleUnsettle],
+    [handleArchive, handleDelete, handleSettle, handleTogglePin, handleUnsettle],
+  );
+  const isPinned = thread.pinnedAt != null;
+  const menuActions = useMemo(
+    () =>
+      !props.settlementSupported
+        ? legacyMenuActions(isPinned)
+        : variant === "slim"
+          ? slimMenuActions(isPinned)
+          : cardMenuActions(isPinned),
+    [isPinned, props.settlementSupported, variant],
   );
 
   // Swipe: the v2 primary action is the lifecycle transition. Every settled
@@ -233,6 +267,14 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         >
           {props.projectTitle ?? props.project?.title ?? ""}
         </Text>
+        {isPinned ? (
+          <SymbolView
+            accessibilityLabel="Pinned"
+            name="pin.fill"
+            size={11}
+            tintColor={selected ? "#ffffff" : pinTintColor}
+          />
+        ) : null}
         <Text
           className={cn(
             "text-xs tabular-nums",
@@ -408,6 +450,14 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           >
             {thread.title}
           </Text>
+          {isPinned ? (
+            <SymbolView
+              accessibilityLabel="Pinned"
+              name="pin.fill"
+              size={11}
+              tintColor={selected ? "#ffffff" : pinTintColor}
+            />
+          ) : null}
           <Text
             className={cn(
               "text-sm tabular-nums",
@@ -445,13 +495,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       >
         {(close) => (
           <ControlPillMenu
-            actions={
-              !props.settlementSupported
-                ? LEGACY_MENU_ACTIONS
-                : canUnsettle
-                  ? SLIM_MENU_ACTIONS
-                  : CARD_MENU_ACTIONS
-            }
+            actions={menuActions}
             onPressAction={handleMenuAction}
             shouldOpenOnLongPress
           >

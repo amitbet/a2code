@@ -92,6 +92,7 @@ interface HomeScreenProps {
   /** Resolves true iff the settle was dispatched and succeeded. */
   readonly onSettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onUnsettleThread: (thread: EnvironmentThreadShell) => void;
+  readonly onTogglePinThread: (thread: EnvironmentThreadShell) => void;
   readonly onSelectPendingTask: (pendingTask: PendingNewTask) => void;
   readonly onDeletePendingTask: (pendingTask: PendingNewTask) => void;
   readonly onNewThreadInProject: (project: EnvironmentProject) => void;
@@ -582,6 +583,7 @@ export function HomeScreen(props: HomeScreenProps) {
         onSelectThread={props.onSelectThread}
         onDeleteThread={handleDeleteThread}
         onArchiveThread={props.onArchiveThread}
+        onTogglePinThread={props.onTogglePinThread}
         settlementSupported={settlementEnvironmentIds.has(item.thread.environmentId)}
         onSettleThread={handleSettleThread}
         onUnsettleThread={handleUnsettleThread}
@@ -605,6 +607,7 @@ export function HomeScreen(props: HomeScreenProps) {
       projectCwdByKey,
       props.onArchiveThread,
       props.onSelectThread,
+      props.onTogglePinThread,
       props.savedConnectionsById,
       serverConfigs,
       settlementEnvironmentIds,
@@ -673,6 +676,7 @@ export function HomeScreen(props: HomeScreenProps) {
               isLast={item.isLast}
               onArchiveThread={props.onArchiveThread}
               onDeleteThread={props.onDeleteThread}
+              onTogglePinThread={props.onTogglePinThread}
               onSelectThread={props.onSelectThread}
               onSwipeableClose={handleSwipeableClose}
               onSwipeableWillOpen={handleSwipeableWillOpen}
@@ -701,6 +705,7 @@ export function HomeScreen(props: HomeScreenProps) {
       props.onNewThreadInProject,
       props.onSelectPendingTask,
       props.onSelectThread,
+      props.onTogglePinThread,
       props.savedConnectionsById,
       updateGroupDisplay,
     ],

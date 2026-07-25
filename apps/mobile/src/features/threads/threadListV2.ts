@@ -55,18 +55,22 @@ function firstValidTimestampMs(...candidates: ReadonlyArray<string | null | unde
 }
 
 /**
- * v2 sort: static creation order, newest thread on top. Activity NEVER
- * reorders the list — a row holds its position from open until settled, so
- * the screen only moves at lifecycle transitions. Mirrors web's
- * sortThreadsForSidebarV2.
+ * v2 sort: an explicitly pinned block first (most recently pinned on top),
+ * then static creation order, newest thread on top. Within each block
+ * activity NEVER reorders the list — a row holds its position from open
+ * until settled, so the screen only moves at lifecycle transitions (or an
+ * explicit pin/unpin). The unpinned order mirrors web's
+ * sortThreadsForSidebarV2; the pinned block mirrors the pin-aware v1 sort.
  */
-export function sortThreadsForListV2<T extends { readonly id: string; readonly createdAt: string }>(
-  threads: readonly T[],
-): T[] {
+export function sortThreadsForListV2<
+  T extends { readonly id: string; readonly createdAt: string; readonly pinnedAt?: string | null },
+>(threads: readonly T[]): T[] {
   // .sort() on a copy, not .toSorted(): Hermes doesn't ship the ES2023
   // change-by-copy array methods.
   return [...threads].sort(
     (left, right) =>
+      (right.pinnedAt ? 1 : 0) - (left.pinnedAt ? 1 : 0) ||
+      firstValidTimestampMs(right.pinnedAt) - firstValidTimestampMs(left.pinnedAt) ||
       parseTimestampMs(right.createdAt) - parseTimestampMs(left.createdAt) ||
       left.id.localeCompare(right.id),
   );

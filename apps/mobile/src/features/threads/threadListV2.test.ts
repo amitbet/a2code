@@ -74,6 +74,29 @@ describe("sortThreadsForListV2", () => {
     ]);
     expect(sorted.map((thread) => thread.id)).toEqual(["newest", "middle", "oldest"]);
   });
+
+  it("floats pinned threads above unpinned, most recently pinned first", () => {
+    const sorted = sortThreadsForListV2([
+      { id: "newest", createdAt: "2026-06-01T12:00:00.000Z", pinnedAt: null },
+      {
+        id: "pinned-early",
+        createdAt: "2026-06-01T09:00:00.000Z",
+        pinnedAt: "2026-06-02T08:00:00.000Z",
+      },
+      {
+        id: "pinned-late",
+        createdAt: "2026-06-01T08:00:00.000Z",
+        pinnedAt: "2026-06-02T10:00:00.000Z",
+      },
+      { id: "middle", createdAt: "2026-06-01T10:00:00.000Z" },
+    ]);
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      "pinned-late",
+      "pinned-early",
+      "newest",
+      "middle",
+    ]);
+  });
 });
 
 describe("buildThreadListV2Items", () => {

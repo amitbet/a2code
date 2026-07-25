@@ -22,7 +22,14 @@ function environmentSupportsSettlement(environmentId: EnvironmentThreadShell["en
   );
 }
 
-type ThreadListAction = "archive" | "unarchive" | "delete" | "settle" | "unsettle";
+type ThreadListAction =
+  | "archive"
+  | "unarchive"
+  | "delete"
+  | "settle"
+  | "unsettle"
+  | "pin"
+  | "unpin";
 
 const ACTION_VERBS: Record<ThreadListAction, string> = {
   archive: "archived",
@@ -30,6 +37,8 @@ const ACTION_VERBS: Record<ThreadListAction, string> = {
   delete: "deleted",
   settle: "settled",
   unsettle: "un-settled",
+  pin: "pinned",
+  unpin: "unpinned",
 };
 
 function actionFailureMessage(action: ThreadListAction, cause: Cause.Cause<unknown>): string {
@@ -49,6 +58,8 @@ function actionFailureTitle(action: ThreadListAction): string {
   if (action === "unarchive") return "Could not unarchive thread";
   if (action === "settle") return "Could not settle thread";
   if (action === "unsettle") return "Could not un-settle thread";
+  if (action === "pin") return "Could not pin thread";
+  if (action === "unpin") return "Could not unpin thread";
   return "Could not delete thread";
 }
 
@@ -61,6 +72,9 @@ function useThreadActionExecutor(
   const deleteMutation = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
   const settleMutation = useAtomCommand(threadEnvironment.settle, { reportFailure: false });
   const unsettleMutation = useAtomCommand(threadEnvironment.unsettle, { reportFailure: false });
+  const updateMetadataMutation = useAtomCommand(threadEnvironment.updateMetadata, {
+    reportFailure: false,
+  });
   const inFlightThreadKeys = useRef(new Set<string>());
 
   const executeAction = useCallback(
@@ -106,6 +120,23 @@ function useThreadActionExecutor(
           );
           return false;
         }
+        if (action === "pin" || action === "unpin") {
+          // Pin rides thread.meta.update: the server normalizes pinnedAt to
+          // the command's occurrence time; null unpins.
+          const result = await updateMetadataMutation({
+            environmentId: thread.environmentId,
+            input: {
+              threadId: thread.id,
+              pinnedAt: action === "pin" ? new Date().toISOString() : null,
+            },
+          });
+          if (result._tag === "Failure") {
+            Alert.alert(actionFailureTitle(action), actionFailureMessage(action, result.cause));
+            return false;
+          }
+          onCompleted?.(action, thread);
+          return true;
+        }
         const result =
           action === "unsettle"
             ? // reason "user" pins the thread active: auto-settle stays
@@ -148,6 +179,7 @@ function useThreadActionExecutor(
       settleMutation,
       unarchiveMutation,
       unsettleMutation,
+      updateMetadataMutation,
     ],
   );
 
@@ -193,12 +225,19 @@ export function useThreadListActions(): {
   readonly confirmDeleteThread: (thread: EnvironmentThreadShell) => void;
   readonly settleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly unsettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
+  readonly toggleThreadPinned: (thread: EnvironmentThreadShell) => void;
 } {
   const executeAction = useThreadActionExecutor();
 
   const archiveThread = useCallback(
     (thread: EnvironmentThreadShell) => {
       void executeAction("archive", thread);
+    },
+    [executeAction],
+  );
+  const toggleThreadPinned = useCallback(
+    (thread: EnvironmentThreadShell) => {
+      void executeAction(thread.pinnedAt ? "unpin" : "pin", thread);
     },
     [executeAction],
   );
@@ -213,7 +252,7 @@ export function useThreadListActions(): {
 
   const confirmDeleteThread = useConfirmDeleteThread(executeAction);
 
-  return { archiveThread, confirmDeleteThread, settleThread, unsettleThread };
+  return { archiveThread, confirmDeleteThread, settleThread, unsettleThread, toggleThreadPinned };
 }
 
 export function useArchivedThreadListActions(
