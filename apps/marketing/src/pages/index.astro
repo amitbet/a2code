@@ -1,5 +1,6 @@
 ---
 import Layout from "../layouts/Layout.astro";
+import { ANDROID_PLAY_STORE_URL, IOS_APP_STORE_URL } from "../lib/site";
 import { tweets } from "../lib/tweets";
 
 const desktopEndorsementRows = [
@@ -64,6 +65,12 @@ const mobileEndorsementRows = [
           </svg>
           Star on GitHub
         </a>
+        <p class="hero-mobile-line">
+          Also on your phone:
+          <a href={IOS_APP_STORE_URL} target="_blank" rel="noopener noreferrer">iOS</a>
+          <span aria-hidden="true">·</span>
+          <a href={ANDROID_PLAY_STORE_URL} target="_blank" rel="noopener noreferrer">Android</a>
+        </p>
       </div>
 
       <div class="hero-preview">
@@ -547,6 +554,58 @@ const mobileEndorsementRows = [
     justify-content: center;
     flex-wrap: wrap;
     margin-bottom: 56px;
+  }
+
+  .hero-source-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--fg-muted);
+    font-size: 14px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    transition: color 0.18s ease;
+  }
+
+  .hero-source-link:hover {
+    color: var(--fg);
+  }
+
+  .hero-source-mark {
+    flex-shrink: 0;
+  }
+
+  .hero-source-arrow {
+    flex-shrink: 0;
+    opacity: 0.6;
+    transition: transform 0.18s ease, opacity 0.18s ease;
+  }
+
+  .hero-source-link:hover .hero-source-arrow {
+    transform: translate(2px, -2px);
+    opacity: 1;
+  }
+
+  .hero-mobile-line {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--fg-dim);
+    font-size: 13px;
+    letter-spacing: -0.005em;
+  }
+
+  .hero-mobile-line a {
+    color: var(--fg-muted);
+    text-decoration: underline;
+    text-decoration-color: rgba(161, 161, 170, 0.4);
+    text-underline-offset: 3px;
+    transition: color 0.18s ease, text-decoration-color 0.18s ease;
+  }
+
+  .hero-mobile-line a:hover {
+    color: var(--fg);
+    text-decoration-color: var(--fg);
   }
 
   /* Download button icons (platform-aware) */

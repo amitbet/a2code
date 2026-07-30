@@ -76,7 +76,9 @@ describe("mobile thread projection", () => {
   });
 
   it("preserves rate limit activities for desktop and web clients", () => {
-    expect(projectThreadSnapshotForClient(snapshot, "desktop")).toBe(snapshot);
+    // Deep equality, not identity: the shared entry point also runs the
+    // transport-wide payload projection, which rebuilds the snapshot object.
+    expect(projectThreadSnapshotForClient(snapshot, "desktop")).toStrictEqual(snapshot);
     expect(shouldSendThreadEventToClient(event, "desktop")).toBe(true);
   });
 });

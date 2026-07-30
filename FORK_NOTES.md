@@ -3,6 +3,130 @@
 This file tracks fork-specific divergences that are likely to conflict when
 merging `upstream/main`.
 
+## 2026-07-30 upstream merge (project file picker, thread content search, docs split) — migration notes
+
+Merged `upstream/main` through `323dc321a` (103 commits). Notable integrations:
+
+- **Migration renumbering held.** Upstream added `035_ProjectionThreadTitleRegeneration`,
+  colliding with the fork's frozen 33–35. Per the standing rule, **upstream's**
+  migration was renumbered to the fork's next free id `038` (file + `.test.ts` +
+  registry entry + the test's `toMigrationInclusive` bounds 37/38). Fork ids
+  33–35 remain frozen; upstream's settled/snoozed stay at 36/37.
+- **`RPC_REQUIRED_SCOPE` moved out of `ws.ts`.** Upstream extracted the scope map
+  into `apps/server/src/auth/RpcAuthorization.ts` as the `RPC_REQUIRED_SCOPES`
+  object (+ `requiredScopeForRpcMethod`). The fork's copy in `ws.ts` was dropped,
+  and the fork-only WS method **`serverRefreshProviderRateLimits`** (quota meter)
+  was ported into the new object. `RpcAuthorization.test.ts` asserts the key set
+  equals `WsRpcGroup.requests.keys()`, so any future fork-added WS method **must**
+  be registered there or the suite fails. (The fork's stale `replayEvents` entry
+  was dropped — that method no longer exists in contracts.)
+- **Snapshot projection is now composed in one place.** Upstream added
+  `projectThreadDetailSnapshot` (`ActivityPayloadProjection.ts`) and called it at
+  both snapshot sites, where the fork called its mobile-only
+  `projectThreadSnapshotForClient` (`ClientProjection.ts`). Rather than nest them
+  at each call site, **`projectThreadSnapshotForClient` now delegates to
+  `projectThreadDetailSnapshot` internally** and is the single entry point used by
+  `ws.ts` and `orchestration/http.ts`. Consequence: it no longer returns the input
+  by reference for desktop clients, so `ClientProjection.test.ts` asserts
+  `toStrictEqual` rather than `toBe`. Keep the composition — splitting it again is
+  how the mobile filter gets dropped.
+- **Bounded replay: fork still diverges on thread detail.** Upstream re-asserted
+  `readEvents(afterSequence, Number.MAX_SAFE_INTEGER)` in the thread-detail
+  catch-up. The fork's bounded `readEvents(afterSequence)` was kept, while
+  adopting upstream's `projectActivityEvent(event)` mapping in that stream.
+- **`effect` patch had to be re-derived.** The fork adds a hunk to the effect
+  patch that strips the eager `fast-check` import from `Schema` (`toArbitrary`
+  throws instead) — this is the fix for the **installed-mac-app launch crash**
+  (commit `5a2ae9f79`). Upstream bumped effect `beta.78 → beta.102` and rewrote
+  its patch; git concatenated the fork hunk onto upstream's file, producing a
+  patch that failed to apply. Resolution: reset to upstream's patch, then re-derive
+  the fork hunk with `pnpm patch effect@<version>` / `pnpm patch-commit` (the edit
+  dir already has upstream's hunks applied, so the commit yields a superset).
+  **Expect to repeat this on every effect bump.** Verify afterwards that
+  `patches/effect@<version>.patch` touches `dist/Schema.js`, `dist/Schema.d.ts`,
+  and `src/Schema.ts` in addition to upstream's `McpServer`/`RpcClient` hunks.
+- **`WorkspaceSearchIndex` lazy native load kept.** Upstream widened the
+  `@ff-labs/fff-node` import to a value import of `FileFinder` plus many types and
+  added a `variant` parameter to `createFinder`. The fork's **lazy
+  `await import("@ff-labs/fff-node")`** (so a native-module load failure surfaces
+  as `WorkspaceSearchIndexCreateFailed` instead of killing the server at import
+  time) was kept, with every upstream name converted to a **type-only** import;
+  upstream's `variant` param was adopted. The fork's `enableFsRootScanning: false`
+  / `enableHomeDirScanning: false` scoping survives. `vi.spyOn(FileFinder, ...)`
+  still works through the dynamic import (same module namespace object), but stub
+  finders now need `waitForIndexReady`.
+- **`asarUnpack`: upstream converged past the fork.** Upstream restructured
+  `createBuildConfig` so mac/linux get **no** `asarUnpack` at all (smart unpack
+  handles native libs) and only Windows uses `WINDOWS_ASAR_UNPACK`. That is a
+  stronger form of the fork's macOS-EMFILE guard, so the fork's
+  `DESKTOP_ASAR_UNPACK`-based branch and its now-wrong duplicate test
+  ("unpacks the full node_modules tree only for the Windows WSL backend") were
+  dropped; the rationale comment was folded into upstream's test. Only the
+  `artifactName` (`A2-Code-…`) and `appId` stay fork-specific. The `ulimit -n`
+  lines in the workflows remain as a defensive net.
+- **Add-project hook seam held again.** Upstream's only change to the palette's
+  inline add-project body was a new "environment not connected"
+  (`canCreateProjectInEnvironment`) guard; it was ported **into**
+  `useAddProjectFromPath.ts` and the palette keeps its thin close-on-success
+  wrapper. The palette's now-unused `primaryServerProvidersAtom` /
+  `resolveDefaultProviderModelSelection` imports were removed again.
+- **Composer attachments: upstream reverted to images-only again** (third time).
+  Upstream restructured `addComposerImages` into a validate-and-reserve loop
+  (`acceptedFiles`) followed by a compression phase, and re-added
+  _"Please attach image files only."_. Resolution: keep upstream's two-phase
+  structure; the validation loop now only size-rejects **non**-images (oversized
+  images are downscaled by upstream's `compressImageToByteLimit` rather than
+  refused, so `IMAGE_SIZE_LIMIT_LABEL` was deleted as unused), and the build phase
+  branches to a `type: "file"` attachment before compression. `onComposerPaste`
+  forwards **all** files again. Also re-added the `previewUrl` guard upstream
+  omitted in the new `clearComposerPromptAndImages` — file attachments have none.
+- **`buildLoadingThreadFromShell` needs the fork's detail-only fields.** Upstream's
+  new loading-thread helper spreads a `ThreadShell` into a `Thread`; shells
+  intentionally omit `queuedPrompts`, so the helper supplies `queuedPrompts: []`.
+  Expect the same for any future fork thread-detail field.
+- **Sidebar/composer structural churn re-absorbed.** Upstream moved the sidebar
+  search group into a `fixedHeader` prop on `SidebarContent` (the fork's
+  drop-zone `className` + `dropZoneProps` were re-applied to the same element),
+  extracted `useEnvironmentStageLabel` into `SidebarStageBackdrop` (which now
+  contains the fork's `APP_STAGE_LABEL` fallback verbatim, so the fork's local
+  `useSidebarStageLabel` was deleted as duplication) and renamed `T3Wordmark`
+  (kept as the fork's `AppWordmark` + `APP_MONOGRAM`/`APP_NAME_SUFFIX`).
+- **`ChatView` thread var renamed.** Upstream introduced
+  `activeServerThread = serverThread ?? loadingServerThread`; the fork's queued-
+  prompt merge and server-error dismissal logic were rebased onto that name.
+- **Independent convergence:** upstream landed the fork's own live-viewport-width
+  sidebar fix (`f3507cdf1`) as `subscribeToViewportWidth`/`readViewportWidth`, and
+  its own `exitObserved`/`stopRequested` + `wasReady` work in
+  `DesktopBackendManager` (the fork's `onStartupFailed` hook sits on top). Both
+  were resolved to upstream's naming.
+- **`TraitsPicker` label logic taken from upstream.** Upstream extracted
+  `buildTraitsTriggerDisplay` (unit-tested, fast-mode now shows an icon and only
+  falls back to a "Normal" label when there'd be none). The fork's cosmetic
+  `"Normal"` → `"Standard"` rename was dropped rather than diverge from the tested
+  helper; re-apply in `buildTraitsTriggerDisplay` if the wording still matters.
+- **Docs split.** Upstream deleted `docs/operations/ci.md` in favour of
+  `docs/internals/ci.md`. The deletion was accepted and **`docs/internals/ci.md`
+  was rewritten to describe the fork's build-only CI** (no test/typecheck gating,
+  unsigned artifacts, the `build_payload` job). `docs/project/todo.md` was deleted
+  upstream but kept — it is fork-local planning.
+- **Test fixtures needed the other side's fields again**, as always:
+  `queuedPrompts: []` in `decider.titleRegeneration.test.ts` (upstream-added), and
+  `searchThreads` on the `ProjectionSnapshotQuery` stub in
+  `serverRuntimeStartup.test.ts` (fork-added test).
+- **Lint ratchet.** `t3code(no-manual-effect-runtime-in-tests)` keeps a per-file
+  baseline in `oxlint-plugin-t3code/rules/no-manual-effect-runtime-in-tests.ts`
+  (71 for `ProviderCommandReactor.test.ts`). Merging fork + upstream tests pushed
+  it over; the fork's `thread_ref` test was converted from `Effect.runPromise` to
+  upstream's `harness.runEffect` (which the rule does not count) rather than
+  raising the baseline. Prefer `harness.runEffect` in new fork tests there.
+- Fork package versions stay on the `0.0.25-amit` marker (upstream is at `0.0.31`).
+  These are placeholders that `scripts/update-release-package-versions.ts`
+  overwrites at release time.
+- `apps/marketing/src/lib/site.ts` is upstream-new and hardcoded the upstream
+  repo; `GITHUB_REPOSITORY_URL` was repointed at `amitbet/a2code`. The fork's
+  pages use their own hardcoded links, so the unused `GITHUB_REPOSITORY_URL` /
+  `MARKETING_STATS` imports were dropped from `Layout.astro` / `index.astro`.
+
 ## 2026-07-24 upstream merge (sidebar v2 settled/snoozed, glass UI refresh, Auto runtime mode) — migration notes
 
 Merged `upstream/main` through `41a430a88`. Notable integrations:
@@ -579,12 +703,13 @@ httpBaseUrl, pathname)`; the pre-merge `resolveEnvironmentHttpUrl` helper was
     merged across multiple threads; `shouldShowRateLimitMeter` gates visibility.
     Also adds `sanitizeRateLimitSnapshot` (validates a persisted snapshot) and
     `freshestRateLimitSnapshot` (picks the newer of two by `updatedAt`).
-  - `apps/web/src/store.ts` — **modified**: adds
-    `selectLatestRateLimitActivitiesForInstance(instanceId)`, which returns the
-    latest `account.rate-limits.updated` activity for every thread bound to a
-    provider instance, across all environments (WeakMap-cached per thread on the
-    activity-id array). This is the account/subscription-wide source for the
-    meter — quota is an account property, not a per-conversation one.
+  - `apps/web/src/state/rateLimits.ts` — fork-added (this replaced the deleted
+    `store.ts` selector in the 2026-06-20 atom rewrite; see those notes). The
+    `useLatestRateLimitActivitiesForInstance` hook returns the latest
+    `account.rate-limits.updated` activity for every thread bound to a provider
+    instance, across all environments. This is the account/subscription-wide
+    source for the meter — quota is an account property, not a per-conversation
+    one.
   - `apps/web/src/rateLimitSnapshotStore.ts` — fork-added. A `persist`-backed
     (localStorage, key `t3code:rate-limit-snapshots:v1`) zustand store mapping
     `instanceId → RateLimitSnapshot`, recording only strictly-newer snapshots.
@@ -934,6 +1059,22 @@ build:desktop` → `vp run dist:payload:asset`, using the
   handling unless there is a deliberate product decision to diverge in the
   UI.
 
+### Client-vs-transport snapshot projection
+
+- File: `apps/server/src/orchestration/ClientProjection.ts` (fork-added), used by
+  `apps/server/src/ws.ts` and `apps/server/src/orchestration/http.ts`.
+- `projectThreadSnapshotForClient(snapshot, deviceType)` is the **single** entry
+  point for turning a stored thread-detail snapshot into the one a client
+  receives. It runs upstream's transport-wide `projectThreadDetailSnapshot`
+  (`ActivityPayloadProjection.ts`) and then the fork's mobile trimming (mobile
+  clients do not receive `account.rate-limits.updated` activities; the matching
+  event filter is `shouldSendThreadEventToClient`).
+- **Merge seam:** upstream calls `projectThreadDetailSnapshot` directly at both
+  snapshot sites. On conflict, keep the composed fork entry point rather than
+  nesting the two calls per site — that is what keeps the mobile filter from
+  being dropped. Because the composition always rebuilds the object,
+  `ClientProjection.test.ts` asserts `toStrictEqual`, not `toBe`.
+
 ### Chat timeline search wiring
 
 - File: `apps/web/src/components/chat/MessagesTimeline.tsx`
@@ -974,7 +1115,9 @@ build:desktop` → `vp run dist:payload:asset`, using the
   33-35 are frozen because existing fork DBs already recorded them (see the
   2026-07-24 merge notes): when upstream adds a migration with id >= 33,
   renumber **upstream's** file/registry entry to the fork's next free id
-  (upstream's 33/34 became the fork's 36/37). The fork migrations are
+  (upstream's 33/34 became the fork's 36/37; upstream's 35 became the fork's
+  38 in the 2026-07-30 merge). Renumber the `.test.ts` and its
+  `toMigrationInclusive` bounds too. The fork migrations are
   idempotent (guards on `PRAGMA table_info`), so re-running after a renumber
   is safe.
 - Lower-level provider-native fork plumbing remains in

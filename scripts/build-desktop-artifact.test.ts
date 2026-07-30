@@ -19,10 +19,13 @@ import {
   createStageWorkspaceConfig,
   createStagePatchedDependencies,
   createBuildConfig,
-  DESKTOP_ASAR_UNPACK,
+  DESKTOP_ELECTRON_LANGUAGES,
+  DESKTOP_FILE_EXCLUSIONS,
+  DESKTOP_EXTRA_RESOURCES,
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
   InvalidMockUpdateServerPortError,
+  UnsupportedDesktopBuildArchitectureError,
   isMacPasskeySigningConfigurationError,
   LinuxIconResizeError,
   MacPasskeySigningConfigurationResolutionError,
@@ -37,12 +40,15 @@ import {
   resolveDesktopProductName,
   resolveDesktopUpdateChannel,
   resolveDesktopWebAssetBrand,
+  resolveResourceMonitorRustTargets,
+  resourceMonitorExecutableName,
   resolveGitHubPublishConfig,
   resolveMockUpdateServerPort,
   resolveMockUpdateServerUrl,
   resolvePackageManagerUserAgent,
   stageLinuxIconSize,
   STAGE_INSTALL_ARGS,
+  WINDOWS_ASAR_UNPACK,
 } from "./build-desktop-artifact.ts";
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -437,9 +443,56 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     );
   });
 
-  it("unpacks the fff shared library for filesystem and FFI access", () => {
-    assert.deepStrictEqual(DESKTOP_ASAR_UNPACK, ["node_modules/@ff-labs/fff-bin-*/**/*"]);
+  it("limits Electron locales and excludes the unused Claude SDK executable", () => {
+    assert.deepStrictEqual(DESKTOP_ELECTRON_LANGUAGES, ["en-US"]);
+    assert.deepStrictEqual(DESKTOP_FILE_EXCLUSIONS, [
+      "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**/*",
+    ]);
   });
+
+  it.effect("applies platform-specific packaging to the build config", () =>
+    Effect.gen(function* () {
+      const mac = yield* createBuildConfig(
+        "mac",
+        "dmg",
+        "1.2.3",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+      const linux = yield* createBuildConfig(
+        "linux",
+        "AppImage",
+        "1.2.3",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+      const win = yield* createBuildConfig(
+        "win",
+        "nsis",
+        "1.2.3",
+        false,
+        false,
+        undefined,
+        undefined,
+      );
+
+      // Only the Windows WSL backend needs an unpacked tree: it launches plain
+      // `wsl.exe -- node`, which cannot read inside an asar. mac/linux must stay
+      // packed — unpacking all of node_modules made macOS ad-hoc signing walk
+      // tens of thousands of files and exhaust the open-file limit (EMFILE).
+      assert.notProperty(mac, "asarUnpack");
+      assert.notProperty(linux, "asarUnpack");
+      assert.deepStrictEqual(win.asarUnpack, WINDOWS_ASAR_UNPACK);
+      for (const config of [mac, linux, win]) {
+        assert.deepStrictEqual(config.electronLanguages, DESKTOP_ELECTRON_LANGUAGES);
+        assert.deepStrictEqual(config.files, DESKTOP_FILE_EXCLUSIONS);
+      }
+    }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
+  );
 
   it.effect("preserves both Linux icon resize failures with structural context", () => {
     const commands: Array<{ readonly command: string; readonly args: ReadonlyArray<string> }> = [];
@@ -613,37 +666,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
-  it.effect("unpacks the full node_modules tree only for the Windows WSL backend", () =>
-    Effect.gen(function* () {
-      const win = (yield* createBuildConfig(
-        "win",
-        "nsis",
-        "1.2.3",
-        false,
-        false,
-        undefined,
-        undefined,
-      )).asarUnpack as readonly string[];
-      const mac = (yield* createBuildConfig(
-        "mac",
-        "dmg",
-        "1.2.3",
-        false,
-        false,
-        undefined,
-        undefined,
-      )).asarUnpack as readonly string[];
-
-      assert.ok(win.includes("**/node_modules/**"));
-      // macOS would otherwise sign tens of thousands of unpacked files and hit
-      // EMFILE; the asar-aware primary reads node_modules from inside the asar,
-      // so only node-pty's native binary needs unpacking on the real filesystem.
-      assert.ok(!mac.includes("**/node_modules/**"));
-      assert.ok(mac.includes("**/node_modules/node-pty/**"));
-      assert.ok(mac.includes("apps/server/dist/**"));
-    }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
-  );
-
   it.effect("keeps executable resource editing enabled for unsigned Windows builds", () =>
     Effect.gen(function* () {
       const config = yield* createBuildConfig(
@@ -663,6 +685,26 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
+  it("stages the resource monitor as an external executable resource", () => {
+    assert.deepStrictEqual(DESKTOP_EXTRA_RESOURCES, [
+      {
+        from: "apps/desktop/prod-resources/resource-monitor",
+        to: "resource-monitor",
+      },
+    ]);
+    assert.deepStrictEqual(resolveResourceMonitorRustTargets("mac", "universal"), [
+      "aarch64-apple-darwin",
+      "x86_64-apple-darwin",
+    ]);
+    assert.deepStrictEqual(resolveResourceMonitorRustTargets("linux", "x64"), [
+      "x86_64-unknown-linux-gnu",
+    ]);
+    assert.deepStrictEqual(resolveResourceMonitorRustTargets("win", "arm64"), [
+      "aarch64-pc-windows-msvc",
+    ]);
+    assert.equal(resourceMonitorExecutableName("mac"), "t3-resource-monitor");
+    assert.equal(resourceMonitorExecutableName("win"), "t3-resource-monitor.exe");
+  });
   it("promotes target fff binaries to direct staged dependencies", () => {
     assert.deepStrictEqual(resolveFffNativeDependencies("mac", "arm64", "0.9.4"), {
       "@ff-labs/fff-bin-darwin-arm64": "0.9.4",
@@ -790,6 +832,32 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.equal(resolved.platform, "win");
       assert.equal(resolved.target, "nsis");
       assert.equal(resolved.arch, "arm64");
+    }),
+  );
+
+  it.effect("rejects universal builds on Linux and Windows before staging binaries", () =>
+    Effect.gen(function* () {
+      for (const platform of ["linux", "win"] as const) {
+        const error = yield* Effect.flip(
+          resolveBuildOptions({
+            platform: Option.some(platform),
+            target: Option.none(),
+            arch: Option.some("universal"),
+            buildVersion: Option.none(),
+            outputDir: Option.none(),
+            skipBuild: Option.none(),
+            keepStage: Option.none(),
+            signed: Option.none(),
+            verbose: Option.none(),
+            mockUpdates: Option.none(),
+            mockUpdateServerPort: Option.none(),
+            wslPrebuild: Option.none(),
+          }),
+        );
+
+        assert.instanceOf(error, UnsupportedDesktopBuildArchitectureError);
+        assert.deepStrictEqual(error.supportedArchitectures, ["x64", "arm64"]);
+      }
     }),
   );
 

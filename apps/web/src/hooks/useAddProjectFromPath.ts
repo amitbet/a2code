@@ -1,4 +1,5 @@
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { canCreateProjectInEnvironment } from "@t3tools/client-runtime/operations/projects";
 import {
   isAtomCommandInterrupted,
   settlePromise,
@@ -56,6 +57,19 @@ export function useAddProjectFromPath(): (input: AddProjectFromPathInput) => Pro
 
   return useCallback(
     async (input: AddProjectFromPathInput) => {
+      const environment = environments.find(
+        (candidate) => candidate.environmentId === input.environmentId,
+      );
+      if (!canCreateProjectInEnvironment(environment?.connection.phase)) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Environment unavailable",
+            description: `${environment?.label ?? "The selected environment"} is not connected.`,
+          }),
+        );
+        return false;
+      }
       const rawCwd = input.rawCwd;
 
       if (isUnsupportedWindowsProjectPath(rawCwd.trim(), input.platform)) {
@@ -121,8 +135,7 @@ export function useAddProjectFromPath(): (input: AddProjectFromPathInput) => Pro
 
       const projectId = newProjectId();
       const targetEnvironmentProviders =
-        environments.find((environment) => environment.environmentId === input.environmentId)
-          ?.serverConfig?.providers ??
+        environment?.serverConfig?.providers ??
         (input.environmentId === primaryEnvironmentId ? providers : []);
       const createResult = await createProject({
         environmentId: input.environmentId,

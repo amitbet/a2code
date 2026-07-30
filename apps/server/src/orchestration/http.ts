@@ -7,8 +7,8 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
-import { normalizeDispatchCommand } from "./Normalizer.ts";
 import { projectThreadSnapshotForClient } from "./ClientProjection.ts";
+import { normalizeDispatchCommand } from "./Normalizer.ts";
 import {
   annotateEnvironmentRequest,
   failEnvironmentInternal,
