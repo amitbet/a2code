@@ -76,6 +76,18 @@ function envValue(environment: NodeJS.ProcessEnv | undefined, name: string): str
   return trimmed ? trimmed : undefined;
 }
 
+function explicitEnvValue(
+  environment: NodeJS.ProcessEnv | undefined,
+  name: string,
+): { readonly present: boolean; readonly value: string | null } {
+  const source = environment ?? NodeProcess.env;
+  if (!Object.prototype.hasOwnProperty.call(source, name)) {
+    return { present: false, value: null };
+  }
+  const value = source[name]?.trim();
+  return { present: true, value: value || null };
+}
+
 function resolveApiEndpoint(options: CursorUsageApiOptions): string {
   return (
     options.apiEndpoint?.trim() ||
@@ -138,9 +150,9 @@ const readCursorAccessToken = (
   environment: NodeJS.ProcessEnv | undefined,
 ): Effect.Effect<string | null> =>
   Effect.gen(function* () {
-    const environmentToken = envValue(environment, "CURSOR_ACCESS_TOKEN");
-    if (environmentToken) {
-      return environmentToken;
+    const environmentToken = explicitEnvValue(environment, "CURSOR_ACCESS_TOKEN");
+    if (environmentToken.present) {
+      return environmentToken.value;
     }
 
     const fromKeychain =
@@ -175,9 +187,9 @@ const readCursorApiKey = (
   environment: NodeJS.ProcessEnv | undefined,
 ): Effect.Effect<string | null> =>
   Effect.gen(function* () {
-    const environmentApiKey = envValue(environment, "CURSOR_API_KEY");
-    if (environmentApiKey) {
-      return environmentApiKey;
+    const environmentApiKey = explicitEnvValue(environment, "CURSOR_API_KEY");
+    if (environmentApiKey.present) {
+      return environmentApiKey.value;
     }
     if (NodeProcess.platform !== "darwin") {
       return null;
@@ -390,8 +402,21 @@ export const fetchCursorUsageSnapshot = (
 ): Effect.Effect<ProviderRateLimitSnapshot | null> =>
   Effect.gen(function* () {
     const apiEndpoint = resolveApiEndpoint(options);
-    const directToken = yield* readCursorAccessToken(options.environment);
-    const apiKey = yield* readCursorApiKey(options.environment);
+    const configuredAccessToken = explicitEnvValue(options.environment, "CURSOR_ACCESS_TOKEN");
+    const configuredApiKey = explicitEnvValue(options.environment, "CURSOR_API_KEY");
+    // Per-instance credentials must win over the global macOS Keychain. This
+    // prevents two Cursor provider instances configured for different accounts
+    // from accidentally using the same Keychain access token.
+    const directToken = configuredAccessToken.present
+      ? configuredAccessToken.value
+      : configuredApiKey.present
+        ? null
+        : yield* readCursorAccessToken(options.environment);
+    const apiKey = configuredApiKey.present
+      ? configuredApiKey.value
+      : configuredAccessToken.present
+        ? null
+        : yield* readCursorApiKey(options.environment);
 
     if (directToken) {
       const response = yield* fetchCurrentPeriodUsage(apiEndpoint, directToken);
