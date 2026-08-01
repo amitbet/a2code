@@ -55,10 +55,10 @@ export type RateLimitSnapshot = ProviderRateLimitSnapshot & {
  * activities, or null if the provider has not reported quota usage.
  *
  * Rate limits describe an account/subscription, not a single conversation, so
- * callers may pass activities merged across multiple threads (see
- * {@link selectLatestRateLimitActivitiesForInstance}). Each provider event is
- * a complete normalized snapshot, so the newest usable event replaces older
- * snapshots instead of retaining windows that the provider has removed.
+ * callers may pass activities merged across multiple threads in the same
+ * environment. Each provider event is a complete normalized snapshot, so the
+ * newest usable event replaces older snapshots instead of retaining windows
+ * that the provider has removed.
  */
 export function deriveLatestRateLimitSnapshot(
   activities: ReadonlyArray<OrchestrationThreadActivity>,

@@ -3,7 +3,7 @@ import { EnvironmentId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveMachineEnvironmentId } from "./machineScope";
+import { isEnvironmentInMachineScope, resolveMachineEnvironmentId } from "./machineScope";
 
 const LOCAL_ID = EnvironmentId.make("environment-local");
 const REMOTE_ID = EnvironmentId.make("environment-remote");
@@ -34,6 +34,15 @@ const entries = new Map([
 ]);
 
 describe("machine scope", () => {
+  it("rejects an environment outside the selected machine", () => {
+    expect(isEnvironmentInMachineScope(LOCAL_ID, REMOTE_ID)).toBe(false);
+    expect(isEnvironmentInMachineScope(REMOTE_ID, REMOTE_ID)).toBe(true);
+  });
+
+  it("allows the catalog to resolve before enforcing a machine", () => {
+    expect(isEnvironmentInMachineScope(REMOTE_ID, null)).toBe(true);
+  });
+
   it("keeps a selected registered machine active", () => {
     expect(resolveMachineEnvironmentId({ entries, selected: REMOTE_ID })).toBe(REMOTE_ID);
   });

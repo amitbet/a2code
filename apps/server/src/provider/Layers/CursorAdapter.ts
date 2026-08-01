@@ -16,6 +16,7 @@ import {
   type ProviderUserInputAnswers,
   ProviderDriverKind,
   ProviderInstanceId,
+  type ProviderRateLimitSnapshot,
   RuntimeRequestId,
   type RuntimeMode,
   type ThreadId,
@@ -76,6 +77,7 @@ import {
 } from "../acp/CursorAcpExtension.ts";
 import { type CursorAdapterShape } from "../Services/CursorAdapter.ts";
 import { resolveCursorAcpBaseModelId } from "./CursorProvider.ts";
+import { fetchCursorUsageSnapshot } from "./CursorUsageApi.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJsonString);
 
@@ -111,6 +113,8 @@ export interface CursorAdapterLiveOptions {
    * the latest snapshot so the closure isn't stale.
    */
   readonly resolveSettings?: Effect.Effect<CursorSettings>;
+  /** Optional test/embedding override for the best-effort account usage read. */
+  readonly fetchUsageSnapshot?: () => Effect.Effect<ProviderRateLimitSnapshot | null>;
 }
 
 interface PendingApproval {
@@ -363,6 +367,42 @@ export function makeCursorAdapter(
 
     const offerRuntimeEvent = (event: ProviderRuntimeEvent) =>
       PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid);
+
+    const refreshCursorUsage = Effect.fn("CursorAdapter.refreshCursorUsage")(function* () {
+      const context = Array.from(sessions.values())
+        .toReversed()
+        .find((candidate) => !candidate.stopped);
+      if (!context) {
+        return;
+      }
+
+      const effectiveSettings = options?.resolveSettings
+        ? yield* options.resolveSettings
+        : cursorSettings;
+      const snapshot = options?.fetchUsageSnapshot
+        ? yield* options.fetchUsageSnapshot()
+        : yield* fetchCursorUsageSnapshot({
+            apiEndpoint: effectiveSettings.apiEndpoint,
+            environment: options?.environment,
+          });
+      if (!snapshot || snapshot.windows.length === 0) {
+        return;
+      }
+
+      const stamp = yield* makeEventStamp();
+      yield* offerRuntimeEvent({
+        type: "account.rate-limits.updated",
+        eventId: stamp.eventId,
+        provider: PROVIDER,
+        createdAt: stamp.createdAt,
+        threadId: context.threadId,
+        ...(context.activeTurnId ? { turnId: context.activeTurnId } : {}),
+        payload: { snapshot },
+      });
+    });
+
+    const refreshRateLimits: NonNullable<CursorAdapterShape["refreshRateLimits"]> =
+      refreshCursorUsage;
 
     const getThreadSemaphore = (threadId: string) =>
       SynchronizedRef.modifyEffect(threadLocksRef, (current) => {
@@ -867,6 +907,31 @@ export function makeCursorAdapter(
                       }),
                     );
                     return;
+                  case "UsageUpdated":
+                    yield* logNative(
+                      ctx.threadId,
+                      "session/update",
+                      event.rawPayload,
+                      "acp.jsonrpc",
+                    );
+                    {
+                      const stamp = yield* makeEventStamp();
+                      yield* offerRuntimeEvent({
+                        type: "thread.token-usage.updated",
+                        eventId: stamp.eventId,
+                        createdAt: stamp.createdAt,
+                        provider: PROVIDER,
+                        threadId: ctx.threadId,
+                        ...(ctx.activeTurnId ? { turnId: ctx.activeTurnId } : {}),
+                        payload: {
+                          usage: {
+                            usedTokens: event.usedTokens,
+                            maxTokens: event.maxTokens,
+                          },
+                        },
+                      });
+                    }
+                    return;
                 }
               }),
             ),
@@ -902,6 +967,10 @@ export function makeCursorAdapter(
             threadId: input.threadId,
             payload: { providerThreadId: started.sessionId },
           });
+          // Account usage is independent of the ACP stream. Fetch it once the
+          // session is ready so the quota meter has data even before the first
+          // turn completes; failures are intentionally best-effort.
+          yield* Effect.forkDetach(refreshCursorUsage());
 
           return session;
         }).pipe(Effect.scoped),
@@ -1042,6 +1111,9 @@ export function makeCursorAdapter(
                 stopReason: result.stopReason ?? null,
               },
             });
+            // Refresh after the final prompt in a turn, without delaying the
+            // response that unblocks the conversation UI.
+            yield* Effect.forkDetach(refreshCursorUsage());
           }
 
           return {
@@ -1176,6 +1248,7 @@ export function makeCursorAdapter(
       listSessions,
       hasSession,
       stopAll,
+      refreshRateLimits,
       streamEvents,
     } satisfies CursorAdapterShape;
   });

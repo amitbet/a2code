@@ -1,9 +1,10 @@
 import { useAtomCommand } from "../state/use-atom-command";
 import type { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
 import { useEffect, useMemo, useRef } from "react";
-import { useLatestRateLimitActivitiesForInstance } from "../state/rateLimits";
+import { useLatestRateLimitActivitiesForEnvironmentInstance } from "../state/rateLimits";
 import { serverEnvironment } from "../state/server";
 import {
+  rateLimitSnapshotKey,
   selectPersistedRateLimitSnapshot,
   useRateLimitSnapshotStore,
 } from "../rateLimitSnapshotStore";
@@ -33,11 +34,11 @@ export function useAccountRateLimitSnapshot(
   environmentId: EnvironmentId | null | undefined,
   instanceId: ProviderInstanceId | null | undefined,
 ): RateLimitSnapshot | null {
-  const activities = useLatestRateLimitActivitiesForInstance(instanceId);
+  const activities = useLatestRateLimitActivitiesForEnvironmentInstance(environmentId, instanceId);
   const live = useMemo(() => deriveLatestRateLimitSnapshot(activities), [activities]);
 
   const persisted = useRateLimitSnapshotStore((state) =>
-    selectPersistedRateLimitSnapshot(state.byInstanceId, instanceId),
+    selectPersistedRateLimitSnapshot(state.byEnvironmentInstanceKey, environmentId, instanceId),
   );
   const record = useRateLimitSnapshotStore((state) => state.record);
   const refreshRateLimits = useAtomCommand(serverEnvironment.refreshProviderRateLimits, {
@@ -51,10 +52,10 @@ export function useAccountRateLimitSnapshot(
   // Persist the freshest live snapshot. `record` no-ops unless it is strictly
   // newer than what's stored, so this can't loop on the resulting re-render.
   useEffect(() => {
-    if (instanceId && live) {
-      record(instanceId, live);
+    if (environmentId && instanceId && live) {
+      record(environmentId, instanceId, live);
     }
-  }, [instanceId, live, record]);
+  }, [environmentId, instanceId, live, record]);
 
   const snapshot = useMemo(() => freshestRateLimitSnapshot(live, persisted), [live, persisted]);
 
@@ -62,7 +63,7 @@ export function useAccountRateLimitSnapshot(
     if (!environmentId || !instanceId || !snapshot) {
       return;
     }
-    const key = `${environmentId}:${instanceId}`;
+    const key = rateLimitSnapshotKey(environmentId, instanceId);
     const requestIfStale = () => {
       if (document.visibilityState !== "visible") {
         return;

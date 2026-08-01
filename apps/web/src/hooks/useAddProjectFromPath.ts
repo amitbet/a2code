@@ -21,7 +21,12 @@ import { getLatestThreadForProject } from "../lib/threadSort";
 import { newProjectId } from "../lib/utils";
 import { resolveDefaultProviderModelSelection } from "../providerInstances";
 import { useProjects, useThreadShells } from "../state/entities";
-import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
+import {
+  isEnvironmentInMachineScope,
+  useEnvironments,
+  useMachineEnvironmentId,
+  usePrimaryEnvironmentId,
+} from "../state/environments";
 import { projectEnvironment } from "../state/projects";
 import { primaryServerProvidersAtom } from "../state/server";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -46,6 +51,7 @@ export function useAddProjectFromPath(): (input: AddProjectFromPathInput) => Pro
   const projects = useProjects();
   const threads = useThreadShells();
   const { environments } = useEnvironments();
+  const machineEnvironmentId = useMachineEnvironmentId();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const providers = useAtomValue(primaryServerProvidersAtom);
   const sidebarThreadSortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
@@ -57,6 +63,16 @@ export function useAddProjectFromPath(): (input: AddProjectFromPathInput) => Pro
 
   return useCallback(
     async (input: AddProjectFromPathInput) => {
+      if (!isEnvironmentInMachineScope(input.environmentId, machineEnvironmentId)) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "warning",
+            title: "Switch machines first",
+            description: "Projects can only be opened on the machine shown in the picker.",
+          }),
+        );
+        return false;
+      }
       const environment = environments.find(
         (candidate) => candidate.environmentId === input.environmentId,
       );
@@ -190,6 +206,7 @@ export function useAddProjectFromPath(): (input: AddProjectFromPathInput) => Pro
       providers,
       sidebarThreadSortOrder,
       threads,
+      machineEnvironmentId,
     ],
   );
 }

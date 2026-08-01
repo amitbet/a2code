@@ -11,12 +11,17 @@ import { SidebarInset } from "../components/ui/sidebar";
 import { waitForDraftHeroTransition } from "../components/chat/draftHeroTransition";
 import { buildThreadRouteParams } from "../threadRoutes";
 import { useThread, useThreadRefs } from "../state/entities";
+import { isEnvironmentInMachineScope, useMachineEnvironmentId } from "../state/environments";
 
 function DraftChatThreadRouteView() {
   const navigate = useNavigate();
   const { draftId: rawDraftId } = Route.useParams();
   const draftId = DraftId.make(rawDraftId);
   const draftSession = useComposerDraftStore((store) => store.getDraftSession(draftId));
+  const machineEnvironmentId = useMachineEnvironmentId();
+  const outsideMachineScope =
+    draftSession !== null &&
+    !isEnvironmentInMachineScope(draftSession.environmentId, machineEnvironmentId);
   const threadRefs = useThreadRefs();
   const inferredThreadRef = draftSession
     ? (threadRefs.find(
@@ -35,14 +40,18 @@ function DraftChatThreadRouteView() {
     : null;
 
   useEffect(() => {
+    if (outsideMachineScope) {
+      void navigate({ to: "/", replace: true });
+      return;
+    }
     if (!inferredThreadRef || draftSession?.promotedTo) {
       return;
     }
     markPromotedDraftThreadByRef(inferredThreadRef);
-  }, [draftSession?.promotedTo, inferredThreadRef]);
+  }, [draftSession?.promotedTo, inferredThreadRef, navigate, outsideMachineScope]);
 
   useEffect(() => {
-    if (!canonicalThreadRef) {
+    if (!canonicalThreadRef || outsideMachineScope) {
       return;
     }
 
@@ -61,16 +70,16 @@ function DraftChatThreadRouteView() {
     return () => {
       cancelled = true;
     };
-  }, [canonicalThreadRef, navigate]);
+  }, [canonicalThreadRef, navigate, outsideMachineScope]);
 
   useEffect(() => {
-    if (draftSession || canonicalThreadRef) {
+    if (draftSession || canonicalThreadRef || outsideMachineScope) {
       return;
     }
     void navigate({ to: "/", replace: true });
-  }, [canonicalThreadRef, draftSession, navigate]);
+  }, [canonicalThreadRef, draftSession, navigate, outsideMachineScope]);
 
-  if (!draftSession) {
+  if (!draftSession || outsideMachineScope) {
     return null;
   }
 

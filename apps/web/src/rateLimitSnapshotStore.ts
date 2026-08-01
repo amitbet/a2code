@@ -1,71 +1,87 @@
 /**
  * Persistent, per-subscription cache of the freshest quota/rate-limit snapshot
- * we've ever observed for a provider instance.
+ * we've ever observed for an environment/provider pair.
  *
  * Live rate-limit data only reaches the client over the per-thread detail
  * subscription, which is evicted when a conversation goes idle (see
- * `selectLatestRateLimitActivitiesForInstance`). Without persistence the quota
+ * `useLatestRateLimitActivitiesForEnvironmentInstance`). Without persistence the quota
  * meter would fall back to "no data" after a reload or once every conversation
  * on a subscription has been evicted. Mirroring the freshest snapshot into
- * localStorage, keyed by instance id, lets the meter keep showing the most
- * up-to-date figures we have for the subscription even before any conversation
- * has streamed fresh usage this session.
+ * localStorage, keyed by environment and instance id, lets the meter keep
+ * showing the most up-to-date figures we have for that account even before any
+ * conversation has streamed fresh usage this session.
  */
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
+import type { EnvironmentId, ProviderInstanceId } from "@t3tools/contracts";
 
 import { resolveStorage } from "./lib/storage";
 import { sanitizeRateLimitSnapshot, type RateLimitSnapshot } from "./lib/rateLimits";
 
 const RATE_LIMIT_SNAPSHOT_STORAGE_KEY = "t3code:rate-limit-snapshots:v1";
-const RATE_LIMIT_SNAPSHOT_STORAGE_VERSION = 1;
+const RATE_LIMIT_SNAPSHOT_STORAGE_VERSION = 2;
 
 interface RateLimitSnapshotStoreState {
-  byInstanceId: Record<string, RateLimitSnapshot>;
+  byEnvironmentInstanceKey: Record<string, RateLimitSnapshot>;
   /**
-   * Record a snapshot for an instance, but only when it is strictly newer than
-   * whatever is stored — so persistence never regresses to older figures and
-   * repeated calls with the same snapshot are no-ops (no render churn).
+   * Record a snapshot for an environment/provider pair, but only when it is
+   * strictly newer than whatever is stored — so persistence never regresses to
+   * older figures and repeated calls with the same snapshot are no-ops.
    */
-  record: (instanceId: string, snapshot: RateLimitSnapshot) => void;
+  record: (
+    environmentId: EnvironmentId,
+    instanceId: ProviderInstanceId,
+    snapshot: RateLimitSnapshot,
+  ) => void;
 }
 
 export function migratePersistedRateLimitSnapshots(persistedState: unknown): {
-  byInstanceId: Record<string, RateLimitSnapshot>;
+  byEnvironmentInstanceKey: Record<string, RateLimitSnapshot>;
 } {
   if (
     !persistedState ||
     typeof persistedState !== "object" ||
-    !("byInstanceId" in persistedState)
+    !("byEnvironmentInstanceKey" in persistedState)
   ) {
-    return { byInstanceId: {} };
+    return { byEnvironmentInstanceKey: {} };
   }
-  const raw = (persistedState as { byInstanceId: unknown }).byInstanceId;
+  const raw = (persistedState as { byEnvironmentInstanceKey: unknown }).byEnvironmentInstanceKey;
   if (!raw || typeof raw !== "object") {
-    return { byInstanceId: {} };
+    return { byEnvironmentInstanceKey: {} };
   }
-  const byInstanceId: Record<string, RateLimitSnapshot> = {};
-  for (const [instanceId, value] of Object.entries(raw as Record<string, unknown>)) {
+  const byEnvironmentInstanceKey: Record<string, RateLimitSnapshot> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
     const snapshot = sanitizeRateLimitSnapshot(value);
     if (snapshot) {
-      byInstanceId[instanceId] = snapshot;
+      byEnvironmentInstanceKey[key] = snapshot;
     }
   }
-  return { byInstanceId };
+  return { byEnvironmentInstanceKey };
+}
+
+export function rateLimitSnapshotKey(
+  environmentId: EnvironmentId,
+  instanceId: ProviderInstanceId,
+): string {
+  return `${environmentId}:${instanceId}`;
 }
 
 export const useRateLimitSnapshotStore = create<RateLimitSnapshotStoreState>()(
   persist(
     (set) => ({
-      byInstanceId: {},
-      record: (instanceId, snapshot) =>
+      byEnvironmentInstanceKey: {},
+      record: (environmentId, instanceId, snapshot) =>
         set((state) => {
-          const existing = state.byInstanceId[instanceId];
+          const key = rateLimitSnapshotKey(environmentId, instanceId);
+          const existing = state.byEnvironmentInstanceKey[key];
           if (existing && Date.parse(existing.updatedAt) >= Date.parse(snapshot.updatedAt)) {
             return state;
           }
           return {
-            byInstanceId: { ...state.byInstanceId, [instanceId]: snapshot },
+            byEnvironmentInstanceKey: {
+              ...state.byEnvironmentInstanceKey,
+              [key]: snapshot,
+            },
           };
         }),
     }),
@@ -75,16 +91,17 @@ export const useRateLimitSnapshotStore = create<RateLimitSnapshotStoreState>()(
       storage: createJSONStorage(() =>
         resolveStorage(typeof window !== "undefined" ? window.localStorage : undefined),
       ),
-      partialize: (state) => ({ byInstanceId: state.byInstanceId }),
+      partialize: (state) => ({ byEnvironmentInstanceKey: state.byEnvironmentInstanceKey }),
       migrate: migratePersistedRateLimitSnapshots,
     },
   ),
 );
 
 export function selectPersistedRateLimitSnapshot(
-  byInstanceId: Record<string, RateLimitSnapshot>,
-  instanceId: string | null | undefined,
+  byEnvironmentInstanceKey: Record<string, RateLimitSnapshot>,
+  environmentId: EnvironmentId | null | undefined,
+  instanceId: ProviderInstanceId | null | undefined,
 ): RateLimitSnapshot | null {
-  if (!instanceId) return null;
-  return byInstanceId[instanceId] ?? null;
+  if (!environmentId || !instanceId) return null;
+  return byEnvironmentInstanceKey[rateLimitSnapshotKey(environmentId, instanceId)] ?? null;
 }

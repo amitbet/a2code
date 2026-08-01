@@ -13,6 +13,7 @@ import {
   useThreadShell,
   useThreadStatus,
 } from "../state/entities";
+import { isEnvironmentInMachineScope, useMachineEnvironmentId } from "../state/environments";
 import { useEnvironmentQuery } from "../state/query";
 import { environmentShell } from "../state/shell";
 
@@ -21,6 +22,10 @@ function ChatThreadRouteView() {
   const threadRef = Route.useParams({
     select: (params) => resolveThreadRouteRef(params),
   });
+  const machineEnvironmentId = useMachineEnvironmentId();
+  const outsideMachineScope =
+    threadRef !== null &&
+    !isEnvironmentInMachineScope(threadRef.environmentId, machineEnvironmentId);
   const shell = useEnvironmentQuery(
     threadRef === null ? null : environmentShell.stateAtom(threadRef.environmentId),
   );
@@ -58,6 +63,10 @@ function ChatThreadRouteView() {
   const environmentHasAnyThreads = environmentHasServerThreads || environmentHasDraftThreads;
 
   useEffect(() => {
+    if (outsideMachineScope) {
+      void navigate({ to: "/", replace: true });
+      return;
+    }
     if (!threadRef || !bootstrapComplete) {
       return;
     }
@@ -65,16 +74,23 @@ function ChatThreadRouteView() {
     if (renderState === "missing" && environmentHasAnyThreads) {
       void navigate({ to: "/", replace: true });
     }
-  }, [bootstrapComplete, environmentHasAnyThreads, navigate, renderState, threadRef]);
+  }, [
+    bootstrapComplete,
+    environmentHasAnyThreads,
+    navigate,
+    outsideMachineScope,
+    renderState,
+    threadRef,
+  ]);
 
   useEffect(() => {
-    if (!threadRef || !serverThreadStarted || !draftThread) {
+    if (outsideMachineScope || !threadRef || !serverThreadStarted || !draftThread) {
       return;
     }
     finalizePromotedDraftThreadByRef(threadRef);
-  }, [draftThread, serverThreadStarted, threadRef]);
+  }, [draftThread, outsideMachineScope, serverThreadStarted, threadRef]);
 
-  if (!threadRef) {
+  if (!threadRef || outsideMachineScope) {
     return null;
   }
 

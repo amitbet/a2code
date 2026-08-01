@@ -11,7 +11,11 @@ import { useMemo } from "react";
 import { environmentCatalog } from "../connection/catalog";
 import { environmentPresentations, useEnvironmentPresentation } from "./presentation";
 import { primaryEnvironmentIdAtom } from "./primaryEnvironment";
-import { machineEnvironmentIdAtom, selectMachineEnvironment } from "./machineScope";
+import {
+  isEnvironmentInMachineScope,
+  machineEnvironmentIdAtom,
+  selectMachineEnvironment,
+} from "./machineScope";
 import { useEnvironmentQuery } from "./query";
 import { relayEnvironmentDiscovery } from "./relay";
 import { usePreparedConnection } from "./session";
@@ -68,6 +72,8 @@ export function useMachineEnvironmentId(): EnvironmentId | null {
 export function setMachineEnvironmentId(environmentId: EnvironmentId): void {
   selectMachineEnvironment(environmentId);
 }
+
+export { isEnvironmentInMachineScope };
 
 export function useEnvironment(
   environmentId: EnvironmentId | null,

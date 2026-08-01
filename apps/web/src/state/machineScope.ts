@@ -38,6 +38,18 @@ const selectedMachineEnvironmentIdAtom = Atom.make<EnvironmentId | null>(
 ).pipe(Atom.keepAlive, Atom.withLabel("web-selected-machine-environment-id"));
 
 /**
+ * Returns whether an environment may be used under the current machine
+ * selection. A null machine id means the connection catalog has not resolved
+ * a machine yet, so callers should wait for normal availability checks.
+ */
+export function isEnvironmentInMachineScope(
+  environmentId: EnvironmentId | null | undefined,
+  machineEnvironmentId: EnvironmentId | null,
+): boolean {
+  return machineEnvironmentId === null || environmentId === machineEnvironmentId;
+}
+
+/**
  * Resolves the machine shown by the app. A saved choice wins while its
  * connection remains registered; otherwise fall back to the local primary
  * environment, then the first registered environment.

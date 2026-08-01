@@ -108,6 +108,12 @@ export type AcpParsedSessionEvent =
       readonly itemId?: string;
       readonly text: string;
       readonly rawPayload: unknown;
+    }
+  | {
+      readonly _tag: "UsageUpdated";
+      readonly usedTokens: number;
+      readonly maxTokens: number;
+      readonly rawPayload: unknown;
     };
 
 type AcpSessionSetupResponse =
@@ -569,6 +575,17 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
         events.push({
           _tag: "ContentDelta",
           text: upd.content.text,
+          rawPayload: params,
+        });
+      }
+      break;
+    }
+    case "usage_update": {
+      if (upd.size > 0) {
+        events.push({
+          _tag: "UsageUpdated",
+          usedTokens: upd.used,
+          maxTokens: upd.size,
           rawPayload: params,
         });
       }

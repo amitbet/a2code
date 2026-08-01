@@ -28,6 +28,56 @@ records still retain their underlying `environmentId` associations.
   accepting upstream versions wholesale would restore cross-machine projects
   or the per-thread environment prompt.
 
+## 2026-08-01 fork feature (environment-scoped provider usage) — merge notes
+
+Provider quota snapshots are now isolated by the pair
+`environmentId + providerInstanceId`. The web client filters live rate-limit
+activities to the active environment and persists snapshots under the same
+composite key, so identically named GPT/Codex or Claude instances on two
+machines cannot overwrite or display each other's counters. The old
+instance-only browser cache is invalidated by the store version bump.
+
+- **Web state:** `apps/web/src/state/rateLimits.ts`,
+  `apps/web/src/lib/useAccountRateLimitSnapshot.ts`, and
+  `apps/web/src/rateLimitSnapshotStore.ts` are the main conflict seams. Keep
+  the environment dimension in both live activity selection and persistence.
+- **Cursor context usage:** Cursor ACP `session/update` `usage_update` events
+  are projected to `thread.token-usage.updated` by
+  `apps/server/src/provider/acp/AcpRuntimeModel.ts` and
+  `apps/server/src/provider/Layers/CursorAdapter.ts`, enabling the existing
+  context-window counter when Cursor emits that optional update.
+- **Machine/provider invariant:** `apps/web/src/routes/_chat.$environmentId.$threadId.tsx`
+  and `apps/web/src/routes/_chat.draft.$draftId.tsx` redirect stale routes
+  outside the selected machine before mounting `ChatView`. The send/model
+  selection handlers, `useHandleNewThread`, and `useAddProjectFromPath` also
+  reject cross-machine targets and cross-environment draft reuse. Preserve
+  these checks when rebasing route or composer changes; a provider instance id
+  is only meaningful within the environment that owns the active thread.
+- **Runtime ownership example:** when the UI is connected to both MacM1 and
+  MacM4, selecting MacM4 makes new threads dispatch to MacM4 and use MacM4's
+  provider accounts; selecting MacM1 does the same for MacM1. A thread already
+  running on MacM4 remains bound to MacM4 when the picker switches to MacM1
+  (and vice versa); switching only changes the visible machine-scoped UI and
+  never retargets a running thread. Identically named instances such as
+  `claude` or `codex` on the two machines are still distinct environment-owned
+  providers.
+- **Cursor account quota:** `apps/server/src/provider/Layers/CursorUsageApi.ts`
+  provides a best-effort current billing-period usage snapshot for Cursor and
+  `CursorAdapter.ts` refreshes it after session start and turn completion. It
+  reads the machine-local Cursor credential (environment override, macOS
+  Keychain, or CLI auth file), normalizes model/API/on-demand spend windows,
+  and emits the existing `account.rate-limits.updated` event. The snapshot is
+  therefore still isolated by `environmentId + providerInstanceId` in the web
+  client. The API used here is Cursor's undocumented dashboard RPC because
+  Cursor CLI/ACP does not expose a supported individual-account quota API;
+  failures return no snapshot and must remain non-fatal. Revisit the endpoint,
+  credential paths, and response schema if Cursor changes them.
+- **Merge hotspots:** if upstream changes provider runtime events, ACP session
+  updates, Cursor usage fetching, rate-limit activity selection, the persisted
+  quota store, route guards, or composer dispatch, retain the composite
+  environment/provider key, the Cursor `usage_update` mapping, the
+  machine-local credential boundary, and the selected-machine invariant.
+
 ## 2026-07-30 upstream merge (project file picker, thread content search, docs split) — migration notes
 
 Merged `upstream/main` through `323dc321a` (103 commits). Notable integrations:

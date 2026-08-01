@@ -217,7 +217,12 @@ import {
 import { terminalEnvironment } from "../state/terminal";
 import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
-import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
+import {
+  isEnvironmentInMachineScope,
+  useEnvironments,
+  useMachineEnvironmentId,
+  usePrimaryEnvironment,
+} from "../state/environments";
 import {
   useProject,
   useThread,
@@ -1262,6 +1267,7 @@ function ChatViewContent(props: ChatViewProps) {
   const autoOpenPlanSidebar = settings.autoOpenPlanSidebar;
   const navigate = useNavigate();
   const { resolvedTheme } = useTheme();
+  const machineEnvironmentId = useMachineEnvironmentId();
   // Granular store selectors — avoid subscribing to prompt changes.
   const composerRuntimeMode = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.runtimeMode ?? null,
@@ -4799,6 +4805,7 @@ function ChatViewContent(props: ChatViewProps) {
   const onSend = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
     if (
+      !isEnvironmentInMachineScope(environmentId, machineEnvironmentId) ||
       !activeThread ||
       isSendBusy ||
       isConnecting ||
@@ -5775,6 +5782,7 @@ function ChatViewContent(props: ChatViewProps) {
 
   const onProviderModelSelect = useCallback(
     (instanceId: ProviderInstanceId, model: string) => {
+      if (!isEnvironmentInMachineScope(environmentId, machineEnvironmentId)) return;
       if (!activeThread) return;
       // Look up the configured instance so model normalization and custom
       // model lookup stay scoped to that exact instance. Unknown instance ids
@@ -5841,7 +5849,9 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [
       activeThread,
+      environmentId,
       lockedProvider,
+      machineEnvironmentId,
       scheduleComposerFocus,
       setComposerDraftModelSelection,
       setStickyComposerModelSelection,
@@ -6584,6 +6594,10 @@ function ChatViewContent(props: ChatViewProps) {
 }
 
 export default function ChatView(props: ChatViewProps) {
+  const machineEnvironmentId = useMachineEnvironmentId();
+  if (!isEnvironmentInMachineScope(props.environmentId, machineEnvironmentId)) {
+    return null;
+  }
   return (
     <DiffWorkerPoolProvider>
       <ChatViewContent {...props} />
