@@ -1,5 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { HighlighterIcon, ListIcon, ListOrderedIcon, LoaderIcon, TypeIcon } from "lucide-react";
+import {
+  BoldIcon,
+  ChevronDownIcon,
+  HighlighterIcon,
+  ItalicIcon,
+  ListIcon,
+  ListOrderedIcon,
+  LoaderIcon,
+  PaletteIcon,
+  TypeIcon,
+  UnderlineIcon,
+} from "lucide-react";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { EnvironmentId, type EnvironmentId as EnvironmentIdType } from "@t3tools/contracts";
 
@@ -58,7 +69,10 @@ type ProjectTodoSheetProps = {
 const EMPTY_ENVIRONMENT_ID = EnvironmentId.make("environment-project-todo-sheet");
 
 function isMissingFileError(error: string | null): boolean {
-  return error !== null && /(enoent|not found|does not exist|no such file)/i.test(error);
+  return (
+    error !== null &&
+    /(enoent|not found|does not exist|no such file|failed to read workspace file)/i.test(error)
+  );
 }
 
 function normalizeEditorHtml(html: string): string {
@@ -84,12 +98,14 @@ function isHtmlEffectivelyEmpty(html: string): boolean {
 
 export function ProjectTodoSheet({ open, onOpenChange, project }: ProjectTodoSheetProps) {
   const editorRef = useRef<HTMLDivElement | null>(null);
+  const missingFileBootstrapRef = useRef<string | null>(null);
   const [draftHtml, setDraftHtml] = useState("");
   const [lastSavedHtml, setLastSavedHtml] = useState("");
   const [initializedProjectKey, setInitializedProjectKey] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isFocused, setIsFocused] = useState(false);
+  const [isCreatingInitialFile, setIsCreatingInitialFile] = useState(false);
   const writeProjectFile = useAtomCommand(projectEnvironment.writeFile, {
     reportFailure: false,
   });
@@ -107,6 +123,47 @@ export function ProjectTodoSheet({ open, onOpenChange, project }: ProjectTodoShe
   const loadError = fileQuery.error && !missingFile ? fileQuery.error : null;
   const isDirty = draftHtml !== lastSavedHtml;
   const isEmpty = useMemo(() => isHtmlEffectivelyEmpty(draftHtml), [draftHtml]);
+
+  useEffect(() => {
+    if (!open || !project || !missingFile || fileQuery.isPending || projectKey === null) return;
+    if (missingFileBootstrapRef.current === projectKey) return;
+
+    missingFileBootstrapRef.current = projectKey;
+    setSaveError(null);
+    setDraftHtml("");
+    setLastSavedHtml("");
+    setInitializedProjectKey(projectKey);
+    if (editorRef.current && editorRef.current.innerHTML !== "") {
+      editorRef.current.innerHTML = "";
+    }
+
+    setIsCreatingInitialFile(true);
+    setProjectFileQueryData(project.environmentId, project.workspaceRoot, TODO_FILE_PATH, "");
+    void (async () => {
+      const result = await writeProjectFile({
+        environmentId: project.environmentId,
+        input: {
+          cwd: project.workspaceRoot,
+          relativePath: TODO_FILE_PATH,
+          contents: "",
+        },
+      });
+      setIsCreatingInitialFile(false);
+      if (result._tag === "Success") {
+        confirmProjectFileQueryData(
+          project.environmentId,
+          project.workspaceRoot,
+          TODO_FILE_PATH,
+          "",
+        );
+        return;
+      }
+      clearProjectFileQueryData(project.environmentId, project.workspaceRoot, TODO_FILE_PATH);
+      missingFileBootstrapRef.current = null;
+      const error = squashAtomCommandFailure(result);
+      setSaveError(error instanceof Error ? error.message : "Could not create project todo.");
+    })();
+  }, [fileQuery.isPending, missingFile, open, project, projectKey, writeProjectFile]);
 
   useEffect(() => {
     if (!open || !project || fileQuery.isPending) return;
@@ -197,19 +254,21 @@ export function ProjectTodoSheet({ open, onOpenChange, project }: ProjectTodoShe
 
   const saveStateLabel = loadError
     ? "Load failed"
-    : isSaving
-      ? "Saving..."
-      : saveError
-        ? "Save failed"
-        : isDirty
-          ? "Unsaved changes"
-          : "Saved";
+    : isCreatingInitialFile
+      ? "Creating file..."
+      : isSaving
+        ? "Saving..."
+        : saveError
+          ? "Save failed"
+          : isDirty
+            ? "Unsaved changes"
+            : "Saved";
 
   return (
     <Sheet onOpenChange={onOpenChange} open={open}>
       <SheetPopup
         side="left"
-        className="w-[min(34rem,calc(100vw-var(--spacing(6))))]! max-w-[34rem]! border-e border-sidebar-border bg-sidebar surface-grain text-sidebar-foreground"
+        className="h-dvh! w-[min(42rem,100vw)]! max-w-[42rem]! rounded-none border-e border-sidebar-border bg-sidebar surface-grain text-sidebar-foreground shadow-2xl"
       >
         <SheetHeader className="gap-3 border-b border-sidebar-border/70 pb-4">
           <div className="flex items-start justify-between gap-3 pr-8">
@@ -223,53 +282,57 @@ export function ProjectTodoSheet({ open, onOpenChange, project }: ProjectTodoShe
             </div>
             <div className="pt-0.5 text-xs text-muted-foreground/75">{saveStateLabel}</div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <ToolbarButton
-              label="Bold"
-              onClick={() => runEditorCommand("bold")}
-              shortcut="⌘B"
-              textClassName="font-semibold"
-            />
-            <ToolbarButton
-              label="Italic"
-              onClick={() => runEditorCommand("italic")}
-              shortcut="⌘I"
-              textClassName="italic"
-            />
-            <ToolbarButton
-              label="Underline"
-              onClick={() => runEditorCommand("underline")}
-              shortcut="⌘U"
-              textClassName="underline"
-            />
-            <ToolbarButton
-              label="Bullets"
-              onClick={() => runEditorCommand("insertUnorderedList")}
-              icon={<ListIcon className="size-3.5" />}
-            />
-            <ToolbarButton
-              label="Numbering"
-              onClick={() => runEditorCommand("insertOrderedList")}
-              icon={<ListOrderedIcon className="size-3.5" />}
-            />
-            <ToolbarSelect
-              ariaLabel="Choose font"
-              icon={<TypeIcon className="size-3.5" />}
-              options={FONT_CHOICES}
-              onChange={(value) => runEditorCommand("fontName", value)}
-            />
-            <ToolbarSelect
-              ariaLabel="Choose text color"
-              icon={<span className="size-3.5 rounded-full border border-current" />}
-              options={TEXT_COLOR_CHOICES}
-              onChange={(value) => runEditorCommand("foreColor", value || "inherit")}
-            />
-            <ToolbarSelect
-              ariaLabel="Choose highlight color"
-              icon={<HighlighterIcon className="size-3.5" />}
-              options={HIGHLIGHT_CHOICES}
-              onChange={(value) => runEditorCommand("hiliteColor", value || "transparent")}
-            />
+          <div className="rounded-2xl border border-sidebar-border/75 bg-sidebar-control-surface/90 p-2 shadow-sm">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <ToolbarIconButton
+                label="Bold"
+                onClick={() => runEditorCommand("bold")}
+                icon={<BoldIcon className="size-4" />}
+              />
+              <ToolbarIconButton
+                label="Italic"
+                onClick={() => runEditorCommand("italic")}
+                icon={<ItalicIcon className="size-4" />}
+              />
+              <ToolbarIconButton
+                label="Underline"
+                onClick={() => runEditorCommand("underline")}
+                icon={<UnderlineIcon className="size-4" />}
+              />
+              <ToolbarDivider />
+              <ToolbarIconButton
+                label="Bullets"
+                onClick={() => runEditorCommand("insertUnorderedList")}
+                icon={<ListIcon className="size-4" />}
+              />
+              <ToolbarIconButton
+                label="Numbering"
+                onClick={() => runEditorCommand("insertOrderedList")}
+                icon={<ListOrderedIcon className="size-4" />}
+              />
+              <ToolbarDivider />
+              <ToolbarSelect
+                ariaLabel="Choose font"
+                label="Font"
+                icon={<TypeIcon className="size-4" />}
+                options={FONT_CHOICES}
+                onChange={(value) => runEditorCommand("fontName", value)}
+              />
+              <ToolbarSelect
+                ariaLabel="Choose text color"
+                label="Text"
+                icon={<PaletteIcon className="size-4" />}
+                options={TEXT_COLOR_CHOICES}
+                onChange={(value) => runEditorCommand("foreColor", value || "inherit")}
+              />
+              <ToolbarSelect
+                ariaLabel="Choose highlight color"
+                label="Highlight"
+                icon={<HighlighterIcon className="size-4" />}
+                options={HIGHLIGHT_CHOICES}
+                onChange={(value) => runEditorCommand("hiliteColor", value || "transparent")}
+              />
+            </div>
           </div>
         </SheetHeader>
         <SheetPanel className="h-full min-h-0 p-4">
@@ -284,10 +347,11 @@ export function ProjectTodoSheet({ open, onOpenChange, project }: ProjectTodoShe
               isFocused && "ring-2 ring-ring/40",
             )}
           >
-            {fileQuery.isPending && initializedProjectKey !== projectKey ? (
+            {(fileQuery.isPending && initializedProjectKey !== projectKey) ||
+            isCreatingInitialFile ? (
               <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground/70">
                 <LoaderIcon className="mr-2 size-4 animate-spin" />
-                Loading todo…
+                {isCreatingInitialFile ? "Creating project todo..." : "Loading todo…"}
               </div>
             ) : null}
             {isEmpty && !isFocused ? (
@@ -297,7 +361,7 @@ export function ProjectTodoSheet({ open, onOpenChange, project }: ProjectTodoShe
             ) : null}
             <div
               ref={editorRef}
-              className="min-h-[24rem] px-4 py-4 text-sm leading-6 outline-none [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_font]:inherit [&_li]:my-1 [&_ol]:ml-5 [&_ol]:list-decimal [&_p]:my-2 [&_strong]:font-semibold [&_u]:underline [&_ul]:ml-5 [&_ul]:list-disc"
+              className="min-h-[24rem] px-5 py-4 text-[15px] leading-7 outline-none [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_font]:inherit [&_li]:my-1 [&_ol]:ml-5 [&_ol]:list-decimal [&_p]:my-2 [&_strong]:font-semibold [&_u]:underline [&_ul]:ml-5 [&_ul]:list-disc"
               contentEditable
               onFocus={() => setIsFocused(true)}
               onBlur={() => setIsFocused(false)}
@@ -312,42 +376,40 @@ export function ProjectTodoSheet({ open, onOpenChange, project }: ProjectTodoShe
   );
 }
 
-function ToolbarButton(props: {
-  label: string;
-  onClick: () => void;
-  shortcut?: string;
-  textClassName?: string;
-  icon?: ReactNode;
-}) {
+function ToolbarIconButton(props: { label: string; onClick: () => void; icon: ReactNode }) {
   return (
     <Button
       type="button"
-      size="sm"
-      variant="outline"
-      className="h-8 gap-1.5 rounded-md border-sidebar-border bg-sidebar-control-surface px-2.5 text-xs"
+      size="icon-sm"
+      variant="ghost"
+      className="size-9 rounded-lg text-muted-foreground hover:bg-background hover:text-foreground"
       onClick={props.onClick}
+      title={props.label}
+      aria-label={props.label}
     >
       {props.icon}
-      <span className={props.textClassName}>{props.label}</span>
-      {props.shortcut ? (
-        <span className="text-[10px] text-muted-foreground/70">{props.shortcut}</span>
-      ) : null}
     </Button>
   );
 }
 
+function ToolbarDivider() {
+  return <div className="mx-1 h-6 w-px shrink-0 bg-sidebar-border/70" aria-hidden="true" />;
+}
+
 function ToolbarSelect(props: {
   ariaLabel: string;
+  label: string;
   icon: ReactNode;
   options: ReadonlyArray<{ label: string; value: string }>;
   onChange: (value: string) => void;
 }) {
   return (
-    <label className="flex h-8 items-center gap-1.5 rounded-md border border-sidebar-border bg-sidebar-control-surface px-2.5 text-xs text-muted-foreground">
+    <label className="relative flex h-9 items-center gap-2 rounded-lg border border-sidebar-border/80 bg-background/85 px-3 text-sm text-muted-foreground">
       {props.icon}
+      <span className="font-medium text-foreground/90">{props.label}</span>
       <select
         aria-label={props.ariaLabel}
-        className="min-w-0 bg-transparent text-foreground outline-none"
+        className="min-w-0 appearance-none bg-transparent pr-6 text-foreground outline-none"
         defaultValue=""
         onChange={(event) => {
           props.onChange(event.target.value);
@@ -355,7 +417,7 @@ function ToolbarSelect(props: {
         }}
       >
         <option value="" disabled>
-          {props.ariaLabel}
+          {props.label}
         </option>
         {props.options.map((option) => (
           <option key={`${props.ariaLabel}:${option.label}:${option.value}`} value={option.value}>
@@ -363,6 +425,7 @@ function ToolbarSelect(props: {
           </option>
         ))}
       </select>
+      <ChevronDownIcon className="pointer-events-none absolute right-2.5 size-4 text-muted-foreground/70" />
     </label>
   );
 }
