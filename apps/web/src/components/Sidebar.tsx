@@ -83,9 +83,9 @@ import { isTerminalFocused } from "../lib/terminalFocus";
 import { cn, isMacPlatform } from "../lib/utils";
 import {
   readThreadShell,
+  useEnvironmentProjects,
+  useEnvironmentThreadShells,
   useProject,
-  useProjects,
-  useThreadShells,
   useThreadShellsForProjectRefs,
 } from "../state/entities";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
@@ -120,7 +120,7 @@ import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
 import { threadEnvironment, useEnvironmentThread } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
-import { useEnvironment, useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
+import { useEnvironment, useEnvironments, useMachineEnvironmentId } from "../state/environments";
 import {
   buildThreadRouteParams,
   resolveActiveThreadRouteRef,
@@ -390,7 +390,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     reportFailure: false,
   });
   const environment = useEnvironment(thread.environmentId);
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const primaryEnvironmentId = useMachineEnvironmentId();
   const isRemoteThread =
     primaryEnvironmentId !== null && thread.environmentId !== primaryEnvironmentId;
   const remoteEnvLabel = environment?.label ?? null;
@@ -3174,8 +3174,9 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
 });
 
 export default function Sidebar() {
-  const projects = useProjects();
-  const sidebarThreads = useThreadShells();
+  const machineEnvironmentId = useMachineEnvironmentId();
+  const projects = useEnvironmentProjects(machineEnvironmentId);
+  const sidebarThreads = useEnvironmentThreadShells(machineEnvironmentId);
   const projectExpandedById = useUiStateStore((store) => store.projectExpandedById);
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const reorderProjects = useUiStateStore((store) => store.reorderProjects);
@@ -3225,7 +3226,7 @@ export default function Sidebar() {
   const platform = navigator.platform;
   const shortcutModifiers = useShortcutModifierState();
   const { environments } = useEnvironments();
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const primaryEnvironmentId = machineEnvironmentId;
   const environmentLabelById = useMemo(
     () =>
       new Map(

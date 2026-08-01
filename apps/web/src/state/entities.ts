@@ -4,6 +4,7 @@ import type {
   EnvironmentThread,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
+import { scopeProject, scopeThreadShell } from "@t3tools/client-runtime/state/models";
 import {
   type EnvironmentThreadStatus,
   mergeEnvironmentThread,
@@ -35,6 +36,9 @@ const EMPTY_PROPOSED_PLANS: ReadonlyArray<OrchestrationProposedPlan> = Object.fr
 const EMPTY_PROJECT_ATOM = Atom.make<EnvironmentProject | null>(null).pipe(
   Atom.withLabel("web-project:empty"),
 );
+const EMPTY_PROJECTS_ATOM = Atom.make<ReadonlyArray<EnvironmentProject>>([]).pipe(
+  Atom.withLabel("web-projects:empty"),
+);
 const EMPTY_PROJECT_REFS_ATOM = Atom.make(EMPTY_PROJECT_REFS).pipe(
   Atom.withLabel("web-project-refs:empty"),
 );
@@ -43,6 +47,9 @@ const EMPTY_THREAD_REFS_ATOM = Atom.make(EMPTY_THREAD_REFS).pipe(
 );
 const EMPTY_THREAD_SHELL_ATOM = Atom.make<EnvironmentThreadShell | null>(null).pipe(
   Atom.withLabel("web-thread-shell:empty"),
+);
+const EMPTY_THREAD_SHELLS_ATOM = Atom.make<ReadonlyArray<EnvironmentThreadShell>>([]).pipe(
+  Atom.withLabel("web-thread-shells:empty"),
 );
 const EMPTY_THREAD_DETAIL_ATOM = Atom.make<EnvironmentThread | null>(null).pipe(
   Atom.withLabel("web-thread-detail:empty"),
@@ -84,6 +91,21 @@ export function useProjectRefs(): ReadonlyArray<ScopedProjectRef> {
   return useAtomValue(environmentProjects.projectRefsAtom);
 }
 
+export function useEnvironmentProjects(
+  environmentId: EnvironmentId | null,
+): ReadonlyArray<EnvironmentProject> {
+  const projects = useAtomValue(
+    environmentId === null
+      ? EMPTY_PROJECTS_ATOM
+      : environmentProjects.environmentProjectsAtom(environmentId),
+  );
+  return useMemo(
+    () =>
+      environmentId === null ? [] : projects.map((project) => scopeProject(environmentId, project)),
+    [environmentId, projects],
+  );
+}
+
 export function useThreadRefs(): ReadonlyArray<ScopedThreadRef> {
   return useAtomValue(environmentThreadShells.threadRefsAtom);
 }
@@ -118,6 +140,23 @@ export function useServerConfigs(): ReadonlyMap<EnvironmentId, ServerConfig> {
 
 export function useThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
   return useAtomValue(environmentThreadShells.threadShellsAtom);
+}
+
+export function useEnvironmentThreadShells(
+  environmentId: EnvironmentId | null,
+): ReadonlyArray<EnvironmentThreadShell> {
+  const threads = useAtomValue(
+    environmentId === null
+      ? EMPTY_THREAD_SHELLS_ATOM
+      : environmentThreadShells.environmentThreadsAtom(environmentId),
+  );
+  return useMemo(
+    () =>
+      environmentId === null
+        ? []
+        : threads.map((thread) => scopeThreadShell(environmentId, thread)),
+    [environmentId, threads],
+  );
 }
 
 export function useAllEnvironmentShellsBootstrapped(): boolean {

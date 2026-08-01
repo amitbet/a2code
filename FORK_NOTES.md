@@ -3,6 +3,31 @@
 This file tracks fork-specific divergences that are likely to conflict when
 merging `upstream/main`.
 
+## 2026-08-01 fork feature (machine-scoped environment selector) — merge notes
+
+The web UI now has a persisted, machine-wide environment selector. The active
+environment is selected once from `MachineSwitcher` in the sidebar, and the
+sidebar, landing page, command palette, project creation flow, and new-thread
+defaults only expose projects and threads from that environment. Switching
+environments leaves a project route that belongs to the previous environment.
+The per-thread environment picker was removed from `ChatView`; project/thread
+records still retain their underlying `environmentId` associations.
+
+- **State and selector:** `apps/web/src/state/machineScope.ts` owns the
+  persisted selection (`t3code:machine-scope:v1`), fallback resolution, and
+  `apps/web/src/components/sidebar/MachineSwitcher.tsx` owns the sidebar UI.
+  `apps/web/src/state/environments.ts` exposes the shared hook/setter.
+- **Scoped projections:** `apps/web/src/state/entities.ts` provides
+  machine-scoped project and thread-shell hooks. `Sidebar.tsx`, `SidebarV2.tsx`,
+  `_chat.tsx`, `_chat.index.tsx`, `CommandPalette.tsx`,
+  `DraftHeroHeadline.tsx`, and `useHandleNewThread.ts` consume these hooks.
+- **Merge hotspots:** preserve the selector and scoped projections when
+  upstream changes environment catalogs, route handling, sidebar grouping,
+  project/thread aggregation, new-thread defaults, or `ChatView`/
+  `BranchToolbar` environment controls. Reconcile those files additively;
+  accepting upstream versions wholesale would restore cross-machine projects
+  or the per-thread environment prompt.
+
 ## 2026-07-30 upstream merge (project file picker, thread content search, docs split) — migration notes
 
 Merged `upstream/main` through `323dc321a` (103 commits). Notable integrations:

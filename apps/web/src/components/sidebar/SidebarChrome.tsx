@@ -24,6 +24,7 @@ import {
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdatePill } from "./SidebarUpdatePill";
+import { MachineSwitcher } from "./MachineSwitcher";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
@@ -57,6 +58,7 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
         )}
       />
       <SidebarBrand onBackdrop={backdropVariant !== null} />
+      <MachineSwitcher onBackdrop={backdropVariant !== null} />
       {pillLabel ? (
         <Badge
           className="relative z-10 ml-1 rounded-full px-1.5 text-muted-foreground"

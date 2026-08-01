@@ -90,8 +90,8 @@ import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings, useUpdateClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useNowMinute } from "../hooks/useNowMinute";
-import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
-import { useProjects, useThreadShells } from "../state/entities";
+import { useEnvironments, useMachineEnvironmentId } from "../state/environments";
+import { useEnvironmentProjects, useEnvironmentThreadShells } from "../state/entities";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
 import { vcsEnvironment } from "../state/vcs";
 import { threadEnvironment } from "../state/threads";
@@ -1072,9 +1072,10 @@ function latestTurnDiff(
 }
 
 export default function SidebarV2() {
-  const projects = useProjects();
+  const machineEnvironmentId = useMachineEnvironmentId();
+  const projects = useEnvironmentProjects(machineEnvironmentId);
   const projectOrder = useUiStateStore((store) => store.projectOrder);
-  const threads = useThreadShells();
+  const threads = useEnvironmentThreadShells(machineEnvironmentId);
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -1145,7 +1146,7 @@ export default function SidebarV2() {
     setTodoProject(project);
   }, []);
   const { environments } = useEnvironments();
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const primaryEnvironmentId = machineEnvironmentId;
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
   const toggleThreadSelection = useThreadSelectionStore((s) => s.toggleThread);

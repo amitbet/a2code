@@ -67,8 +67,12 @@ import { useEnvironmentQuery } from "../state/query";
 import { sourceControlEnvironment } from "../state/sourceControl";
 import { useAtomCommand } from "../state/use-atom-command";
 import { useAtomQueryRunner } from "../state/use-atom-query-runner";
-import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
-import { useProjects, useThreadShells } from "../state/entities";
+import {
+  useEnvironments,
+  useMachineEnvironmentId,
+  usePrimaryEnvironmentId,
+} from "../state/environments";
+import { useEnvironmentProjects, useEnvironmentThreadShells } from "../state/entities";
 import { useThreadSearch } from "../state/queries";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
 import { getEnvironmentBrowsePlatform } from "../lib/environmentPlatform";
@@ -534,21 +538,26 @@ function OpenCommandPaletteDialog(props: {
   });
   const { environments } = useEnvironments();
   const desktopLocalBootstraps = useDesktopLocalBootstraps();
+  const machineEnvironmentId = useMachineEnvironmentId();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
-  const projects = useProjects();
+  const projects = useEnvironmentProjects(machineEnvironmentId);
   const projectOrder = useUiStateStore((store) => store.projectOrder);
-  const threads = useThreadShells();
+  const threads = useEnvironmentThreadShells(machineEnvironmentId);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const [viewStack, setViewStack] = useState<CommandPaletteView[]>([]);
   const currentView = viewStack.at(-1) ?? null;
   const environmentIds = useMemo(
     () =>
       environments
-        .filter((environment) => environment.connection.phase === "connected")
+        .filter(
+          (environment) =>
+            environment.connection.phase === "connected" &&
+            environment.environmentId === machineEnvironmentId,
+        )
         .map((environment) => environment.environmentId),
-    [environments],
+    [environments, machineEnvironmentId],
   );
   const threadSearchQuery = currentView === null && !isActionsOnly ? deferredQuery : "";
   const threadSearch = useThreadSearch(environmentIds, threadSearchQuery);
@@ -608,14 +617,14 @@ function OpenCommandPaletteDialog(props: {
       buildSidebarProjectSnapshots({
         projects: clientSettings.sidebarProjectSortOrder === "manual" ? orderedProjects : projects,
         settings: projectGroupingSettings,
-        primaryEnvironmentId,
+        primaryEnvironmentId: machineEnvironmentId,
         resolveEnvironmentLabel: (environmentId) => environmentLabelById.get(environmentId) ?? null,
       }),
     [
       clientSettings.sidebarProjectSortOrder,
       environmentLabelById,
       orderedProjects,
-      primaryEnvironmentId,
+      machineEnvironmentId,
       projectGroupingSettings,
       projects,
     ],
@@ -667,20 +676,22 @@ function OpenCommandPaletteDialog(props: {
   );
 
   const addProjectEnvironmentOptions = useMemo(() => {
-    const options = environments.map((environment): AddProjectEnvironmentOption => {
-      const isPrimary = environment.entry.target._tag === "PrimaryConnectionTarget";
-      return {
-        environmentId: environment.environmentId,
-        label: resolveEnvironmentOptionLabel({
-          isPrimary,
+    const options = environments
+      .filter((environment) => environment.environmentId === machineEnvironmentId)
+      .map((environment): AddProjectEnvironmentOption => {
+        const isPrimary = environment.entry.target._tag === "PrimaryConnectionTarget";
+        return {
           environmentId: environment.environmentId,
-          runtimeLabel: environment.label,
-        }),
-        isPrimary,
-        isConnected: canCreateProjectInEnvironment(environment.connection.phase),
-        status: connectionStatusText(environment.connection),
-      };
-    });
+          label: resolveEnvironmentOptionLabel({
+            isPrimary,
+            environmentId: environment.environmentId,
+            runtimeLabel: environment.label,
+          }),
+          isPrimary,
+          isConnected: canCreateProjectInEnvironment(environment.connection.phase),
+          status: connectionStatusText(environment.connection),
+        };
+      });
 
     options.sort((left, right) => {
       if (left.isPrimary !== right.isPrimary) {
@@ -690,7 +701,7 @@ function OpenCommandPaletteDialog(props: {
     });
 
     return options;
-  }, [environments]);
+  }, [environments, machineEnvironmentId]);
   const defaultAddProjectEnvironmentId =
     addProjectEnvironmentOptions.find((option) => option.isConnected)?.environmentId ?? null;
   const wslAddProjectEnvironmentOption = useMemo(

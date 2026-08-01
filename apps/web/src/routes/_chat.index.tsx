@@ -11,10 +11,10 @@ import { SidebarInset } from "../components/ui/sidebar";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import {
   useAllEnvironmentShellsBootstrapped,
-  useProjects,
-  useThreadShells,
+  useEnvironmentProjects,
+  useEnvironmentThreadShells,
 } from "../state/entities";
-import { useEnvironments } from "../state/environments";
+import { useEnvironments, useMachineEnvironmentId } from "../state/environments";
 import { APP_DISPLAY_NAME } from "~/branding";
 import { hasCloudPublicConfig } from "~/cloud/publicConfig";
 import { cn } from "~/lib/utils";
@@ -37,8 +37,9 @@ function ChatIndexRouteView() {
  * end. Falls back to an add-project hero when no project exists yet.
  */
 function IndexDraftLanding() {
-  const projects = useProjects();
-  const threads = useThreadShells();
+  const machineEnvironmentId = useMachineEnvironmentId();
+  const projects = useEnvironmentProjects(machineEnvironmentId);
+  const threads = useEnvironmentThreadShells(machineEnvironmentId);
   const bootstrapped = useAllEnvironmentShellsBootstrapped();
   const handleNewThread = useNewThreadHandler();
   const startingRef = useRef(false);
