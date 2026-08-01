@@ -1,12 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import * as NodeUtil from "node:util";
 
 import type { ProviderRateLimitSnapshot, ProviderRateLimitWindow } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -16,6 +13,7 @@ import {
   HttpClientRequest,
   HttpClientResponse,
 } from "effect/unstable/http";
+import { invalidateMacOSKeychainPassword, readMacOSKeychainPassword } from "./MacOSKeychain.ts";
 
 // ---------------------------------------------------------------------------
 // Claude.ai subscription usage endpoint. This mirrors the request Claude Code
@@ -55,11 +53,16 @@ const UtilizationSchema = Schema.Struct({
 });
 type Utilization = typeof UtilizationSchema.Type;
 
-const execFileAsync = NodeUtil.promisify(NodeChildProcess.execFile);
-
 interface StoredOAuth {
   readonly accessToken: string;
   readonly expiresAt: number | null;
+}
+
+type ClaudeCredentialSource = "environment" | "file" | "keychain";
+
+interface ClaudeOAuthCredential {
+  readonly accessToken: string;
+  readonly source: ClaudeCredentialSource;
 }
 
 function parseStoredOAuth(raw: string): StoredOAuth | null {
@@ -83,11 +86,13 @@ function parseStoredOAuth(raw: string): StoredOAuth | null {
  * env override → credentials file under the Claude config dir → macOS keychain.
  * Returns null when no usable (non-expired) token is found.
  */
-const readClaudeOAuthToken = (homePath: string | undefined): Effect.Effect<string | null> =>
+const readClaudeOAuthToken = (
+  homePath: string | undefined,
+): Effect.Effect<ClaudeOAuthCredential | null> =>
   Effect.gen(function* () {
     const envToken = process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim();
     if (envToken) {
-      return envToken;
+      return { accessToken: envToken, source: "environment" as const };
     }
 
     const trimmedHome = homePath?.trim();
@@ -106,25 +111,16 @@ const readClaudeOAuthToken = (homePath: string | undefined): Effect.Effect<strin
       Effect.map(parseStoredOAuth),
       Effect.orElseSucceed(() => null),
     );
-    const hostPlatform = yield* HostProcessPlatform;
-
-    const stored =
-      fromFile ??
-      (hostPlatform === "darwin"
-        ? yield* Effect.tryPromise(() =>
-            execFileAsync("security", [
-              "find-generic-password",
-              "-a",
-              NodeOS.userInfo().username,
-              "-w",
-              "-s",
-              KEYCHAIN_SERVICE,
-            ]),
-          ).pipe(
-            Effect.map((result) => parseStoredOAuth(result.stdout)),
-            Effect.orElseSucceed(() => null),
-          )
-        : null);
+    let stored = fromFile;
+    let source: "file" | "keychain" = "file";
+    if (stored === null) {
+      const raw = yield* readMacOSKeychainPassword({
+        account: NodeOS.userInfo().username,
+        service: KEYCHAIN_SERVICE,
+      });
+      stored = raw ? parseStoredOAuth(raw) : null;
+      source = "keychain";
+    }
 
     if (!stored) {
       return null;
@@ -133,9 +129,15 @@ const readClaudeOAuthToken = (homePath: string | undefined): Effect.Effect<strin
     // out of band; calling with an expired token would just 401.
     const nowMs = yield* Clock.currentTimeMillis;
     if (stored.expiresAt !== null && stored.expiresAt <= nowMs) {
+      if (source === "keychain") {
+        invalidateMacOSKeychainPassword({
+          account: NodeOS.userInfo().username,
+          service: KEYCHAIN_SERVICE,
+        });
+      }
       return null;
     }
-    return stored.accessToken;
+    return { accessToken: stored.accessToken, source };
   });
 
 const fetchUtilization = (
@@ -232,12 +234,18 @@ export const fetchClaudeUsageSnapshot = (
   homePath: string | undefined,
 ): Effect.Effect<ProviderRateLimitSnapshot | null> =>
   Effect.gen(function* () {
-    const token = yield* readClaudeOAuthToken(homePath);
-    if (!token) {
+    const credential = yield* readClaudeOAuthToken(homePath);
+    if (!credential) {
       return null;
     }
-    const utilization = yield* fetchUtilization(token);
+    const utilization = yield* fetchUtilization(credential.accessToken);
     if (!utilization) {
+      if (credential.source === "keychain") {
+        invalidateMacOSKeychainPassword({
+          account: NodeOS.userInfo().username,
+          service: KEYCHAIN_SERVICE,
+        });
+      }
       return null;
     }
     return normalizeClaudeUtilization(utilization);

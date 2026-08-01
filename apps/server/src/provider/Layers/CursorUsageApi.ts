@@ -1,10 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeProcess from "node:process";
-import * as NodeUtil from "node:util";
 
 import type { ProviderRateLimitSnapshot, ProviderRateLimitWindow } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -15,6 +13,7 @@ import {
   HttpClientRequest,
   HttpClientResponse,
 } from "effect/unstable/http";
+import { invalidateMacOSKeychainPassword, readMacOSKeychainPassword } from "./MacOSKeychain.ts";
 
 const DEFAULT_API_ENDPOINT = "https://api2.cursor.sh";
 const CURRENT_PERIOD_USAGE_PATH = "/aiserver.v1.DashboardService/GetCurrentPeriodUsage";
@@ -67,8 +66,6 @@ export interface CursorUsageApiOptions {
   readonly apiEndpoint?: string | undefined;
   readonly environment?: NodeJS.ProcessEnv | undefined;
 }
-
-const execFileAsync = NodeUtil.promisify(NodeChildProcess.execFile);
 
 function envValue(environment: NodeJS.ProcessEnv | undefined, name: string): string | undefined {
   const value = environment?.[name] ?? NodeProcess.env[name];
@@ -146,67 +143,59 @@ function cursorAuthFilePath(environment: NodeJS.ProcessEnv | undefined): string 
  * fallback is retained for non-macOS installs and older CLI configurations.
  * Neither path is logged or written by this integration.
  */
+type CursorCredentialSource = "environment" | "keychain" | "file";
+
+interface CursorCredential {
+  readonly value: string;
+  readonly source: CursorCredentialSource;
+}
+
 const readCursorAccessToken = (
   environment: NodeJS.ProcessEnv | undefined,
-): Effect.Effect<string | null> =>
+): Effect.Effect<CursorCredential | null> =>
   Effect.gen(function* () {
     const environmentToken = explicitEnvValue(environment, "CURSOR_ACCESS_TOKEN");
     if (environmentToken.present) {
-      return environmentToken.value;
-    }
-
-    const fromKeychain =
-      NodeProcess.platform === "darwin"
-        ? yield* Effect.tryPromise(() =>
-            execFileAsync("security", [
-              "find-generic-password",
-              "-a",
-              KEYCHAIN_ACCOUNT,
-              "-s",
-              KEYCHAIN_SERVICE,
-              "-w",
-            ]),
-          ).pipe(
-            Effect.map((result) => result.stdout.trim() || null),
-            Effect.orElseSucceed(() => null),
-          )
+      return environmentToken.value
+        ? { value: environmentToken.value, source: "environment" as const }
         : null;
-    if (fromKeychain) {
-      return fromKeychain;
     }
 
-    return yield* Effect.tryPromise(() =>
+    const fromKeychain = yield* readMacOSKeychainPassword({
+      account: KEYCHAIN_ACCOUNT,
+      service: KEYCHAIN_SERVICE,
+    });
+    if (fromKeychain) {
+      return { value: fromKeychain, source: "keychain" };
+    }
+
+    const fromFile = yield* Effect.tryPromise(() =>
       NodeFSP.readFile(cursorAuthFilePath(environment), "utf8"),
     ).pipe(
       Effect.map(parseCursorAuth),
       Effect.orElseSucceed(() => null),
     );
+    return fromFile ? { value: fromFile, source: "file" } : null;
   });
 
 const readCursorApiKey = (
   environment: NodeJS.ProcessEnv | undefined,
-): Effect.Effect<string | null> =>
+): Effect.Effect<CursorCredential | null> =>
   Effect.gen(function* () {
     const environmentApiKey = explicitEnvValue(environment, "CURSOR_API_KEY");
     if (environmentApiKey.present) {
-      return environmentApiKey.value;
+      return environmentApiKey.value
+        ? { value: environmentApiKey.value, source: "environment" as const }
+        : null;
     }
     if (NodeProcess.platform !== "darwin") {
       return null;
     }
-    return yield* Effect.tryPromise(() =>
-      execFileAsync("security", [
-        "find-generic-password",
-        "-a",
-        KEYCHAIN_ACCOUNT,
-        "-s",
-        KEYCHAIN_API_KEY_SERVICE,
-        "-w",
-      ]),
-    ).pipe(
-      Effect.map((result) => result.stdout.trim() || null),
-      Effect.orElseSucceed(() => null),
-    );
+    const fromKeychain = yield* readMacOSKeychainPassword({
+      account: KEYCHAIN_ACCOUNT,
+      service: KEYCHAIN_API_KEY_SERVICE,
+    });
+    return fromKeychain ? { value: fromKeychain, source: "keychain" as const } : null;
   });
 
 const ApiKeyExchangeResponseSchema = Schema.Struct({
@@ -407,31 +396,53 @@ export const fetchCursorUsageSnapshot = (
     // Per-instance credentials must win over the global macOS Keychain. This
     // prevents two Cursor provider instances configured for different accounts
     // from accidentally using the same Keychain access token.
-    const directToken = configuredAccessToken.present
+    const directCredential = configuredAccessToken.present
       ? configuredAccessToken.value
+        ? { value: configuredAccessToken.value, source: "environment" as const }
+        : null
       : configuredApiKey.present
         ? null
         : yield* readCursorAccessToken(options.environment);
-    const apiKey = configuredApiKey.present
+    const apiKeyCredential = configuredApiKey.present
       ? configuredApiKey.value
+        ? { value: configuredApiKey.value, source: "environment" as const }
+        : null
       : configuredAccessToken.present
         ? null
         : yield* readCursorApiKey(options.environment);
 
-    if (directToken) {
-      const response = yield* fetchCurrentPeriodUsage(apiEndpoint, directToken);
+    if (directCredential) {
+      const response = yield* fetchCurrentPeriodUsage(apiEndpoint, directCredential.value);
       if (response) {
         return normalizeCursorUsage(response);
       }
+      if (directCredential.source === "keychain") {
+        invalidateMacOSKeychainPassword({
+          account: KEYCHAIN_ACCOUNT,
+          service: KEYCHAIN_SERVICE,
+        });
+      }
     }
 
-    if (!apiKey) {
+    if (!apiKeyCredential) {
       return null;
     }
-    const exchangedToken = yield* exchangeApiKey(apiEndpoint, apiKey);
-    if (!exchangedToken || exchangedToken === directToken) {
+    const exchangedToken = yield* exchangeApiKey(apiEndpoint, apiKeyCredential.value);
+    if (!exchangedToken || exchangedToken === directCredential?.value) {
+      if (apiKeyCredential.source === "keychain") {
+        invalidateMacOSKeychainPassword({
+          account: KEYCHAIN_ACCOUNT,
+          service: KEYCHAIN_API_KEY_SERVICE,
+        });
+      }
       return null;
     }
     const response = yield* fetchCurrentPeriodUsage(apiEndpoint, exchangedToken);
+    if (!response && apiKeyCredential.source === "keychain") {
+      invalidateMacOSKeychainPassword({
+        account: KEYCHAIN_ACCOUNT,
+        service: KEYCHAIN_API_KEY_SERVICE,
+      });
+    }
     return response ? normalizeCursorUsage(response) : null;
   }).pipe(Effect.provide(FetchHttpClient.layer));

@@ -1,18 +1,15 @@
-name: Build Artifacts
+name: Build Installers
 
 on:
   workflow_dispatch:
     inputs:
-      release_tag:
-        description: "Existing release tag to attach the Android standalone APK to (optional, for example v1.2.3)"
-        required: false
-        type: string
       android_variant:
-        description: "Mobile Android app variant to build."
-        required: true
-        default: preview
+        description: "Android app variant to build (auto matches the latest release channel)."
+        required: false
+        default: auto
         type: choice
         options:
+          - auto
           - preview
           - production
 
@@ -20,11 +17,51 @@ permissions:
   contents: read
 
 jobs:
+  resolve_latest_release:
+    name: Resolve latest existing release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.release_meta.outputs.tag }}
+      version: ${{ steps.release_meta.outputs.version }}
+      android_variant: ${{ steps.release_meta.outputs.android_variant }}
+    steps:
+      - id: release_meta
+        name: Resolve release metadata
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release_json="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName,isPrerelease)"
+          tag="$(jq -r '.tagName' <<< "$release_json")"
+          is_prerelease="$(jq -r '.isPrerelease' <<< "$release_json")"
+          version="${tag#v}"
+
+          if [[ -z "$tag" || "$tag" == "$version" ]]; then
+            echo "The latest release has no v-prefixed tag." >&2
+            exit 1
+          fi
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Latest release tag has unexpected format: $tag" >&2
+            exit 1
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$is_prerelease" == "true" ]]; then
+            echo "android_variant=preview" >> "$GITHUB_OUTPUT"
+          else
+            echo "android_variant=production" >> "$GITHUB_OUTPUT"
+          fi
+
   build_android_standalone_apk:
     name: Build Android standalone APK
+    needs: resolve_latest_release
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    continue-on-error: ${{ inputs.release_tag == '' }}
     permissions:
       contents: write
     env:
@@ -60,19 +97,29 @@ jobs:
           # broken-pipe exit so pipefail doesn't fail an otherwise-OK step.
           ( yes 2>/dev/null || true ) | "$SDKMANAGER" --licenses >/dev/null
 
+      - id: android_variant
+        name: Resolve Android build variant
+        shell: bash
+        run: |
+          variant="${{ inputs.android_variant }}"
+          if [[ "$variant" == "auto" ]]; then
+            variant="${{ needs.resolve_latest_release.outputs.android_variant }}"
+          fi
+          if [[ "$variant" != "preview" && "$variant" != "production" ]]; then
+            echo "Unsupported Android variant: $variant" >&2
+            exit 1
+          fi
+          echo "variant=$variant" >> "$GITHUB_OUTPUT"
+
       - name: Prebuild Android project
         shell: bash
         run: |
-          case "${{ inputs.android_variant }}" in
+          case "${{ steps.android_variant.outputs.variant }}" in
             preview)
               vp run --filter @t3tools/mobile prebuild:android:ci
               ;;
             production)
               vp run --filter @t3tools/mobile prebuild:android:prod:ci
-              ;;
-            *)
-              echo "Unsupported Android variant: ${{ inputs.android_variant }}" >&2
-              exit 1
               ;;
           esac
 
@@ -89,25 +136,25 @@ jobs:
         if: ${{ success() }}
         uses: actions/upload-artifact@v7
         with:
-          name: mobile-android-${{ inputs.android_variant }}-standalone-apk
+          name: mobile-android-${{ steps.android_variant.outputs.variant }}-standalone-apk
           path: apps/mobile/android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 7
 
       - name: Verify target release
-        if: ${{ success() && inputs.release_tag != '' }}
+        if: ${{ success() }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_TAG: ${{ needs.resolve_latest_release.outputs.tag }}
         run: gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
 
       - name: Upload Android APK to release
-        if: ${{ success() && inputs.release_tag != '' }}
+        if: ${{ success() }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
+          RELEASE_TAG: ${{ needs.resolve_latest_release.outputs.tag }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -120,6 +167,7 @@ jobs:
 
   build_macos_arm64:
     name: Build macOS arm64
+    needs: resolve_latest_release
     runs-on: macos-15
     timeout-minutes: 30
     steps:
@@ -133,11 +181,8 @@ jobs:
           cache: true
           run-install: true
 
-      - id: build_meta
-        name: Resolve build version
-        shell: bash
-        run: |
-          echo "version=0.0.0-dev.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+      - name: Align package versions to release version
+        run: node scripts/update-release-package-versions.ts "${{ needs.resolve_latest_release.outputs.version }}"
 
       - name: Cache Electron download
         uses: actions/cache@v4
@@ -160,7 +205,7 @@ jobs:
             --platform mac \
             --target dmg \
             --arch arm64 \
-            --build-version "${{ steps.build_meta.outputs.version }}" \
+            --build-version "${{ needs.resolve_latest_release.outputs.version }}" \
             --verbose
 
       - name: Collect build artifacts
@@ -183,76 +228,33 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  build_macos_x64:
-    name: Build macOS x64
-    runs-on: macos-15-intel
-    timeout-minutes: 30
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Vite+
-        uses: voidzero-dev/setup-vp@v1
-        with:
-          node-version-file: package.json
-          cache: true
-          run-install: true
-
-      - id: build_meta
-        name: Resolve build version
+      - name: Verify target release
+        if: ${{ success() }}
         shell: bash
-        run: |
-          echo "version=0.0.0-dev.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve_latest_release.outputs.tag }}
+        run: gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
 
-      - name: Cache Electron download
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/Library/Caches/electron
-            ~/Library/Caches/electron-builder
-          key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: |
-            electron-${{ runner.os }}-${{ runner.arch }}-
-
-      - name: Build unsigned desktop artifact
+      - name: Upload macOS installer to latest release
+        if: ${{ success() }}
         shell: bash
-        run: |
-          # See the arm64 job: raise the macOS open-file limit so electron-builder
-          # doesn't hit EMFILE while signing the unpacked node_modules tree.
-          ulimit -n 65536
-          vp run dist:desktop:artifact \
-            --platform mac \
-            --target dmg \
-            --arch x64 \
-            --build-version "${{ steps.build_meta.outputs.version }}" \
-            --verbose
-
-      - name: Collect build artifacts
-        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve_latest_release.outputs.tag }}
         run: |
           set -euo pipefail
-          mkdir -p release-publish
           shopt -s nullglob
-          for pattern in "release/*.dmg" "release/*.zip" "release/*.blockmap" "release/*.yml"; do
-            for file in $pattern; do
-              cp "$file" release-publish/
-            done
-          done
-
-          for manifest in release-publish/*-mac.yml; do
-            mv "$manifest" "${manifest%.yml}-x64.yml"
-          done
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: desktop-mac-x64
-          path: release-publish/*
-          if-no-files-found: error
-          retention-days: 7
+          files=(release-publish/*.dmg release-publish/*.zip release-publish/*.blockmap release-publish/*.yml)
+          if (( ${#files[@]} == 0 )); then
+            echo "macOS installer assets were not found." >&2
+            exit 1
+          fi
+          gh release upload "$RELEASE_TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
 
   build_linux_x64:
     name: Build Linux x64
+    needs: resolve_latest_release
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -266,11 +268,8 @@ jobs:
           cache: true
           run-install: true
 
-      - id: build_meta
-        name: Resolve build version
-        shell: bash
-        run: |
-          echo "version=0.0.0-dev.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+      - name: Align package versions to release version
+        run: node scripts/update-release-package-versions.ts "${{ needs.resolve_latest_release.outputs.version }}"
 
       - name: Install ImageMagick
         shell: bash
@@ -297,7 +296,7 @@ jobs:
             --platform linux \
             --target AppImage \
             --arch x64 \
-            --build-version "${{ steps.build_meta.outputs.version }}" \
+            --build-version "${{ needs.resolve_latest_release.outputs.version }}" \
             --verbose
 
       - name: Collect build artifacts
@@ -320,8 +319,33 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Verify target release
+        if: ${{ success() }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve_latest_release.outputs.tag }}
+        run: gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+
+      - name: Upload Linux installer to latest release
+        if: ${{ success() }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve_latest_release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(release-publish/*.AppImage release-publish/*.blockmap release-publish/*.yml)
+          if (( ${#files[@]} == 0 )); then
+            echo "Linux installer assets were not found." >&2
+            exit 1
+          fi
+          gh release upload "$RELEASE_TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+
   build_windows_x64:
     name: Build Windows x64
+    needs: resolve_latest_release
     runs-on: windows-2025
     timeout-minutes: 30
     steps:
@@ -335,11 +359,8 @@ jobs:
           cache: true
           run-install: true
 
-      - id: build_meta
-        name: Resolve build version
-        shell: bash
-        run: |
-          echo "version=0.0.0-dev.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+      - name: Align package versions to release version
+        run: node scripts/update-release-package-versions.ts "${{ needs.resolve_latest_release.outputs.version }}"
 
       - name: Install Spectre-mitigated MSVC libs
         shell: pwsh
@@ -374,7 +395,7 @@ jobs:
             --platform win \
             --target nsis \
             --arch x64 \
-            --build-version "${{ steps.build_meta.outputs.version }}" \
+            --build-version "${{ needs.resolve_latest_release.outputs.version }}" \
             --verbose
 
       - name: Collect build artifacts
@@ -396,3 +417,27 @@ jobs:
           path: release-publish/*
           if-no-files-found: error
           retention-days: 7
+
+      - name: Verify target release
+        if: ${{ success() }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve_latest_release.outputs.tag }}
+        run: gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+
+      - name: Upload Windows installer to latest release
+        if: ${{ success() }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.resolve_latest_release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(release-publish/*.exe release-publish/*.blockmap release-publish/*.yml)
+          if (( ${#files[@]} == 0 )); then
+            echo "Windows installer assets were not found." >&2
+            exit 1
+          fi
+          gh release upload "$RELEASE_TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
