@@ -8,6 +8,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ControlPillMenu } from "../../components/ControlPill";
 import { SymbolView } from "../../components/AppSymbol";
+import { MachineSwitcher, createMachineHeaderItem } from "../../components/MachineSwitcher";
 import { T3Wordmark } from "../../components/T3Wordmark";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
@@ -69,26 +70,10 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
   // key the "customized" icon state off the environment filter alone.
   const threadListV2Enabled = useThreadListV2Enabled();
   const hasCustomListOptions = threadListV2Enabled
-    ? props.selectedEnvironmentId !== null || props.selectedProjectKey !== null
-    : hasCustomHomeListOptions(props);
+    ? props.selectedProjectKey !== null
+    : hasCustomHomeListOptions({ ...props, selectedEnvironmentId: null });
   const menuActions = useMemo<MenuAction[]>(
     () => [
-      {
-        id: "environment",
-        title: "Environment",
-        subactions: [
-          {
-            id: "environment:all",
-            title: "All environments",
-            state: checkedMenuState(props.selectedEnvironmentId === null),
-          },
-          ...props.environments.map((environment) => ({
-            id: `environment:${environment.environmentId}`,
-            title: environment.label,
-            state: checkedMenuState(props.selectedEnvironmentId === environment.environmentId),
-          })),
-        ],
-      },
       ...(props.projects.length === 0
         ? []
         : ([
@@ -133,10 +118,8 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
           ] satisfies MenuAction[])),
     ],
     [
-      props.environments,
       props.projectSortOrder,
       props.projects,
-      props.selectedEnvironmentId,
       props.selectedProjectKey,
       props.threadSortOrder,
       threadListV2Enabled,
@@ -145,22 +128,6 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
   const handleMenuAction = useCallback(
     (event: { nativeEvent: { event: string } }) => {
       const id = event.nativeEvent.event;
-      if (id === "environment:all") {
-        props.onEnvironmentChange(null);
-        return;
-      }
-
-      if (id.startsWith("environment:")) {
-        const environmentId = id.slice("environment:".length);
-        const environment = props.environments.find(
-          (candidate) => candidate.environmentId === environmentId,
-        );
-        if (environment) {
-          props.onEnvironmentChange(environment.environmentId);
-        }
-        return;
-      }
-
       if (id === "project:all") {
         props.onProjectChange(null);
         return;
@@ -214,6 +181,12 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
                 </RNText>
               </View>
             </View>
+
+            <MachineSwitcher
+              activeEnvironmentId={props.selectedEnvironmentId}
+              environments={props.environments}
+              onEnvironmentChange={props.onEnvironmentChange}
+            />
 
             <ControlPillMenu
               actions={menuActions}
@@ -290,8 +263,8 @@ function IosHomeHeader(props: HomeHeaderProps) {
   // key the "customized" icon state off the environment filter alone.
   const threadListV2Enabled = useThreadListV2Enabled();
   const hasCustomListOptions = threadListV2Enabled
-    ? props.selectedEnvironmentId !== null || props.selectedProjectKey !== null
-    : hasCustomHomeListOptions(props);
+    ? props.selectedProjectKey !== null
+    : hasCustomHomeListOptions({ ...props, selectedEnvironmentId: null });
   const focusSearch = useCallback(() => {
     searchBarRef.current?.focus();
     return searchBarRef.current !== null;
@@ -300,12 +273,22 @@ function IosHomeHeader(props: HomeHeaderProps) {
   const filterMenu = buildHomeListFilterMenu({
     ...props,
     listOrganization: !threadListV2Enabled,
+    includeEnvironment: false,
   });
+  const machineHeaderItem = useMemo(
+    () =>
+      createMachineHeaderItem({
+        activeEnvironmentId: props.selectedEnvironmentId,
+        environments: props.environments,
+        onEnvironmentChange: (environmentId) => props.onEnvironmentChange(environmentId),
+      }),
+    [props.environments, props.onEnvironmentChange, props.selectedEnvironmentId],
+  );
 
   return (
     <>
       <NativeStackScreenOptions
-        optionsVersion={filterMenu.items}
+        optionsVersion={[filterMenu.items, props.selectedEnvironmentId]}
         options={{
           // Static header config (glass, title, fonts) lives in Stack.tsx
           // (GLASS_HEADER_OPTIONS). Only dynamic values are set here.
@@ -313,6 +296,7 @@ function IosHomeHeader(props: HomeHeaderProps) {
           unstable_headerRightItems:
             Platform.OS === "ios"
               ? () => [
+                  machineHeaderItem,
                   withNativeGlassHeaderItem({
                     accessibilityLabel: "Open settings",
                     icon: { name: "ellipsis", type: "sfSymbol" } as const,
@@ -374,26 +358,6 @@ function IosHomeHeader(props: HomeHeaderProps) {
             title="Thread list options"
             separateBackground
           >
-            <NativeHeaderToolbar.Menu title="Environment">
-              <NativeHeaderToolbar.Label>Environment</NativeHeaderToolbar.Label>
-              <NativeHeaderToolbar.MenuAction
-                isOn={props.selectedEnvironmentId === null}
-                onPress={() => props.onEnvironmentChange(null)}
-                subtitle="Show threads from every environment"
-              >
-                <NativeHeaderToolbar.Label>All environments</NativeHeaderToolbar.Label>
-              </NativeHeaderToolbar.MenuAction>
-              {props.environments.map((environment) => (
-                <NativeHeaderToolbar.MenuAction
-                  key={environment.environmentId}
-                  isOn={props.selectedEnvironmentId === environment.environmentId}
-                  onPress={() => props.onEnvironmentChange(environment.environmentId)}
-                >
-                  <NativeHeaderToolbar.Label>{environment.label}</NativeHeaderToolbar.Label>
-                </NativeHeaderToolbar.MenuAction>
-              ))}
-            </NativeHeaderToolbar.Menu>
-
             {props.projects.length > 0 ? (
               <NativeHeaderToolbar.Menu title="Project">
                 <NativeHeaderToolbar.Label>Project</NativeHeaderToolbar.Label>

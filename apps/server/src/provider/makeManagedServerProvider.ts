@@ -4,9 +4,11 @@ import {
   ServerSettingsError,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
+import * as Cache from "effect/Cache";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
@@ -23,6 +25,14 @@ interface ProviderSnapshotState {
   readonly snapshot: ServerProvider;
   readonly enrichmentGeneration: number;
 }
+
+// Provider checks can launch another agent process and read that agent's
+// protected app data. Keep a successful check for a day so the normal
+// background health loop does not repeatedly re-enter those containers.
+// Explicit refreshes still bypass this cache, and failed effects are not
+// cached so a broken installation can recover without waiting a day.
+const PROVIDER_CHECK_CACHE_TTL = Duration.hours(24);
+const PROVIDER_CHECK_CACHE_KEY = "provider";
 
 export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(function* <
   Settings,
@@ -54,6 +64,14 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
   );
   const initialSettings = yield* input.getSettings;
   const initialSnapshot = yield* input.initialSnapshot(initialSettings);
+  const providerCheckCache = yield* Cache.makeWith<
+    typeof PROVIDER_CHECK_CACHE_KEY,
+    ServerProvider,
+    ServerSettingsError
+  >(() => input.checkProvider, {
+    capacity: 1,
+    timeToLive: (exit) => (Exit.isSuccess(exit) ? PROVIDER_CHECK_CACHE_TTL : Duration.zero),
+  });
   const snapshotStateRef = yield* Ref.make<ProviderSnapshotState>({
     snapshot: initialSnapshot,
     enrichmentGeneration: 0,
@@ -112,16 +130,25 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
 
   const applySnapshotBase = Effect.fn("applySnapshot")(function* (
     nextSettings: Settings,
-    options?: { readonly forceRefresh?: boolean },
+    options?: {
+      readonly bypassCheckCache?: boolean;
+      readonly forceRefresh?: boolean;
+    },
   ) {
     const forceRefresh = options?.forceRefresh === true;
     const previousSettings = yield* Ref.get(settingsRef);
-    if (!forceRefresh && !input.haveSettingsChanged(previousSettings, nextSettings)) {
+    const settingsChanged = input.haveSettingsChanged(previousSettings, nextSettings);
+    if (!forceRefresh && !settingsChanged) {
       yield* Ref.set(settingsRef, nextSettings);
       return yield* Ref.get(snapshotStateRef).pipe(Effect.map((state) => state.snapshot));
     }
 
-    const nextSnapshot = yield* input.checkProvider;
+    if (settingsChanged) {
+      yield* Cache.invalidate(providerCheckCache, PROVIDER_CHECK_CACHE_KEY);
+    }
+    const nextSnapshot = yield* options?.bypassCheckCache === true
+      ? input.checkProvider
+      : Cache.get(providerCheckCache, PROVIDER_CHECK_CACHE_KEY);
     const nextGeneration = yield* Ref.modify(snapshotStateRef, (state) => {
       const generation = input.enrichSnapshot
         ? state.enrichmentGeneration + 1
@@ -139,12 +166,22 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
     yield* restartSnapshotEnrichment(nextSettings, nextSnapshot, nextGeneration);
     return nextSnapshot;
   });
-  const applySnapshot = (nextSettings: Settings, options?: { readonly forceRefresh?: boolean }) =>
-    refreshSemaphore.withPermits(1)(applySnapshotBase(nextSettings, options));
+  const applySnapshot = (
+    nextSettings: Settings,
+    options?: {
+      readonly bypassCheckCache?: boolean;
+      readonly forceRefresh?: boolean;
+    },
+  ) => refreshSemaphore.withPermits(1)(applySnapshotBase(nextSettings, options));
 
-  const refreshSnapshot = Effect.fn("refreshSnapshot")(function* () {
+  const refreshSnapshot = Effect.fn("refreshSnapshot")(function* (options?: {
+    readonly bypassCheckCache?: boolean;
+  }) {
     const nextSettings = yield* input.getSettings;
-    return yield* applySnapshot(nextSettings, { forceRefresh: true });
+    return yield* applySnapshot(nextSettings, {
+      forceRefresh: true,
+      bypassCheckCache: options?.bypassCheckCache !== false,
+    });
   });
 
   const hasProviderStatusDemand = Effect.gen(function* () {
@@ -202,7 +239,9 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
             intervalElapsed && Duration.toMillis(Duration.fromInputUnsafe(refreshInterval)) > 0
               ? hasProviderStatusDemand.pipe(
                   Effect.flatMap((shouldRefresh) =>
-                    shouldRefresh ? refreshSnapshot().pipe(Effect.asVoid) : Effect.void,
+                    shouldRefresh
+                      ? refreshSnapshot({ bypassCheckCache: false }).pipe(Effect.asVoid)
+                      : Effect.void,
                   ),
                 )
               : Effect.void,

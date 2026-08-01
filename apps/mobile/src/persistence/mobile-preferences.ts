@@ -23,6 +23,8 @@ export interface Preferences {
   readonly connectOnboardingOptOutAccounts?: ReadonlyArray<string>;
   readonly collapsedProjectGroups?: readonly string[];
   readonly projectGroupingEnabled?: boolean;
+  /** Persisted machine-wide environment selection for the mobile workspace. */
+  readonly machineEnvironmentId?: string;
   /**
    * Device-local mirror of the web beta's `sidebarV2Enabled`. Mobile has no
    * client-settings sync, so the flat v2 thread list is opted out of per
@@ -80,6 +82,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     connectOnboardingOptOutAccounts?: ReadonlyArray<string>;
     collapsedProjectGroups?: readonly string[];
     projectGroupingEnabled?: boolean;
+    machineEnvironmentId?: string;
     threadListV2Enabled?: boolean;
   } = {};
 
@@ -109,6 +112,9 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.projectGroupingEnabled === "boolean") {
     preferences.projectGroupingEnabled = parsed.projectGroupingEnabled;
+  }
+  if (typeof parsed.machineEnvironmentId === "string") {
+    preferences.machineEnvironmentId = parsed.machineEnvironmentId;
   }
   if (typeof parsed.threadListV2Enabled === "boolean") {
     preferences.threadListV2Enabled = parsed.threadListV2Enabled;

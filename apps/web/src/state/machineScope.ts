@@ -1,5 +1,8 @@
 import type { EnvironmentId } from "@t3tools/contracts";
-import type { ConnectionCatalogEntry } from "@t3tools/client-runtime/connection";
+import {
+  isEnvironmentInMachineScope,
+  resolveMachineEnvironmentId,
+} from "@t3tools/client-runtime/state/machine-scope";
 import { Atom } from "effect/unstable/reactivity";
 
 import { environmentCatalog } from "../connection/catalog";
@@ -37,40 +40,6 @@ const selectedMachineEnvironmentIdAtom = Atom.make<EnvironmentId | null>(
   readPersistedEnvironmentId(),
 ).pipe(Atom.keepAlive, Atom.withLabel("web-selected-machine-environment-id"));
 
-/**
- * Returns whether an environment may be used under the current machine
- * selection. A null machine id means the connection catalog has not resolved
- * a machine yet, so callers should wait for normal availability checks.
- */
-export function isEnvironmentInMachineScope(
-  environmentId: EnvironmentId | null | undefined,
-  machineEnvironmentId: EnvironmentId | null,
-): boolean {
-  return machineEnvironmentId === null || environmentId === machineEnvironmentId;
-}
-
-/**
- * Resolves the machine shown by the app. A saved choice wins while its
- * connection remains registered; otherwise fall back to the local primary
- * environment, then the first registered environment.
- */
-export function resolveMachineEnvironmentId(input: {
-  entries: ReadonlyMap<EnvironmentId, Pick<ConnectionCatalogEntry, "target">>;
-  selected: EnvironmentId | null;
-}): EnvironmentId | null {
-  if (input.selected !== null && input.entries.has(input.selected)) {
-    return input.selected;
-  }
-
-  for (const [environmentId, entry] of input.entries) {
-    if (entry.target._tag === "PrimaryConnectionTarget") {
-      return environmentId;
-    }
-  }
-
-  return input.entries.keys().next().value ?? null;
-}
-
 export const machineEnvironmentIdAtom = Atom.make((get): EnvironmentId | null => {
   const catalog = get(environmentCatalog.catalogValueAtom);
   const selected = get(selectedMachineEnvironmentIdAtom);
@@ -81,3 +50,5 @@ export function selectMachineEnvironment(environmentId: EnvironmentId): void {
   appAtomRegistry.set(selectedMachineEnvironmentIdAtom, environmentId);
   persistEnvironmentId(environmentId);
 }
+
+export { isEnvironmentInMachineScope, resolveMachineEnvironmentId };

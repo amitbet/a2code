@@ -250,7 +250,7 @@ describe("makeManagedServerProvider", () => {
     ).pipe(Effect.provide(Layer.mergeAll(AlwaysRunTestLayer, TestClock.layer()))),
   );
 
-  it.effect("wakes a sleeping provider refresh loop when its interval changes", () =>
+  it.effect("does not re-probe when an interval wake hits the health-check cache", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const initialServerSettings = {
@@ -274,7 +274,6 @@ describe("makeManagedServerProvider", () => {
         );
         const checkCalls = yield* Ref.make(0);
         const initialCheckDone = yield* Deferred.make<void>();
-        const periodicCheckDone = yield* Deferred.make<void>();
 
         yield* makeManagedServerProvider<TestSettings>({
           maintenanceCapabilities,
@@ -286,7 +285,7 @@ describe("makeManagedServerProvider", () => {
             Effect.tap((count) =>
               count === 1
                 ? Deferred.succeed(initialCheckDone, undefined).pipe(Effect.ignore)
-                : Deferred.succeed(periodicCheckDone, undefined).pipe(Effect.ignore),
+                : Effect.void,
             ),
             Effect.as(refreshedSnapshot),
           ),
@@ -304,10 +303,36 @@ describe("makeManagedServerProvider", () => {
         yield* TestClock.adjust("999 millis");
         assert.strictEqual(yield* Ref.get(checkCalls), 1);
         yield* TestClock.adjust("1 millis");
-        yield* Deferred.await(periodicCheckDone);
-        assert.strictEqual(yield* Ref.get(checkCalls), 2);
+        yield* Effect.yieldNow;
+        assert.strictEqual(yield* Ref.get(checkCalls), 1);
       }),
     ).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("bypasses the health-check cache for an explicit refresh", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const checkCalls = yield* Ref.make(0);
+        const initialCheckDone = yield* Deferred.make<void>();
+        const provider = yield* makeManagedServerProvider<TestSettings>({
+          maintenanceCapabilities,
+          getSettings: Effect.succeed({ enabled: true }),
+          streamSettings: Stream.empty,
+          haveSettingsChanged: (previous, next) => previous.enabled !== next.enabled,
+          initialSnapshot: () => Effect.succeed(initialSnapshot),
+          checkProvider: Ref.updateAndGet(checkCalls, (count) => count + 1).pipe(
+            Effect.tap(() => Deferred.succeed(initialCheckDone, undefined).pipe(Effect.ignore)),
+            Effect.as(refreshedSnapshot),
+          ),
+          refreshInterval: "1 hour",
+        });
+
+        yield* Deferred.await(initialCheckDone);
+        yield* provider.refresh;
+
+        assert.strictEqual(yield* Ref.get(checkCalls), 2);
+      }),
+    ).pipe(Effect.provide(AlwaysRunTestLayer)),
   );
 
   it.effect("reruns the provider check when streamed settings change", () =>

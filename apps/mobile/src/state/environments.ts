@@ -9,6 +9,7 @@ import { useMemo } from "react";
 import { environmentCatalog } from "../connection/catalog";
 import { environmentPresentations } from "./presentation";
 import { useEnvironmentQuery } from "./query";
+import { machineEnvironmentIdAtom, selectMachineEnvironment } from "./machineScope";
 
 export interface EnvironmentPresentation extends BaseEnvironmentPresentation {
   readonly environmentId: EnvironmentId;
@@ -54,3 +55,13 @@ export function useEnvironments() {
 export function useEnvironmentConnectionState(environmentId: EnvironmentId) {
   return useEnvironmentQuery(environmentCatalog.stateAtom(environmentId));
 }
+
+export function useMachineEnvironmentId(): EnvironmentId | null {
+  return useAtomValue(machineEnvironmentIdAtom);
+}
+
+export function setMachineEnvironmentId(environmentId: EnvironmentId): void {
+  selectMachineEnvironment(environmentId);
+}
+
+export { isEnvironmentInMachineScope } from "./machineScope";

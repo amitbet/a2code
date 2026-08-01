@@ -23,11 +23,13 @@ import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
 import { AppText as Text } from "../../components/AppText";
 import { ControlPillMenu } from "../../components/ControlPill";
 import { SymbolView } from "../../components/AppSymbol";
+import { MachineSwitcher } from "../../components/MachineSwitcher";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
 import { useThemeColor } from "../../lib/useThemeColor";
-import { useProjects, useThreadShells } from "../../state/entities";
+import { useMachineProjects, useMachineThreadShells } from "../../state/entities";
+import { useMachineEnvironmentId } from "../../state/environments";
 import { useThreadSearch } from "../../state/queries";
 import { useThreadListV2Enabled } from "./use-thread-list-v2-enabled";
 import { environmentServerConfigsAtom } from "../../state/server";
@@ -133,6 +135,7 @@ interface ThreadNavigationSidebarProps {
   readonly selectedThreadKey: string | null;
   readonly onOpenSettings: () => void;
   readonly onOpenEnvironmentSettings: () => void;
+  readonly onMachineEnvironmentChange: (environmentId: EnvironmentId) => void;
   readonly onNewThreadInProject: (project: EnvironmentProject) => void;
   readonly onSearchQueryChange: (query: string) => void;
   readonly onSelectThread: (thread: EnvironmentThreadShell) => void;
@@ -183,9 +186,11 @@ function ThreadNavigationSidebarPane(
 ) {
   const insets = useSafeAreaInsets();
   const colorScheme = useColorScheme() === "dark" ? "dark" : "light";
-  const projects = useProjects();
-  const threads = useThreadShells();
-  const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
+  const projects = useMachineProjects();
+  const threads = useMachineThreadShells();
+  const machineEnvironmentId = useMachineEnvironmentId();
+  const { environments: workspaceEnvironments, state: catalogState } =
+    useWorkspaceState(machineEnvironmentId);
   const { savedConnectionsById } = useSavedRemoteConnections();
   const [headerIsOverContent, setHeaderIsOverContent] = useState(false);
   const searchInputRef = useRef<TextInput>(null);
@@ -212,22 +217,22 @@ function ThreadNavigationSidebarPane(
     () => new Set(environments.map((environment) => environment.environmentId)),
     [environments],
   );
-  const { options, setSelectedEnvironmentId, setProjectSortOrder, setThreadSortOrder } =
+  const { options, setProjectSortOrder, setThreadSortOrder } =
     useHomeListOptions(availableEnvironmentIds);
   const searchEnvironmentIds = useMemo(
     () =>
-      options.selectedEnvironmentId === null
+      machineEnvironmentId === null
         ? workspaceEnvironments
             .filter((environment) => environment.connectionState === "connected")
             .map((environment) => environment.environmentId)
         : workspaceEnvironments.some(
               (environment) =>
-                environment.environmentId === options.selectedEnvironmentId &&
+                environment.environmentId === machineEnvironmentId &&
                 environment.connectionState === "connected",
             )
-          ? [options.selectedEnvironmentId]
+          ? [machineEnvironmentId]
           : [],
-    [options.selectedEnvironmentId, workspaceEnvironments],
+    [machineEnvironmentId, workspaceEnvironments],
   );
   const threadSearch = useThreadSearch(searchEnvironmentIds, props.searchQuery);
   const threadSearchMatchByKey = useMemo(() => {
@@ -248,10 +253,10 @@ function ThreadNavigationSidebarPane(
     () =>
       buildHomeProjectScopes({
         projects,
-        environmentId: options.selectedEnvironmentId,
+        environmentId: machineEnvironmentId,
         projectGroupingMode: options.projectGroupingMode,
       }),
-    [options.projectGroupingMode, options.selectedEnvironmentId, projects],
+    [machineEnvironmentId, options.projectGroupingMode, projects],
   );
   const projectFilterOptions = useMemo(
     () =>
@@ -337,7 +342,7 @@ function ThreadNavigationSidebarPane(
         projects: scopedProjects,
         threads: scopedThreads,
         pendingTasks: scopedPendingTasks,
-        environmentId: options.selectedEnvironmentId,
+        environmentId: machineEnvironmentId,
         searchQuery: props.searchQuery,
         matchedThreadKeys,
         projectSortOrder: options.projectSortOrder,
@@ -418,7 +423,7 @@ function ThreadNavigationSidebarPane(
   const [settledVisibleCount, setSettledVisibleCount] = useState(
     THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   );
-  const settledResetKey = `${options.selectedEnvironmentId ?? "all"}:${selectedProjectKey ?? "all"}:${props.searchQuery.trim()}`;
+  const settledResetKey = `${machineEnvironmentId ?? "all"}:${selectedProjectKey ?? "all"}:${props.searchQuery.trim()}`;
   const lastSettledResetKeyRef = useRef(settledResetKey);
   if (lastSettledResetKeyRef.current !== settledResetKey) {
     lastSettledResetKeyRef.current = settledResetKey;
@@ -471,7 +476,7 @@ function ThreadNavigationSidebarPane(
       return { items: [], hiddenSettledCount: 0, snoozedCount: 0, nextSnoozeWakeAt: null };
     return buildThreadListV2Items({
       threads: threads.filter((thread) => thread.archivedAt === null),
-      environmentId: options.selectedEnvironmentId,
+      environmentId: machineEnvironmentId,
       projectRefs: selectedProjectScope === null ? null : selectedProjectScope.projectRefs,
       searchQuery: props.searchQuery,
       matchedThreadKeys,
@@ -486,7 +491,7 @@ function ThreadNavigationSidebarPane(
     changeRequestStateByKey,
     nowMinute,
     snoozeWakeTick,
-    options.selectedEnvironmentId,
+    machineEnvironmentId,
     props.searchQuery,
     matchedThreadKeys,
     settledVisibleCount,
@@ -520,8 +525,8 @@ function ThreadNavigationSidebarPane(
     const v2SearchQuery = props.searchQuery.trim().toLocaleLowerCase();
     const v2PendingTasks = pendingTasks.filter(
       (pendingTask) =>
-        (options.selectedEnvironmentId === null ||
-          pendingTask.message.environmentId === options.selectedEnvironmentId) &&
+        (machineEnvironmentId === null ||
+          pendingTask.message.environmentId === machineEnvironmentId) &&
         (selectedProjectRefs === null ||
           selectedProjectRefs.has(
             scopedProjectKey(pendingTask.message.environmentId, pendingTask.creation.projectId),
@@ -543,7 +548,7 @@ function ThreadNavigationSidebarPane(
     return items;
   }, [
     listLayout.items,
-    options.selectedEnvironmentId,
+    machineEnvironmentId,
     pendingTasks,
     props.searchQuery,
     selectedProjectRefs,
@@ -553,26 +558,6 @@ function ThreadNavigationSidebarPane(
   const showsConnectionStatus = shouldShowWorkspaceConnectionStatus(catalogState);
   const listMenuActions = useMemo<MenuAction[]>(
     () => [
-      {
-        id: "environment",
-        title: "Environment",
-        subactions: [
-          {
-            id: "environment:all",
-            title: "All environments",
-            subtitle: "Show threads from every environment",
-            state: options.selectedEnvironmentId === null ? "on" : "off",
-          },
-          ...environments.map((environment) => ({
-            id: `environment:${environment.environmentId}`,
-            title: environment.label,
-            state:
-              options.selectedEnvironmentId === environment.environmentId
-                ? ("on" as const)
-                : ("off" as const),
-          })),
-        ],
-      },
       ...(projectFilterOptions.length === 0
         ? []
         : ([
@@ -595,8 +580,7 @@ function ThreadNavigationSidebarPane(
             },
           ] satisfies MenuAction[])),
       // v2 lays the list out in fixed creation order — offering sort/group
-      // controls it silently ignores would be a lie. Environment still
-      // scopes the v2 partition, so it stays.
+      // controls it silently ignores would be a lie.
       ...(threadListV2Enabled
         ? []
         : ([
@@ -620,22 +604,11 @@ function ThreadNavigationSidebarPane(
             },
           ] satisfies MenuAction[])),
     ],
-    [environments, options, projectFilterOptions, selectedProjectKey, threadListV2Enabled],
+    [options, projectFilterOptions, selectedProjectKey, threadListV2Enabled],
   );
   const handleListMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
       const event = nativeEvent.event;
-      if (event === "environment:all") {
-        setSelectedEnvironmentId(null);
-        return;
-      }
-      if (event.startsWith("environment:")) {
-        const environment = environments.find(
-          (candidate) => String(candidate.environmentId) === event.slice("environment:".length),
-        );
-        if (environment) setSelectedEnvironmentId(environment.environmentId);
-        return;
-      }
       if (event === "project:all") {
         setSelectedProjectKey(null);
         return;
@@ -662,13 +635,7 @@ function ThreadNavigationSidebarPane(
         return;
       }
     },
-    [
-      environments,
-      projectFilterOptions,
-      setProjectSortOrder,
-      setSelectedEnvironmentId,
-      setThreadSortOrder,
-    ],
+    [projectFilterOptions, setProjectSortOrder, setThreadSortOrder],
   );
 
   const backgroundColor = useThemeColor("--color-drawer");
@@ -994,8 +961,8 @@ function ThreadNavigationSidebarPane(
   // v2 ignores the sort/group options, so only the environment filter can
   // light the "customized" state while the beta is on.
   const filterCustomized = threadListV2Enabled
-    ? options.selectedEnvironmentId !== null || selectedProjectKey !== null
-    : hasCustomHomeListOptions({ ...options, selectedProjectKey });
+    ? selectedProjectKey !== null
+    : hasCustomHomeListOptions({ ...options, selectedEnvironmentId: null, selectedProjectKey });
   const filterIcon = filterCustomized
     ? "line.3.horizontal.decrease.circle.fill"
     : "line.3.horizontal.decrease.circle";
@@ -1004,23 +971,23 @@ function ThreadNavigationSidebarPane(
       buildHomeListFilterMenu({
         environments,
         projects: projectFilterOptions,
-        selectedEnvironmentId: options.selectedEnvironmentId,
+        selectedEnvironmentId: machineEnvironmentId,
         selectedProjectKey,
         projectSortOrder: options.projectSortOrder,
         threadSortOrder: options.threadSortOrder,
-        onEnvironmentChange: setSelectedEnvironmentId,
+        onEnvironmentChange: () => undefined,
         onProjectChange: setSelectedProjectKey,
         onProjectSortOrderChange: setProjectSortOrder,
         onThreadSortOrderChange: setThreadSortOrder,
         listOrganization: !threadListV2Enabled,
+        includeEnvironment: false,
       }),
     [
-      environments,
+      machineEnvironmentId,
       options,
       projectFilterOptions,
       selectedProjectKey,
       setProjectSortOrder,
-      setSelectedEnvironmentId,
       setThreadSortOrder,
       threadListV2Enabled,
     ],
@@ -1028,11 +995,21 @@ function ThreadNavigationSidebarPane(
   const nativeHeaderItems = useMemo(
     () =>
       createSidebarHeaderItems({
+        activeEnvironmentId: machineEnvironmentId,
+        environments,
         filterIcon,
         filterMenu,
+        onEnvironmentChange: props.onMachineEnvironmentChange,
         onOpenSettings: props.onOpenSettings,
       }),
-    [filterIcon, filterMenu, props.onOpenSettings],
+    [
+      environments,
+      filterIcon,
+      filterMenu,
+      machineEnvironmentId,
+      props.onMachineEnvironmentChange,
+      props.onOpenSettings,
+    ],
   );
   // "No threads yet" over an inbox that is merely all-snoozed reads as
   // data loss; name the snoozed threads instead.
@@ -1222,6 +1199,12 @@ function ThreadNavigationSidebarPane(
             Threads
           </Text>
           <SidebarHeaderButtonGroup colorScheme={colorScheme}>
+            <MachineSwitcher
+              activeEnvironmentId={machineEnvironmentId}
+              environments={environments}
+              grouped
+              onEnvironmentChange={props.onMachineEnvironmentChange}
+            />
             <ControlPillMenu actions={listMenuActions} onPressAction={handleListMenuAction}>
               <SidebarFilterButton
                 grouped

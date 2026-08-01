@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import type { EnvironmentId } from "@t3tools/contracts";
 
 import { deriveThreadTitleFromPrompt } from "../lib/projectThreadStartTurn";
 import {
@@ -7,6 +8,7 @@ import {
   type QueuedThreadMessage,
 } from "./thread-outbox-model";
 import { useThreadOutboxMessages } from "./use-thread-outbox";
+import { useMachineEnvironmentId } from "./machineScope";
 
 /** A queued new-task creation, shaped for thread-list presentation. */
 export interface PendingNewTask {
@@ -15,12 +17,20 @@ export interface PendingNewTask {
   readonly title: string;
 }
 
-export function usePendingNewTasks(): ReadonlyArray<PendingNewTask> {
+export function usePendingNewTasks(
+  scopedEnvironmentId?: EnvironmentId | null,
+): ReadonlyArray<PendingNewTask> {
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
+  const machineEnvironmentId = useMachineEnvironmentId();
+  const environmentId =
+    scopedEnvironmentId === undefined ? machineEnvironmentId : scopedEnvironmentId;
   return useMemo(() => {
     const tasks: PendingNewTask[] = [];
     for (const message of flattenQueuedThreadMessages(queuedMessagesByThreadKey)) {
-      if (!message.creation) {
+      if (
+        !message.creation ||
+        (environmentId !== null && message.environmentId !== environmentId)
+      ) {
         continue;
       }
       tasks.push({
@@ -31,5 +41,5 @@ export function usePendingNewTasks(): ReadonlyArray<PendingNewTask> {
     }
     tasks.sort((left, right) => right.message.createdAt.localeCompare(left.message.createdAt));
     return tasks;
-  }, [queuedMessagesByThreadKey]);
+  }, [environmentId, queuedMessagesByThreadKey]);
 }

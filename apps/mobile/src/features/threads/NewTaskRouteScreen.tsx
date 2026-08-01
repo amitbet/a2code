@@ -11,9 +11,10 @@ import { cn } from "../../lib/cn";
 import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
 import { AppText as Text } from "../../components/AppText";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
-import { useProjects, useThreadShells } from "../../state/entities";
+import { useMachineProjects, useMachineThreadShells } from "../../state/entities";
 import type { WorkspaceState } from "../../state/workspaceModel";
 import { useWorkspaceState } from "../../state/workspace";
+import { useMachineEnvironmentId } from "../../state/environments";
 import { groupProjectsByRepository } from "../../lib/repositoryGroups";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { useIncomingShare } from "../sharing/IncomingShareProvider";
@@ -78,9 +79,10 @@ function deriveProjectEmptyState(catalogState: WorkspaceState): {
 }
 
 export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRouteParams | undefined>) {
-  const projects = useProjects();
-  const threads = useThreadShells();
-  const { state: catalogState } = useWorkspaceState();
+  const projects = useMachineProjects();
+  const threads = useMachineThreadShells();
+  const machineEnvironmentId = useMachineEnvironmentId();
+  const { state: catalogState } = useWorkspaceState(machineEnvironmentId);
   const navigation = useNavigation();
   const isFocused = useIsFocused();
   const { layout } = useAdaptiveWorkspaceLayout();

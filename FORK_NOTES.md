@@ -3,6 +3,32 @@
 This file tracks fork-specific divergences that are likely to conflict when
 merging `upstream/main`.
 
+## 2026-08-01 fork feature (mobile machine-scoped environment selector) — merge notes
+
+The mobile app now mirrors the web fork's persisted, machine-wide environment
+selector. The active environment is selected from the mobile home/sidebar
+switcher and scopes the workspace, new-task defaults, project creation, and
+pending-task presentation. Switching machines keeps existing thread runtime
+ownership intact; on split layouts, a thread route from the previous machine
+returns to Home. Queued outbox delivery remains intentionally unscoped so
+background work for another machine is not stranded.
+
+- **Shared selection logic:** `packages/client-runtime/src/state/machineScope.ts`
+  owns the fallback resolver and scope predicate; the web and mobile state
+  layers retain platform-specific persistence and atoms.
+- **Mobile state and projections:** `apps/mobile/src/state/machineScope.ts`,
+  `apps/mobile/src/persistence/mobile-preferences.ts`, `apps/mobile/src/state/entities.ts`,
+  `apps/mobile/src/state/workspace.ts`, and `apps/mobile/src/state/use-pending-new-tasks.ts`.
+- **Mobile UI:** `apps/mobile/src/components/MachineSwitcher.tsx`,
+  `apps/mobile/src/features/home/HomeHeader.tsx`,
+  `apps/mobile/src/features/threads/ThreadNavigationSidebar.tsx`,
+  `apps/mobile/src/features/layout/AdaptiveWorkspaceLayout.tsx`, plus the
+  project/new-task screens.
+- **Merge hotspots:** preserve the machine scope when upstream changes mobile
+  connection catalogs, home/sidebar filtering, workspace status, project
+  creation, or new-task environment selection. Do not scope the outbox drain
+  or other background runtime collections to the selected machine.
+
 ## 2026-08-01 fork feature (machine-scoped environment selector) — merge notes
 
 The web UI now has a persisted, machine-wide environment selector. The active

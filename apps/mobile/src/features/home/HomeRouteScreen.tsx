@@ -1,10 +1,12 @@
 import * as Arr from "effect/Array";
 import * as Order from "effect/Order";
+import type { EnvironmentId } from "@t3tools/contracts";
 import { useNavigation } from "@react-navigation/native";
 import { useEffect, useMemo, useState } from "react";
 
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
-import { useProjects, useThreadShells } from "../../state/entities";
+import { useMachineProjects, useMachineThreadShells } from "../../state/entities";
+import { setMachineEnvironmentId, useMachineEnvironmentId } from "../../state/environments";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
@@ -24,9 +26,11 @@ import { useThreadListActions } from "./useThreadListActions";
 
 export function HomeRouteScreen() {
   const { layout } = useAdaptiveWorkspaceLayout();
-  const projects = useProjects();
-  const threads = useThreadShells();
-  const { environments: workspaceEnvironments, state: catalogState } = useWorkspaceState();
+  const projects = useMachineProjects();
+  const threads = useMachineThreadShells();
+  const machineEnvironmentId = useMachineEnvironmentId();
+  const { environments: workspaceEnvironments, state: catalogState } =
+    useWorkspaceState(machineEnvironmentId);
   const { savedConnectionsById } = useSavedRemoteConnections();
   const navigation = useNavigation();
   const [searchQuery, setSearchQuery] = useState("");
@@ -61,11 +65,15 @@ export function HomeRouteScreen() {
   );
   const {
     options: listOptions,
-    setSelectedEnvironmentId,
     setProjectSortOrder,
     setThreadSortOrder,
   } = useHomeListOptions(availableEnvironmentIds);
-  const selectedEnvironmentId = listOptions.selectedEnvironmentId;
+  const selectedEnvironmentId = machineEnvironmentId;
+  const handleMachineEnvironmentChange = (environmentId: EnvironmentId | null) => {
+    if (environmentId !== null) {
+      setMachineEnvironmentId(environmentId);
+    }
+  };
   const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
   const projectFilterOptions = useMemo(
     () =>
@@ -125,7 +133,7 @@ export function HomeRouteScreen() {
           selectedProjectKey={selectedProjectKey}
           projectSortOrder={listOptions.projectSortOrder}
           threadSortOrder={listOptions.threadSortOrder}
-          onEnvironmentChange={setSelectedEnvironmentId}
+          onEnvironmentChange={handleMachineEnvironmentChange}
           onProjectChange={setSelectedProjectKey}
           onOpenSettings={() => navigation.navigate("SettingsSheet", { screen: "Settings" })}
           onProjectSortOrderChange={setProjectSortOrder}
@@ -145,7 +153,7 @@ export function HomeRouteScreen() {
           onSettleThread={settleThread}
           onUnsettleThread={unsettleThread}
           onTogglePinThread={toggleThreadPinned}
-          onEnvironmentChange={setSelectedEnvironmentId}
+          onEnvironmentChange={handleMachineEnvironmentChange}
           onProjectChange={setSelectedProjectKey}
           onOpenEnvironments={() =>
             navigation.navigate("SettingsSheet", { screen: "SettingsEnvironments" })
