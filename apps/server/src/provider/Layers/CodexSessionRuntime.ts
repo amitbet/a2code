@@ -906,7 +906,11 @@ export const makeCodexSessionRuntime = (
     const handleRawNotification = (notification: CodexServerNotification) =>
       Effect.gen(function* () {
         if (notification.method === "account/rateLimits/updated") {
-          yield* Queue.offer(rateLimitRefreshes, { fallback: notification.params });
+          // The app-server notification already contains the latest rate-limit
+          // snapshot. Requesting `account/rateLimits/read` here causes newer
+          // Codex app-server versions to emit another notification, which
+          // feeds this queue again and creates an idle refresh loop.
+          yield* emitRateLimits(notification.params);
           return;
         }
         if (notification.method === "account/updated") {
