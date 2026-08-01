@@ -6,6 +6,7 @@ import {
   ContainerIcon,
   FolderPlusIcon,
   Globe2Icon,
+  ListTodoIcon,
   LoaderIcon,
   PinIcon,
   SearchIcon,
@@ -129,6 +130,7 @@ import { stackedThreadToast, toastManager } from "./ui/toast";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
 import { Kbd } from "./ui/kbd";
+import { ProjectTodoSheet } from "./ProjectTodoSheet";
 import {
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
@@ -1256,6 +1258,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     null,
   );
   const [projectRenameTitle, setProjectRenameTitle] = useState("");
+  const [projectTodoOpen, setProjectTodoOpen] = useState(false);
   const [projectGroupingTarget, setProjectGroupingTarget] =
     useState<SidebarProjectGroupMember | null>(null);
   const [projectGroupingSelection, setProjectGroupingSelection] = useState<
@@ -1479,6 +1482,12 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const openProjectRenameDialog = useCallback((member: SidebarProjectGroupMember) => {
     setProjectRenameTarget(member);
     setProjectRenameTitle(member.title);
+  }, []);
+
+  const handleOpenProjectTodo = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setProjectTodoOpen(true);
   }, []);
 
   const openProjectGroupingDialog = useCallback(
@@ -2448,7 +2457,15 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         <Tooltip>
           <TooltipTrigger
             render={
-              <div className="pointer-events-none absolute top-[calc(50%+1px)] right-0.5 -translate-y-1/2 opacity-0 transition-opacity duration-150 max-sm:pointer-events-auto max-sm:opacity-100 group-hover/project-header:pointer-events-auto group-hover/project-header:opacity-100 group-focus-within/project-header:pointer-events-auto group-focus-within/project-header:opacity-100">
+              <div className="pointer-events-none absolute top-[calc(50%+1px)] right-0.5 flex -translate-y-1/2 items-center gap-0.5 opacity-0 transition-opacity duration-150 max-sm:pointer-events-auto max-sm:opacity-100 group-hover/project-header:pointer-events-auto group-hover/project-header:opacity-100 group-focus-within/project-header:pointer-events-auto group-focus-within/project-header:opacity-100">
+                <button
+                  type="button"
+                  aria-label={`Open project todo for ${project.displayName}`}
+                  className={SIDEBAR_ICON_ACTION_BUTTON_CLASS}
+                  onClick={handleOpenProjectTodo}
+                >
+                  <ListTodoIcon className="size-3.5" />
+                </button>
                 <button
                   type="button"
                   aria-label={`Create new thread in ${project.displayName}`}
@@ -2502,6 +2519,15 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         openPrLink={openPrLink}
         expandThreadListForProject={expandThreadListForProject}
         collapseThreadListForProject={collapseThreadListForProject}
+      />
+      <ProjectTodoSheet
+        open={projectTodoOpen}
+        onOpenChange={setProjectTodoOpen}
+        project={{
+          environmentId: project.environmentId,
+          workspaceRoot: project.workspaceRoot,
+          displayName: project.displayName,
+        }}
       />
 
       <Dialog

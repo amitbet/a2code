@@ -27,6 +27,7 @@ import {
   FolderPlusIcon,
   GitBranchIcon,
   EllipsisIcon,
+  ListTodoIcon,
   MessageSquareIcon,
   PlusIcon,
   SearchIcon,
@@ -144,6 +145,7 @@ import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { CommandDialogTrigger } from "./ui/command";
 import { Button } from "./ui/button";
+import { ProjectTodoSheet } from "./ProjectTodoSheet";
 import {
   Dialog,
   DialogDescription,
@@ -1133,11 +1135,15 @@ export default function SidebarV2() {
     null,
   );
   const [projectScopeMenuOpen, setProjectScopeMenuOpen] = useState(false);
+  const [todoProject, setTodoProject] = useState<SidebarProjectSnapshot | null>(null);
   const newThreadContext = useHandleNewThread();
   const openAddProjectCommandPalette = useCallback(
     () => openCommandPalette({ open: "add-project" }),
     [],
   );
+  const openProjectTodo = useCallback((project: SidebarProjectSnapshot) => {
+    setTodoProject(project);
+  }, []);
   const { environments } = useEnvironments();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
@@ -2518,6 +2524,21 @@ export default function SidebarV2() {
                             <span className="min-w-0 truncate text-sm">{project.displayName}</span>
                             <button
                               type="button"
+                              aria-label={`Open project todo for ${project.displayName}`}
+                              title={`Open project todo for ${project.displayName}`}
+                              className="inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground/55 outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                              onPointerDown={(event) => event.stopPropagation()}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                setProjectScopeMenuOpen(false);
+                                openProjectTodo(project);
+                              }}
+                            >
+                              <ListTodoIcon className="size-3.5" />
+                            </button>
+                            <button
+                              type="button"
                               aria-label={`Project actions for ${project.displayName}`}
                               title={`Project actions for ${project.displayName}`}
                               className="ml-auto inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground/55 outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent focus-visible:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
@@ -2534,6 +2555,28 @@ export default function SidebarV2() {
                     </MenuRadioGroup>
                   </MenuPopup>
                 </Menu>
+                {scopedProjectGroup ? (
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <SidebarMenuButton
+                          size="icon"
+                          className="relative shrink-0 focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar"
+                          onClick={() => openProjectTodo(scopedProjectGroup)}
+                          type="button"
+                          aria-label={`Open project todo for ${scopedProjectGroup.displayName}`}
+                        />
+                      }
+                    >
+                      <ListTodoIcon />
+                      <span
+                        className="pointer-events-none absolute left-1/2 top-1/2 size-[max(100%,3rem)] -translate-1/2 pointer-fine:hidden"
+                        aria-hidden="true"
+                      />
+                    </TooltipTrigger>
+                    <TooltipPopup side="right">Project todo</TooltipPopup>
+                  </Tooltip>
+                ) : null}
                 <Tooltip>
                   <TooltipTrigger
                     render={
@@ -2937,6 +2980,23 @@ export default function SidebarV2() {
           </DialogFooter>
         </DialogPopup>
       </Dialog>
+      <ProjectTodoSheet
+        open={todoProject !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setTodoProject(null);
+          }
+        }}
+        project={
+          todoProject
+            ? {
+                environmentId: todoProject.environmentId,
+                workspaceRoot: todoProject.workspaceRoot,
+                displayName: todoProject.displayName,
+              }
+            : null
+        }
+      />
       <SidebarChromeFooter />
     </>
   );
