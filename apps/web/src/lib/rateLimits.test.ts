@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import { EventId, type OrchestrationThreadActivity } from "@t3tools/contracts";
 import {
+  RATE_LIMIT_REFRESH_AFTER_MS,
   RATE_LIMIT_STALE_AFTER_MS,
   deriveLatestRateLimitSnapshot,
   formatRateLimitReset,
@@ -344,25 +345,25 @@ describe("shouldRefreshRateLimitsOnActivation", () => {
   };
   const updatedMs = Date.parse(snapshot.updatedAt);
 
-  it("requests only when a snapshot is stale", () => {
+  it("does not refresh merely because the visual snapshot is stale", () => {
     expect(
       shouldRefreshRateLimitsOnActivation(
         snapshot,
         null,
         updatedMs + RATE_LIMIT_STALE_AFTER_MS + 1,
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       shouldRefreshRateLimitsOnActivation(
         snapshot,
         null,
-        updatedMs + RATE_LIMIT_STALE_AFTER_MS - 1,
+        updatedMs + RATE_LIMIT_REFRESH_AFTER_MS - 1,
       ),
     ).toBe(false);
   });
 
-  it("applies a five-minute cooldown to activation churn", () => {
-    const nowMs = updatedMs + RATE_LIMIT_STALE_AFTER_MS + 1;
+  it("refreshes after a day and applies a five-minute request cooldown", () => {
+    const nowMs = updatedMs + RATE_LIMIT_REFRESH_AFTER_MS + 1;
     expect(shouldRefreshRateLimitsOnActivation(snapshot, nowMs - 1_000, nowMs)).toBe(false);
     expect(
       shouldRefreshRateLimitsOnActivation(snapshot, nowMs - RATE_LIMIT_STALE_AFTER_MS, nowMs),

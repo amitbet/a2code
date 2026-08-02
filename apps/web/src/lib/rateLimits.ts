@@ -167,8 +167,16 @@ export function shouldShowRateLimitMeter(snapshot: RateLimitSnapshot | null): bo
 export const RATE_LIMIT_STALE_AFTER_MS = 5 * 60_000;
 
 /**
- * Activation refreshes are intentionally rate-limited to the same stale
- * horizon. This keeps focus/visibility churn from becoming background polling.
+ * Activation refreshes are intentionally much less frequent than the stale
+ * visual state. Fetching a quota snapshot can make an agent re-open protected
+ * provider data, so an idle session should not do that every few minutes.
+ */
+export const RATE_LIMIT_REFRESH_AFTER_MS = 24 * 60 * 60_000;
+
+/**
+ * Activation refreshes are intentionally rate-limited to a day. This keeps
+ * focus/visibility churn from becoming repeated background provider probes;
+ * live turns and provider events still publish fresher snapshots immediately.
  */
 export function shouldRefreshRateLimitsOnActivation(
   snapshot: RateLimitSnapshot | null,
@@ -176,6 +184,10 @@ export function shouldRefreshRateLimitsOnActivation(
   nowMs: number,
 ): boolean {
   if (!snapshot || !isRateLimitSnapshotStale(snapshot, false, nowMs)) {
+    return false;
+  }
+  const updatedMs = Date.parse(snapshot.updatedAt);
+  if (!Number.isFinite(updatedMs) || nowMs - updatedMs < RATE_LIMIT_REFRESH_AFTER_MS) {
     return false;
   }
   return lastRequestedAtMs === null || nowMs - lastRequestedAtMs >= RATE_LIMIT_STALE_AFTER_MS;
