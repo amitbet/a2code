@@ -51,9 +51,9 @@ import {
   type SidebarProjectGroupingMode,
   ThreadId,
 } from "@t3tools/contracts";
+import { fetchEnvironmentThreadExport } from "@t3tools/client-runtime/state/thread-export";
 import {
   parseScopedThreadKey,
-  environmentEndpointUrl,
   scopedProjectKey,
   scopedThreadKey,
   scopeProjectRef,
@@ -110,6 +110,7 @@ import {
 import { isModelPickerOpen } from "../modelPickerVisibility";
 import { useShortcutModifierState } from "../shortcutModifierState";
 import { readLocalApi } from "../localApi";
+import { runtime } from "../lib/runtime";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useAddProjectDropZone } from "../hooks/useAddProjectDropZone";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
@@ -2301,15 +2302,13 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           if (!preparedConnection) {
             throw new Error("This environment is not connected.");
           }
-          const exportUrl = environmentEndpointUrl(
-            preparedConnection.httpBaseUrl,
-            `/api/thread-export/${encodeURIComponent(thread.id)}`,
+          const archive = await runtime.runPromise(
+            fetchEnvironmentThreadExport({
+              prepared: preparedConnection,
+              threadId: ThreadId.make(thread.id),
+            }),
           );
-          const response = await fetch(exportUrl, { credentials: "include" });
-          if (!response.ok) {
-            throw new Error(`Export request failed (${response.status}).`);
-          }
-          const blob = await response.blob();
+          const blob = new Blob([archive], { type: "application/zip" });
           const objectUrl = URL.createObjectURL(blob);
           const link = document.createElement("a");
           link.href = objectUrl;

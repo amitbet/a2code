@@ -1,4 +1,4 @@
-import type { OrchestrationThread } from "@t3tools/contracts";
+import { TurnId, type OrchestrationThread } from "@t3tools/contracts";
 import { strFromU8, unzipSync } from "fflate";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -42,5 +42,32 @@ describe("buildThreadExportZip", () => {
     const entries = unzipSync(zip);
 
     expect(Object.keys(entries)).toEqual([THREAD_EXPORT_TRANSCRIPT_ENTRY]);
+  });
+
+  it("uses the shared completed-work rules and excludes a running turn", () => {
+    const zip = buildThreadExportZip({
+      thread: {
+        ...thread,
+        latestTurn: {
+          turnId: TurnId.make("turn-running"),
+          state: "running",
+          requestedAt: "2026-01-01T00:00:02.000Z",
+          startedAt: "2026-01-01T00:00:02.000Z",
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        messages: [
+          {
+            ...thread.messages[0],
+            turnId: TurnId.make("turn-running"),
+            text: "in-flight prompt",
+          },
+        ],
+      } as OrchestrationThread,
+      attachmentBytesById: new Map(),
+    });
+    const transcript = strFromU8(unzipSync(zip)[THREAD_EXPORT_TRANSCRIPT_ENTRY]!);
+
+    expect(transcript).not.toContain("in-flight prompt");
   });
 });

@@ -139,6 +139,10 @@
       "types": "./src/state/threadSearch.ts",
       "default": "./src/state/threadSearch.ts"
     },
+    "./state/thread-export": {
+      "types": "./src/state/threadExportHttp.ts",
+      "default": "./src/state/threadExportHttp.ts"
+    },
     "./state/vcs": {
       "types": "./src/state/vcs.ts",
       "default": "./src/state/vcs.ts"

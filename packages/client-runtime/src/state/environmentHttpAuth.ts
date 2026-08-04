@@ -7,6 +7,7 @@ import type { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import { RemoteEnvironmentAuthFetchError } from "../rpc/http.ts";
 
 export interface EnvironmentHttpAuthHeaders {
+  readonly [header: string]: string | undefined;
   readonly authorization?: string;
   readonly dpop?: string;
 }

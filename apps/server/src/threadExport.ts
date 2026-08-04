@@ -40,8 +40,18 @@ export interface BuildThreadExportZipInput {
 export function buildThreadExportZip(input: BuildThreadExportZipInput): Uint8Array {
   const { thread, attachmentBytesById } = input;
   const transcript = buildThreadTranscript(
-    { messages: thread.messages, activities: thread.activities },
-    { heading: `# ${thread.title}`, sourceTitle: thread.title },
+    {
+      messages: thread.messages,
+      activities: thread.activities,
+      latestTurn: thread.latestTurn,
+    },
+    {
+      heading: `# ${thread.title}`,
+      sourceTitle: thread.title,
+      // Exports should preserve the complete completed tool result, just like
+      // the transcript artifact used by thread refs and replayed forks.
+      maxToolResultChars: Number.MAX_SAFE_INTEGER,
+    },
   );
   const files: Record<string, Uint8Array> = {
     [THREAD_EXPORT_TRANSCRIPT_ENTRY]: new TextEncoder().encode(transcript),
