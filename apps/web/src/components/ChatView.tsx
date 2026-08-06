@@ -90,6 +90,13 @@ import {
   isLatestTurnSettled,
 } from "../session-logic";
 import { type LegendListRef } from "@legendapp/list/react";
+import {
+  isActivatableEventTarget,
+  isEditableEventTarget,
+  isTimelineScrollKey,
+  isUserUpwardScroll,
+  type TimelineScrollSample,
+} from "./chat/timelineManualScroll";
 import { getAnchoredTurnMetrics, type TimelineScrollMode } from "./chat/timelineScrollAnchoring";
 import {
   buildPendingUserInputAnswers,
@@ -3773,6 +3780,9 @@ function ChatViewContent(props: ChatViewProps) {
   const showScrollDebouncer = useRef(
     new Debouncer(() => setShowScrollToBottom(true), { wait: 150 }),
   );
+  const [timelineInteractionSurface, setTimelineInteractionSurface] =
+    useState<HTMLDivElement | null>(null);
+  const timelineScrollSampleRef = useRef<TimelineScrollSample | null>(null);
   const timelineScrollModeRef = useRef<TimelineScrollMode>("following-end");
   const pendingTimelineAnchorRef = useRef<MessageId | null>(null);
   const positionedTimelineAnchorRef = useRef<MessageId | null>(null);
@@ -3788,6 +3798,7 @@ function ChatViewContent(props: ChatViewProps) {
   const anchorScrollRestoreFrameRef = useRef<number | null>(null);
   const cancelTimelineLiveFollowForUserNavigation = useCallback(() => {
     anchorUserScrollGenerationRef.current += 1;
+    timelineScrollSampleRef.current = null;
     timelineScrollModeRef.current = "free-scrolling";
     liveFollowUserScrollGenerationRef.current = null;
     pendingTimelineAnchorRef.current = null;
@@ -3859,6 +3870,7 @@ function ChatViewContent(props: ChatViewProps) {
   // gesture opts out.
   const scrollToEnd = useCallback((animated = false) => {
     isAtEndRef.current = true;
+    timelineScrollSampleRef.current = null;
     timelineScrollModeRef.current = "following-end";
     liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;
     pendingTimelineAnchorRef.current = null;
@@ -3867,37 +3879,46 @@ function ChatViewContent(props: ChatViewProps) {
     setShowScrollToBottom(false);
     void legendListRef.current?.scrollToEnd?.({ animated });
   }, []);
+  // Listen on the timeline wrapper (which outlives the list itself) in the
+  // capture phase rather than on LegendList's scroll node: the scroll node
+  // mounts asynchronously and is recreated when the list remounts, so listeners
+  // bound to it can silently end up on a detached element — and live-follow
+  // would then keep yanking the user back to the newest output.
   useEffect(() => {
-    let removeListeners: (() => void) | null = null;
-    const frame = requestAnimationFrame(() => {
-      const scrollNode = legendListRef.current?.getScrollableNode();
-      if (!scrollNode) {
-        return;
+    const surface = timelineInteractionSurface;
+    if (!surface) {
+      return;
+    }
+    const handleManualNavigation = () => {
+      cancelTimelineLiveFollowForUserNavigationRef.current();
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (
+        isTimelineScrollKey({
+          key: event.key,
+          ctrlKey: event.ctrlKey,
+          metaKey: event.metaKey,
+          altKey: event.altKey,
+          isEditableTarget: isEditableEventTarget(event.target),
+          isActivatableTarget: isActivatableEventTarget(event.target),
+        })
+      ) {
+        handleManualNavigation();
       }
-      const handleManualNavigation = () => {
-        cancelTimelineLiveFollowForUserNavigationRef.current();
-      };
-      scrollNode.addEventListener("wheel", handleManualNavigation, {
-        passive: true,
-      });
-      scrollNode.addEventListener("touchmove", handleManualNavigation, {
-        passive: true,
-      });
-      scrollNode.addEventListener("pointerdown", handleManualNavigation, {
-        passive: true,
-      });
-      removeListeners = () => {
-        scrollNode.removeEventListener("wheel", handleManualNavigation);
-        scrollNode.removeEventListener("touchmove", handleManualNavigation);
-        scrollNode.removeEventListener("pointerdown", handleManualNavigation);
-      };
-    });
+    };
+    const options = { passive: true, capture: true } as const;
+    surface.addEventListener("wheel", handleManualNavigation, options);
+    surface.addEventListener("touchmove", handleManualNavigation, options);
+    surface.addEventListener("pointerdown", handleManualNavigation, options);
+    surface.addEventListener("keydown", handleKeyDown, options);
 
     return () => {
-      cancelAnimationFrame(frame);
-      removeListeners?.();
+      surface.removeEventListener("wheel", handleManualNavigation, options);
+      surface.removeEventListener("touchmove", handleManualNavigation, options);
+      surface.removeEventListener("pointerdown", handleManualNavigation, options);
+      surface.removeEventListener("keydown", handleKeyDown, options);
     };
-  }, [activeThread?.id]);
+  }, [timelineInteractionSurface]);
 
   const onTimelineAnchorReady = useCallback((messageId: MessageId, anchorIndex: number) => {
     if (pendingTimelineAnchorRef.current === messageId) {
@@ -3991,7 +4012,35 @@ function ChatViewContent(props: ChatViewProps) {
     });
   }, []);
 
+  // Fires on every list scroll event, so it doubles as the sampling point for
+  // the upward-scroll backstop below.
   const onIsAtEndChange = useCallback((isAtEnd: boolean) => {
+    const state = legendListRef.current?.getState();
+    if (state) {
+      const sample: TimelineScrollSample = {
+        offset: state.scroll,
+        contentLength: state.contentLength,
+        scrollLength: state.scrollLength,
+      };
+      const previousSample = timelineScrollSampleRef.current;
+      timelineScrollSampleRef.current = sample;
+      // Anchor positioning drives its own scrolls; only treat upward movement as
+      // user navigation once the timeline is plainly following the live edge.
+      const anchorSettling =
+        pendingTimelineAnchorRef.current !== null ||
+        (positionedTimelineAnchorRef.current !== null &&
+          settledTimelineAnchorRef.current !== positionedTimelineAnchorRef.current);
+      if (
+        !anchorSettling &&
+        timelineScrollModeRef.current === "following-end" &&
+        isUserUpwardScroll(previousSample, sample)
+      ) {
+        cancelTimelineLiveFollowForUserNavigationRef.current();
+        showScrollDebouncer.current.maybeExecute();
+        isAtEndRef.current = false;
+        return;
+      }
+    }
     if (
       !isAtEnd &&
       liveFollowUserScrollGenerationRef.current === anchorUserScrollGenerationRef.current
@@ -4083,6 +4132,7 @@ function ChatViewContent(props: ChatViewProps) {
   useEffect(() => {
     setPullRequestDialogState(null);
     isAtEndRef.current = true;
+    timelineScrollSampleRef.current = null;
     timelineScrollModeRef.current = "following-end";
     liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;
     pendingTimelineAnchorRef.current = null;
@@ -6299,7 +6349,10 @@ function ChatViewContent(props: ChatViewProps) {
               />
             </div>
             {/* Messages Wrapper */}
-            <div className="relative flex min-h-0 flex-1 flex-col">
+            <div
+              ref={setTimelineInteractionSurface}
+              className="relative flex min-h-0 flex-1 flex-col"
+            >
               {/* Messages — LegendList handles virtualization and scrolling internally */}
               <MessagesTimeline
                 agentPanelModel={agentPanelModel}
