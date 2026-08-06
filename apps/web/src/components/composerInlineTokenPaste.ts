@@ -1,5 +1,4 @@
 import { collectComposerInlineTokens } from "@t3tools/shared/composerInlineTokens";
-import { THREAD_REFERENCE_PREFIX } from "@t3tools/shared/threadReference";
 import {
   $createLineBreakNode,
   $createTextNode,
@@ -36,11 +35,10 @@ export function registerComposerInlineTokenPaste(
       }
       // Token grammar requires trailing whitespace; a virtual newline lets a
       // mention at the very end of the pasted text still parse.
+      // `collectComposerInlineTokens` already keeps `@thread_ref:<id>` out of the
+      // mention set, so pasted thread references stay literal text.
       const mentions = collectComposerInlineTokens(`${text}\n`).filter(
-        (token) =>
-          token.type === "mention" &&
-          token.end <= text.length &&
-          !token.source.startsWith(THREAD_REFERENCE_PREFIX),
+        (token) => token.type === "mention" && token.end <= text.length,
       );
       if (mentions.length === 0) {
         return false;

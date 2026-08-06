@@ -21,6 +21,14 @@ describe("splitPromptIntoComposerSegments", () => {
     ]);
   });
 
+  it("keeps thread references as literal text instead of mention chips", () => {
+    // A mention chip re-serializes as a markdown file link, which would drop the
+    // `@thread_ref:` token the server parses on send.
+    const prompt = "context: @thread_ref:2e204b72-9c6f-4a38-8ae2-20ad29530da9 thanks";
+
+    expect(splitPromptIntoComposerSegments(prompt)).toEqual([{ type: "text", text: prompt }]);
+  });
+
   it("keeps newlines around mention tokens", () => {
     expect(splitPromptIntoComposerSegments("one\n@AGENTS.md \ntwo")).toEqual([
       { type: "text", text: "one\n" },

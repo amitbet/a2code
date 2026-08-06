@@ -816,9 +816,14 @@ RootStackType` in `src/Stack.tsx`) is unstable near its complexity limit
     reference, and appends their path-only instructions to the provider prompt.
   - `apps/web/src/components/Sidebar.tsx` — **modified**: `Copy thread ref`
     context-menu item + `copyThreadRefToClipboard`.
-  - `apps/web/src/components/composerInlineTokenPaste.ts` — **modified**:
-    preserves pasted `@thread_ref:<id>` tokens as literal prompt text instead
-    of converting them into generic file-mention Markdown links.
+  - `packages/shared/src/composerInlineTokens.ts` — **modified**:
+    `collectMentionTokens` skips `@thread_ref:<id>`. The token shares the `@`
+    trigger with file mentions, and any consumer that turns a mention into a
+    chip (composer paste, draft/prompt rehydration via
+    `splitPromptIntoComposerSegments`, the mobile composers) would re-serialize
+    it as `[thread_ref:<id>](thread_ref%3A<id>)` — dropping the leading `@` so
+    the server parser no longer recognizes it. Exclude it here, once, rather
+    than per consumer.
 - **Merge guard:** `ProviderCommandReactor.test.ts` has a regression test
   ("stores and path-references a thread transcript when a message contains
   thread_ref:<id>") alongside fork tests for the same-provider,
@@ -827,7 +832,9 @@ RootStackType` in `src/Stack.tsx`) is unstable near its complexity limit
   drops or splits the reactor wiring. The pure serializer/token helpers also
   have unit tests in `packages/shared` (fork-added files, so merge-safe).
   `ComposerPromptEditor.test.ts` verifies that the clipboard-to-composer path
-  keeps a thread reference literal so the server parser can still recognize it.
+  keeps a thread reference literal so the server parser can still recognize it,
+  and `composerInlineTokens.test.ts` / `composer-editor-mentions.test.ts` guard
+  the tokenizer exclusion that makes every composer path behave that way.
 
 ### Thread export (zip)
 

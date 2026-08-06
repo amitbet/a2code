@@ -31,6 +31,20 @@ describe("collectComposerInlineTokens", () => {
     ]);
   });
 
+  it("does not treat thread references as mentions", () => {
+    const text = "context: @thread_ref:2e204b72-9c6f-4a38-8ae2-20ad29530da9 and @AGENTS.md here";
+
+    expect(collectComposerInlineTokens(text)).toEqual([
+      {
+        type: "mention",
+        value: "AGENTS.md",
+        source: "@AGENTS.md",
+        start: 62,
+        end: 72,
+      },
+    ]);
+  });
+
   it("does not convert incomplete trailing tokens", () => {
     expect(collectComposerInlineTokens("Use $ui")).toEqual([]);
     expect(collectComposerInlineTokens("Inspect @AGENTS.md")).toEqual([]);

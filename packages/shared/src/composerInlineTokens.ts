@@ -1,3 +1,5 @@
+import { THREAD_REFERENCE_PREFIX } from "./threadReference.ts";
+
 export type ComposerInlineToken =
   | {
       readonly type: "mention";
@@ -64,6 +66,11 @@ function collectMentionTokens(text: string): ComposerInlineToken[] {
     const quotedPath = match[2];
     const path = quotedPath !== undefined ? quotedPath.replace(/\\(.)/g, "$1") : (match[3] ?? "");
     if (!path || (quotedPath === undefined && SCOPED_PACKAGE_REFERENCE_REGEX.test(path))) {
+      continue;
+    }
+    // `@thread_ref:<id>` shares the `@` trigger but is not a file mention: it has
+    // to survive as literal prompt text so the server-side parser still sees it.
+    if (quotedPath === undefined && `@${path}`.startsWith(THREAD_REFERENCE_PREFIX)) {
       continue;
     }
     const start = (match.index ?? 0) + prefix.length;
