@@ -1086,6 +1086,119 @@ describe("deriveWorkLogEntries", () => {
     expect(entry?.command).toBe("bun run lint");
   });
 
+  it("recovers a file-change path from stored payload data when detail was never projected", () => {
+    // Shape of Cursor activities already persisted before the server learned to
+    // read the diff block's path: the path is in `data`, `detail` is absent.
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "edit-tool",
+        kind: "tool.completed",
+        summary: "Changed files",
+        tone: "tool",
+        payload: {
+          itemType: "file_change",
+          data: {
+            kind: "edit",
+            rawInput: {},
+            content: [{ type: "diff", path: "/work/app/src/index.ts", oldText: "a", newText: "b" }],
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities);
+    expect(entry?.detail).toBe("/work/app/src/index.ts");
+  });
+
+  it("reports how much a read returned when the provider omits the path", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "read-size",
+        kind: "tool.completed",
+        summary: "Read file",
+        tone: "tool",
+        payload: {
+          itemType: "dynamic_tool_call",
+          data: {
+            kind: "read",
+            rawInput: {},
+            rawOutput: { content: "one\ntwo\nthree\n" },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities);
+    expect(entry?.detail).toBe("3 lines");
+  });
+
+  it("summarizes Cursor search results by match count", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "search-matches",
+        kind: "tool.completed",
+        summary: "Searched files",
+        tone: "tool",
+        payload: {
+          itemType: "web_search",
+          data: {
+            kind: "search",
+            rawInput: {},
+            rawOutput: { totalMatches: 1862, truncated: true },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities);
+    expect(entry?.detail).toBe("1,862 matches+");
+  });
+
+  it("surfaces a non-zero exit code when the provider omits the command text", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "cmd-failed",
+        kind: "tool.completed",
+        summary: "Ran command",
+        tone: "tool",
+        payload: {
+          itemType: "command_execution",
+          data: {
+            kind: "execute",
+            rawInput: {},
+            rawOutput: { exitCode: 127, stdout: "", stderr: "cursor: command not found" },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities);
+    expect(entry?.detail).toBe("exit code 127");
+    expect(workEntryIndicatesToolFailure(entry!)).toBe(true);
+  });
+
+  it("leaves a successful command row without a detail", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "cmd-ok",
+        kind: "tool.completed",
+        summary: "Ran command",
+        tone: "tool",
+        payload: {
+          itemType: "command_execution",
+          data: {
+            kind: "execute",
+            rawInput: {},
+            rawOutput: { exitCode: 0, stdout: "all good\n", stderr: "" },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities);
+    expect(entry?.detail).toBeUndefined();
+  });
+
   it("never previews file contents as the detail of a read-file entry", () => {
     // Cursor persists reads as kind:"read" + rawOutput.content and no path, so
     // the raw-output fallback would render a line of the file where the
@@ -1109,7 +1222,8 @@ describe("deriveWorkLogEntries", () => {
 
     const [entry] = deriveWorkLogEntries(activities);
     expect(entry?.label).toBe("Read file");
-    expect(entry?.detail).toBeUndefined();
+    expect(entry?.detail).not.toContain("const url");
+    expect(entry?.detail).toBe("1 line");
   });
 
   it("keeps a resolved read-file path as the detail", () => {
@@ -1496,8 +1610,9 @@ describe("deriveWorkLogEntries", () => {
       id: "read-complete",
       toolTitle: "Read File",
       itemType: "dynamic_tool_call",
+      // Size of what was read, never the text itself.
+      detail: "2 lines",
     });
-    expect(entries[0]?.detail).toBeUndefined();
   });
 
   it("does not use command stdout as the detail when Cursor omits the command input", () => {

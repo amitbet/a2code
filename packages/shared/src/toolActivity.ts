@@ -149,6 +149,18 @@ function extractPrimaryPath(data: Record<string, unknown> | undefined): string |
   return paths[0];
 }
 
+/**
+ * The file a tool activity acted on, dug out of a provider `data` payload.
+ *
+ * Exported so clients can recover the path from a stored activity whose
+ * `detail` was projected before this extraction understood the payload shape —
+ * the presentation below runs server-side at ingestion, so it cannot backfill
+ * history.
+ */
+export function toolActivityPrimaryPath(data: unknown): string | undefined {
+  return extractPrimaryPath(asRecord(data));
+}
+
 function normalizeEquivalentValue(value: string | undefined): string | undefined {
   const trimmed = asTrimmedString(value);
   if (!trimmed) {
@@ -166,11 +178,25 @@ function isEquivalent(left: string | undefined, right: string | undefined): bool
   return normalizedLeft !== undefined && normalizedLeft === normalizedRight;
 }
 
+export type ToolActivityAction = "command" | "read" | "file_change" | "search" | "other";
+
+export function classifyToolActivityAction(input: {
+  readonly itemType?: ToolLifecycleItemType | null | undefined;
+  readonly title?: string | null | undefined;
+  readonly data?: unknown;
+}): ToolActivityAction {
+  return classifyToolAction({
+    itemType: input.itemType,
+    title: asTrimmedString(input.title),
+    data: asRecord(input.data),
+  });
+}
+
 function classifyToolAction(input: {
   readonly itemType?: ToolLifecycleItemType | null | undefined;
   readonly title?: string | undefined;
   readonly data?: Record<string, unknown> | undefined;
-}): "command" | "read" | "file_change" | "search" | "other" {
+}): ToolActivityAction {
   const itemType = input.itemType ?? undefined;
   const kind = asTrimmedString(input.data?.kind)?.toLowerCase();
   const title = asTrimmedString(input.title)?.toLowerCase();

@@ -1,6 +1,7 @@
 import * as Option from "effect/Option";
 import * as Arr from "effect/Array";
 import { isBackgroundTaskActivity } from "@t3tools/client-runtime/state/subagentRuntime";
+import { classifyToolActivityAction, toolActivityPrimaryPath } from "@t3tools/shared/toolActivity";
 import {
   ApprovalRequestId,
   isToolLifecycleItemType,
@@ -1472,10 +1473,18 @@ function summarizeToolRawOutput(payload: Record<string, unknown> | null): string
     return null;
   }
 
+  const suffix = rawOutput.truncated === true ? "+" : "";
+
   const totalFiles = asNumber(rawOutput.totalFiles);
   if (totalFiles !== null) {
-    const suffix = rawOutput.truncated === true ? "+" : "";
     return `${totalFiles.toLocaleString()} file${totalFiles === 1 ? "" : "s"}${suffix}`;
+  }
+
+  // Cursor reports search results as a match count rather than a file count,
+  // and never echoes the query, so this is the only thing a search row can say.
+  const totalMatches = asNumber(rawOutput.totalMatches);
+  if (totalMatches !== null) {
+    return `${totalMatches.toLocaleString()} match${totalMatches === 1 ? "" : "es"}${suffix}`;
   }
 
   const content = asTrimmedString(rawOutput.content);
@@ -1491,6 +1500,35 @@ function summarizeToolRawOutput(payload: Record<string, unknown> | null): string
   return null;
 }
 
+/**
+ * `exit code <n>` for a failed command, or null when it succeeded. The wording
+ * is deliberate: `toolDetailTextLooksLikeFailure` recognizes it, so the row also
+ * picks up the failure affordance.
+ */
+function summarizeFailedCommandExit(payload: Record<string, unknown> | null): string | null {
+  const exitCode = asNumber(asRecord(asRecord(payload?.data)?.rawOutput)?.exitCode);
+  if (exitCode === null || exitCode === 0) {
+    return null;
+  }
+  return `exit code ${exitCode}`;
+}
+
+/**
+ * How much a read returned, for providers that report the content but not the
+ * file it came from. Never a preview of the text itself — see `extractToolDetail`.
+ */
+function summarizeReadContentSize(payload: Record<string, unknown> | null): string | null {
+  const rawOutput = asRecord(asRecord(payload?.data)?.rawOutput);
+  const content = typeof rawOutput?.content === "string" ? rawOutput.content : null;
+  if (content === null || content.length === 0) {
+    return null;
+  }
+  // Trailing newlines are an artifact of the file, not an extra line.
+  const lines = content.replace(/\n+$/u, "").split("\n").length;
+  const suffix = rawOutput?.truncated === true ? "+" : "";
+  return `${lines.toLocaleString()} line${lines === 1 ? "" : "s"}${suffix}`;
+}
+
 function isCommandToolDetail(payload: Record<string, unknown> | null, heading: string): boolean {
   const data = asRecord(payload?.data);
   const kind = asTrimmedString(data?.kind)?.toLowerCase();
@@ -1501,22 +1539,6 @@ function isCommandToolDetail(payload: Record<string, unknown> | null, heading: s
     title === "terminal" ||
     title === "ran command"
   );
-}
-
-/**
- * True for file reads, whose `rawOutput.content` is the *file's* text rather
- * than a description of the work. Providers that report the path (via
- * `locations`, `rawInput`, or a diff block) already have it resolved into
- * `payload.detail` server-side by `deriveToolActivityPresentation`; when they
- * don't (Cursor sends only `kind: "read"` + `rawOutput.content`), previewing
- * the content renders a line of the file where the filename belongs. Showing
- * nothing is the honest fallback.
- */
-function isFileReadToolDetail(payload: Record<string, unknown> | null, heading: string): boolean {
-  const data = asRecord(payload?.data);
-  const kind = asTrimmedString(data?.kind)?.toLowerCase();
-  const title = asTrimmedString(payload?.title ?? heading)?.toLowerCase();
-  return kind === "read" || title === "read file";
 }
 
 function extractToolDetail(
@@ -1532,8 +1554,36 @@ function extractToolDetail(
     return detail;
   }
 
-  if (isCommandToolDetail(payload, heading) || isFileReadToolDetail(payload, heading)) {
-    return null;
+  // Never promote stdout to the detail of a command row — it reads as if it were
+  // the command. When the provider omits the command text entirely (Cursor), a
+  // non-zero exit is still worth saying: without it a failed command is
+  // indistinguishable from a successful one, here and in the failure heuristic.
+  if (isCommandToolDetail(payload, heading)) {
+    return summarizeFailedCommandExit(payload);
+  }
+
+  // `payload.detail` is projected server-side at ingestion, so activities
+  // stored before that projection could resolve a path keep an empty detail
+  // forever. Re-derive it from the payload the client already has, reusing the
+  // same extraction the server uses so the two can't drift.
+  const action = classifyToolActivityAction({
+    itemType: extractWorkLogItemType(payload),
+    title: asTrimmedString(payload?.title) ?? heading,
+    data: payload?.data,
+  });
+  if (action === "read" || action === "file_change") {
+    const path = toolActivityPrimaryPath(payload?.data);
+    if (path && normalizePreviewForComparison(path) !== normalizedHeading) {
+      return path;
+    }
+  }
+
+  // A read's `rawOutput.content` is the *file's* text, not a description of the
+  // work, so previewing it renders a line of the file where the filename
+  // belongs. Cursor sends nothing else — no path, no title — so report how much
+  // was read instead: true, and more use than an empty row.
+  if (action === "read") {
+    return summarizeReadContentSize(payload);
   }
 
   const rawOutputSummary = summarizeToolRawOutput(payload);
