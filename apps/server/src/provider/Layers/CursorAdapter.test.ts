@@ -22,6 +22,7 @@ import {
   ProviderDriverKind,
   type ProviderRuntimeEvent,
   ThreadId,
+  type TurnId,
   ProviderInstanceId,
 } from "@t3tools/contracts";
 
@@ -111,6 +112,28 @@ async function waitForFileContent(filePath: string, attempts = 40) {
     await Effect.runPromise(Effect.yieldNow);
   }
   throw new Error(`Timed out waiting for file content at ${filePath}`);
+}
+
+function isPromptRequest(entry: Record<string, unknown>) {
+  return entry.method === "session/prompt";
+}
+
+/**
+ * Resolves once the mock agent's request log has stopped growing, i.e. every
+ * request the adapter had in flight has landed and anything still pending is
+ * parked client-side (e.g. a steer queued behind an unanswered prompt).
+ */
+function waitForQuietJsonLog(filePath: string, quietPolls = 4, pollMillis = 25) {
+  return Effect.gen(function* () {
+    let previousCount = -1;
+    let quiet = 0;
+    while (quiet < quietPolls) {
+      yield* Effect.sleep(`${pollMillis} millis`);
+      const count = (yield* Effect.promise(() => readJsonLines(filePath))).length;
+      quiet = count === previousCount ? quiet + 1 : 0;
+      previousCount = count;
+    }
+  });
 }
 
 function waitForJsonLogMatch(
@@ -1175,6 +1198,203 @@ cursorAdapterTestLayer("CursorAdapterLive", (it) => {
       assert.equal(yield* adapter.hasSession(threadId), true);
       yield* adapter.stopSession(threadId);
     }),
+  );
+
+  it.effect("settles an interrupted turn without waiting for the agent's prompt reply", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const serverSettings = yield* ServerSettingsService;
+      const threadId = ThreadId.make("cursor-interrupt-hung-prompt");
+
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockAgentWrapper({ T3_ACP_HANG_PROMPT_FOREVER: "1" }),
+      );
+      yield* serverSettings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
+
+      const runtimeEvents: ProviderRuntimeEvent[] = [];
+      const turnStarted = yield* Deferred.make<TurnId>();
+      const runtimeEventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.gen(function* () {
+          if (String(event.threadId) !== String(threadId)) {
+            return;
+          }
+          runtimeEvents.push(event);
+          if (event.type === "turn.started" && event.turnId !== undefined) {
+            yield* Deferred.succeed(turnStarted, event.turnId).pipe(Effect.ignore);
+          }
+        }),
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("cursor"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "default" },
+      });
+
+      const sendTurnFiber = yield* adapter
+        .sendTurn({ threadId, input: "hang forever", attachments: [] })
+        .pipe(Effect.forkChild);
+      const turnId = yield* Deferred.await(turnStarted);
+
+      yield* adapter.interruptTurn(threadId, turnId);
+      yield* Fiber.join(sendTurnFiber);
+
+      const turnCompletions = runtimeEvents.filter(
+        (event): event is Extract<ProviderRuntimeEvent, { type: "turn.completed" }> =>
+          event.type === "turn.completed",
+      );
+      const sessions = yield* adapter.listSessions();
+      const session = sessions.find((candidate) => String(candidate.threadId) === String(threadId));
+
+      assert.lengthOf(turnCompletions, 1);
+      assert.equal(turnCompletions[0]?.payload.state, "cancelled");
+      assert.equal(String(turnCompletions[0]?.turnId), String(turnId));
+      assert.isUndefined(session?.activeTurnId);
+
+      yield* Fiber.interrupt(runtimeEventsFiber);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("does not send a steer prompt that was queued behind an interrupted prompt", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const serverSettings = yield* ServerSettingsService;
+      const threadId = ThreadId.make("cursor-interrupt-queued-steer");
+      const tempDir = yield* Effect.promise(() =>
+        NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "cursor-acp-steer-")),
+      );
+      const requestLogPath = NodePath.join(tempDir, "requests.ndjson");
+      const argvLogPath = NodePath.join(tempDir, "argv.txt");
+      yield* Effect.promise(() => NodeFSP.writeFile(requestLogPath, "", "utf8"));
+      const wrapperPath = yield* Effect.promise(() =>
+        makeProbeWrapper(requestLogPath, argvLogPath, { T3_ACP_HANG_PROMPT_FOREVER: "1" }),
+      );
+      yield* serverSettings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
+
+      const runtimeEvents: ProviderRuntimeEvent[] = [];
+      const turnStarted = yield* Deferred.make<TurnId>();
+      const runtimeEventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.gen(function* () {
+          if (String(event.threadId) !== String(threadId)) {
+            return;
+          }
+          runtimeEvents.push(event);
+          if (event.type === "turn.started" && event.turnId !== undefined) {
+            yield* Deferred.succeed(turnStarted, event.turnId).pipe(Effect.ignore);
+          }
+        }),
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("cursor"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "default" },
+      });
+
+      const firstTurnFiber = yield* adapter
+        .sendTurn({ threadId, input: "hang forever", attachments: [] })
+        .pipe(Effect.forkChild);
+      const turnId = yield* Deferred.await(turnStarted);
+      yield* waitForJsonLogMatch(requestLogPath, isPromptRequest);
+
+      // The steer folds into the running turn and parks behind the hung prompt.
+      const steerFiber = yield* adapter
+        .sendTurn({ threadId, input: "steer while hung", attachments: [] })
+        .pipe(Effect.forkChild);
+      yield* waitForQuietJsonLog(requestLogPath);
+
+      yield* adapter.interruptTurn(threadId, turnId);
+      yield* Fiber.join(firstTurnFiber);
+      yield* Fiber.join(steerFiber);
+      yield* waitForQuietJsonLog(requestLogPath);
+
+      const requests = yield* Effect.promise(() => readJsonLines(requestLogPath));
+      const turnCompletions = runtimeEvents.filter(
+        (event): event is Extract<ProviderRuntimeEvent, { type: "turn.completed" }> =>
+          event.type === "turn.completed",
+      );
+
+      // The stopped prompt must not be replaced by the queued steer.
+      assert.lengthOf(requests.filter(isPromptRequest), 1);
+      assert.lengthOf(turnCompletions, 1);
+      assert.equal(turnCompletions[0]?.payload.state, "cancelled");
+
+      yield* Fiber.interrupt(runtimeEventsFiber);
+      yield* adapter.stopSession(threadId);
+    }).pipe(TestClock.withLive),
+  );
+
+  it.effect("drops cursor-agent output that arrives after an interrupt", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CursorAdapter;
+      const serverSettings = yield* ServerSettingsService;
+      const threadId = ThreadId.make("cursor-interrupt-late-output");
+
+      const wrapperPath = yield* Effect.promise(() =>
+        makeMockAgentWrapper({
+          T3_ACP_HANG_PROMPT_FOREVER: "1",
+          T3_ACP_EMIT_LATE_UPDATE_AFTER_CANCEL: "1",
+        }),
+      );
+      yield* serverSettings.updateSettings({ providers: { cursor: { binaryPath: wrapperPath } } });
+
+      const runtimeEvents: ProviderRuntimeEvent[] = [];
+      const turnStarted = yield* Deferred.make<TurnId>();
+      const runtimeEventsFiber = yield* Stream.runForEach(adapter.streamEvents, (event) =>
+        Effect.gen(function* () {
+          if (String(event.threadId) !== String(threadId)) {
+            return;
+          }
+          runtimeEvents.push(event);
+          if (event.type === "turn.started" && event.turnId !== undefined) {
+            yield* Deferred.succeed(turnStarted, event.turnId).pipe(Effect.ignore);
+          }
+        }),
+      ).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId,
+        provider: ProviderDriverKind.make("cursor"),
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+        modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "default" },
+      });
+
+      const sendTurnFiber = yield* adapter
+        .sendTurn({ threadId, input: "stream after cancel", attachments: [] })
+        .pipe(Effect.forkChild);
+      const turnId = yield* Deferred.await(turnStarted);
+
+      yield* adapter.interruptTurn(threadId, turnId);
+      yield* Fiber.join(sendTurnFiber);
+      // The mock emits its late `session/update` 50ms after `session/cancel`.
+      yield* Effect.sleep("500 millis");
+
+      const cancelledIndex = runtimeEvents.findIndex(
+        (event) => event.type === "turn.completed" && event.payload.state === "cancelled",
+      );
+      const turnOutputTypes = new Set([
+        "content.delta",
+        "item.started",
+        "item.updated",
+        "item.completed",
+        "turn.plan.updated",
+      ]);
+      const outputAfterCancellation = runtimeEvents
+        .slice(cancelledIndex + 1)
+        .filter((event) => turnOutputTypes.has(event.type));
+
+      assert.isAtLeast(cancelledIndex, 0);
+      assert.deepEqual(outputAfterCancellation, []);
+
+      yield* Fiber.interrupt(runtimeEventsFiber);
+      yield* adapter.stopSession(threadId);
+    }).pipe(TestClock.withLive),
   );
 
   it.effect("broadcasts runtime events to multiple stream consumers", () =>
