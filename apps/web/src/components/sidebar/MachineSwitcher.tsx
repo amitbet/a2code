@@ -76,7 +76,7 @@ export function MachineSwitcher({ onBackdrop }: { readonly onBackdrop: boolean }
 
   const MachineIcon = activeMachine.isPrimary ? MonitorIcon : CloudIcon;
   const triggerClassName = cn(
-    "ml-auto min-w-0 max-w-44 shrink-0 font-medium",
+    "ml-auto min-w-0 max-w-44 shrink font-medium",
     onBackdrop ? "text-white/90 hover:text-white" : "text-muted-foreground hover:text-foreground",
   );
 

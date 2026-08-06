@@ -1,5 +1,6 @@
 import type { EnvironmentId, SidebarThreadSortOrder } from "@t3tools/contracts";
 import type { MenuAction } from "@react-native-menu/menu";
+import Constants from "expo-constants";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
 import { useCallback, useMemo, useRef } from "react";
 import { Platform, Pressable, Text as RNText, TextInput, View } from "react-native";
@@ -10,6 +11,8 @@ import { ControlPillMenu } from "../../components/ControlPill";
 import { SymbolView } from "../../components/AppSymbol";
 import { MachineSwitcher, createMachineHeaderItem } from "../../components/MachineSwitcher";
 import { T3Wordmark } from "../../components/T3Wordmark";
+import { HOME_HORIZONTAL_INSET } from "../../lib/layoutMetrics";
+import { resolveMobileStageLabel } from "../../lib/mobileBranding";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
@@ -65,6 +68,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
   const insets = useSafeAreaInsets();
   const iconColor = useThemeColor("--color-icon");
   const mutedColor = useThemeColor("--color-foreground-muted");
+  const stageLabel = resolveMobileStageLabel(Constants.expoConfig?.extra?.appVariant);
   // Thread List v2 lays the list out in fixed creation order, so the
   // sort/group filter controls would be silently ignored — hide them and
   // key the "customized" icon state off the environment filter alone.
@@ -162,8 +166,9 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
     <>
       <NativeStackScreenOptions options={{ headerShown: false }} />
       <View
-        className="border-b border-header-border bg-header px-4 pb-3"
+        className="border-b border-header-border bg-header pb-3"
         style={{
+          paddingHorizontal: HOME_HORIZONTAL_INSET,
           paddingTop: Math.max(insets.top, 12),
         }}
       >
@@ -177,7 +182,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
               </RNText>
               <View className="rounded-full bg-subtle px-2 py-0.75">
                 <RNText className="text-[11px] font-t3-bold tracking-[1.1px] text-foreground-muted uppercase">
-                  Alpha
+                  {stageLabel}
                 </RNText>
               </View>
             </View>

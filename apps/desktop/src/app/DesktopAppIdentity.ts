@@ -47,6 +47,27 @@ const normalizeCommitHash = (value: string): Option.Option<string> => {
     : Option.none();
 };
 
+export const resolveUserDataPath = Effect.gen(function* () {
+  const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const legacyPath = environment.path.join(
+    environment.appDataDirectory,
+    environment.legacyUserDataDirName,
+  );
+  const legacyPathExists = yield* fileSystem.exists(legacyPath).pipe(
+    Effect.mapError(
+      (cause) =>
+        new DesktopUserDataPathResolutionError({
+          legacyPath,
+          cause,
+        }),
+    ),
+  );
+  return legacyPathExists
+    ? legacyPath
+    : environment.path.join(environment.appDataDirectory, environment.userDataDirName);
+}).pipe(Effect.withSpan("desktop.appIdentity.resolveUserDataPath"));
+
 export const make = Effect.gen(function* () {
   const assets = yield* DesktopAssets.DesktopAssets;
   const electronApp = yield* ElectronApp.ElectronApp;
@@ -92,24 +113,11 @@ export const make = Effect.gen(function* () {
     return commitHash;
   });
 
-  const resolveUserDataPath = Effect.gen(function* () {
-    const legacyPath = environment.path.join(
-      environment.appDataDirectory,
-      environment.legacyUserDataDirName,
-    );
-    const legacyPathExists = yield* fileSystem.exists(legacyPath).pipe(
-      Effect.mapError(
-        (cause) =>
-          new DesktopUserDataPathResolutionError({
-            legacyPath,
-            cause,
-          }),
-      ),
-    );
-    return legacyPathExists
-      ? legacyPath
-      : environment.path.join(environment.appDataDirectory, environment.userDataDirName);
-  }).pipe(Effect.withSpan("desktop.appIdentity.resolveUserDataPath"));
+  const userDataPath = resolveUserDataPath.pipe(
+    Effect.provide(
+      yield* Effect.context<DesktopEnvironment.DesktopEnvironment | FileSystem.FileSystem>(),
+    ),
+  );
 
   const resolveActiveContentVersion = Effect.gen(function* () {
     // The About panel shows both the running content version (an applied JS
@@ -163,7 +171,7 @@ export const make = Effect.gen(function* () {
   }).pipe(Effect.withSpan("desktop.appIdentity.configure"));
 
   return DesktopAppIdentity.of({
-    resolveUserDataPath,
+    resolveUserDataPath: userDataPath,
     configureAboutPanel,
     configure,
   });

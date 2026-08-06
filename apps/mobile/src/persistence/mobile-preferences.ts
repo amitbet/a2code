@@ -5,6 +5,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
+import type { SidebarProjectGroupingMode } from "@t3tools/contracts";
 
 import * as MobileDatabase from "./mobile-database";
 import * as MobileSecureStorage from "./mobile-secure-storage";
@@ -22,9 +23,11 @@ export interface Preferences {
   readonly codeWordBreak?: boolean;
   readonly connectOnboardingOptOutAccounts?: ReadonlyArray<string>;
   readonly collapsedProjectGroups?: readonly string[];
+  /** @deprecated Kept temporarily so older OTA bundles retain the selected mode. */
   readonly projectGroupingEnabled?: boolean;
   /** Persisted machine-wide environment selection for the mobile workspace. */
   readonly machineEnvironmentId?: string;
+  readonly projectGroupingMode?: SidebarProjectGroupingMode;
   /**
    * Device-local mirror of the web beta's `sidebarV2Enabled`. Mobile has no
    * client-settings sync, so the flat v2 thread list is opted out of per
@@ -83,6 +86,7 @@ function sanitizePreferences(parsed: Preferences): Preferences {
     collapsedProjectGroups?: readonly string[];
     projectGroupingEnabled?: boolean;
     machineEnvironmentId?: string;
+    projectGroupingMode?: SidebarProjectGroupingMode;
     threadListV2Enabled?: boolean;
   } = {};
 
@@ -115,6 +119,13 @@ function sanitizePreferences(parsed: Preferences): Preferences {
   }
   if (typeof parsed.machineEnvironmentId === "string") {
     preferences.machineEnvironmentId = parsed.machineEnvironmentId;
+  }
+  if (
+    parsed.projectGroupingMode === "repository" ||
+    parsed.projectGroupingMode === "repository_path" ||
+    parsed.projectGroupingMode === "separate"
+  ) {
+    preferences.projectGroupingMode = parsed.projectGroupingMode;
   }
   if (typeof parsed.threadListV2Enabled === "boolean") {
     preferences.threadListV2Enabled = parsed.threadListV2Enabled;

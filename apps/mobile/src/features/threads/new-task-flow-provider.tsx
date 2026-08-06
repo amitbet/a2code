@@ -26,8 +26,11 @@ import {
 import type { TurnCommandMetadata } from "../../lib/commandMetadata";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
 import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
-import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
-import { groupProjectsByRepository } from "../../lib/repositoryGroups";
+import {
+  buildModelOptions,
+  groupByProvider,
+  resolveSelectableModelSelection,
+} from "../../lib/modelOptions";
 import { scopedProjectKey } from "../../lib/scopedEntities";
 import { appAtomRegistry } from "../../state/atom-registry";
 import {
@@ -59,6 +62,12 @@ import {
 } from "../../state/use-remote-environment-registry";
 import { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { type VcsRef } from "@t3tools/client-runtime/state/vcs";
+import {
+  buildHomeProjectScopes,
+  sortHomeProjectScopes,
+  type HomeProjectScope,
+} from "../home/homeThreadList";
+import { useMobileProjectGroupingSettings } from "../../state/project-grouping";
 
 type WorkspaceMode = "local" | "worktree";
 
@@ -109,10 +118,7 @@ export function branchBadgeLabel(input: {
 }
 
 type NewTaskFlowContextValue = {
-  readonly logicalProjects: ReadonlyArray<{
-    readonly key: string;
-    readonly project: EnvironmentProject;
-  }>;
+  readonly projectScopes: ReadonlyArray<HomeProjectScope>;
   readonly selectedEnvironmentId: EnvironmentId | null;
   readonly selectedProjectKey: string | null;
   readonly selectedModelKey: string | null;
@@ -175,32 +181,20 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const projects = useMachineProjects();
   const threads = useMachineThreadShells();
   const { savedConnectionsById } = useSavedRemoteConnections();
-
-  const repositoryGroups = useMemo(
-    () => groupProjectsByRepository({ projects, threads }),
-    [projects, threads],
-  );
-  const logicalProjects = useMemo(
+  const groupingSettings = useMobileProjectGroupingSettings();
+  const projectScopes = useMemo(
     () =>
-      pipe(
-        repositoryGroups,
-        Arr.map((group) => {
-          const primaryProject = group.projects[0]?.project;
-          if (!primaryProject) {
-            return null;
-          }
-          return { key: group.key, project: primaryProject };
+      sortHomeProjectScopes({
+        scopes: buildHomeProjectScopes({
+          projects,
+          environmentId: null,
+          projectGroupingMode: groupingSettings.sidebarProjectGroupingMode,
         }),
-        Arr.filter(
-          (
-            entry,
-          ): entry is {
-            readonly key: string;
-            readonly project: EnvironmentProject;
-          } => entry !== null,
-        ),
-      ),
-    [repositoryGroups],
+        threads,
+        pendingTasks: [],
+        projectSortOrder: "updated_at",
+      }),
+    [groupingSettings.sidebarProjectGroupingMode, projects, threads],
   );
 
   const [selectedEnvironmentIdOverride, setSelectedEnvironmentId] = useState<EnvironmentId | null>(
@@ -351,7 +345,11 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const selectedProjectDraft = useComposerDraft(selectedProjectDraftKey);
   const prompt = selectedProjectDraft.text;
   const attachments = selectedProjectDraft.attachments;
-  const workspaceMode = selectedProjectDraft.workspaceSelection?.mode ?? "local";
+  // The server's configured default decides the mode until the user picks one
+  // explicitly — same resolution web uses for new draft threads.
+  const defaultWorkspaceMode: WorkspaceMode =
+    selectedEnvironmentServerConfig?.settings.defaultThreadEnvMode ?? "local";
+  const workspaceMode = selectedProjectDraft.workspaceSelection?.mode ?? defaultWorkspaceMode;
   const selectedBranchName = selectedProjectDraft.workspaceSelection?.branch ?? null;
   const selectedWorktreePath = selectedProjectDraft.workspaceSelection?.worktreePath ?? null;
   // Keep the user's explicit choice separate from the resolved display value:
@@ -365,22 +363,29 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const runtimeMode = selectedProjectDraft.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   const interactionMode = selectedProjectDraft.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE;
 
+  // Stored selections (draft and project default) only count while their
+  // provider is usable on the server; otherwise the server's default model
+  // wins instead of silently targeting a disabled provider.
+  const draftModelSelection = resolveSelectableModelSelection(
+    selectedEnvironmentServerConfig,
+    selectedProjectDraft.modelSelection ?? null,
+  );
+  const projectDefaultModelSelection = resolveSelectableModelSelection(
+    selectedEnvironmentServerConfig,
+    selectedProject?.defaultModelSelection ?? null,
+  );
   const modelOptions = useMemo(
     () =>
       buildModelOptions(
         selectedEnvironmentServerConfig,
-        selectedProjectDraft.modelSelection ?? selectedProject?.defaultModelSelection ?? null,
+        draftModelSelection ?? projectDefaultModelSelection,
       ),
-    [
-      selectedEnvironmentServerConfig,
-      selectedProject?.defaultModelSelection,
-      selectedProjectDraft.modelSelection,
-    ],
+    [selectedEnvironmentServerConfig, draftModelSelection, projectDefaultModelSelection],
   );
 
   const selectedModel =
-    selectedProjectDraft.modelSelection ??
-    selectedProject?.defaultModelSelection ??
+    draftModelSelection ??
+    projectDefaultModelSelection ??
     modelOptions.find((option) => option.isDefault)?.selection ??
     modelOptions[0]?.selection ??
     null;
@@ -679,12 +684,20 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       }
       const draft = getComposerDraftSnapshot(selectedProjectDraftKey);
       const text = draft.text.trim();
-      const draftModelSelection = draft.modelSelection ?? selectedModel;
+      // Same availability gate the composer display applies: a stored
+      // selection targeting a disabled provider must not ride into the queue.
+      const draftModelSelection =
+        resolveSelectableModelSelection(
+          selectedEnvironmentServerConfig,
+          draft.modelSelection ?? null,
+        ) ?? selectedModel;
       if (text.length === 0 || !draftModelSelection) {
         return null;
       }
       const workspaceSelection = draft.workspaceSelection;
-      const mode = workspaceSelection?.mode ?? "local";
+      // Fall back to the resolved mode (server default) so queued tasks drain
+      // with the same mode the composer displayed.
+      const mode = workspaceSelection?.mode ?? workspaceMode;
       // When the selection is the stand-in built from the queued snapshot,
       // persist the original (possibly absent) snapshot values — the
       // stand-in's placeholder title/workspaceRoot must never be written back
@@ -726,10 +739,12 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     [
       editingPendingProject,
       editingPendingTask,
+      selectedEnvironmentServerConfig,
       selectedModel,
       selectedProject,
       selectedProjectDraftKey,
       startFromOrigin,
+      workspaceMode,
     ],
   );
 
@@ -825,7 +840,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
 
   const value = useMemo<NewTaskFlowContextValue>(
     () => ({
-      logicalProjects,
+      projectScopes,
       selectedEnvironmentId,
       selectedProjectKey,
       selectedModelKey,
@@ -891,7 +906,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       finishEditingPendingTask,
       interactionMode,
       loadBranches,
-      logicalProjects,
+      projectScopes,
       modelOptions,
       prompt,
       providerGroups,

@@ -3,6 +3,81 @@
 This file tracks fork-specific divergences that are likely to conflict when
 merging `upstream/main`.
 
+## 2026-08-06 upstream merge (upstream thread pinning, libghostty terminals, Linux startup) — migration notes
+
+Merged `upstream/main` through `a2ca89aa1` (86 commits). Notable integrations:
+
+- **Upstream landed its own thread pinning — the fork's converged onto it.**
+  Upstream added `036_ProjectionThreadsPinned` with the _same_ `pinned_at`
+  column the fork's `035_ProjectionThreadsPinnedAt` already adds, plus a
+  `threadPinning` environment capability and first-class `thread.pin` /
+  `thread.unpin` commands. Resolution: upstream's duplicate migration was
+  **deleted** rather than renumbered (a renumbered copy would be a pure no-op on
+  every DB, fork or fresh); fork ids 33–38 are unchanged and 39 is the next free
+  id. Both sides declared `pinnedAt` in the same object literals across
+  contracts, `ProjectionPipeline`, `ProjectionSnapshotQuery`,
+  `Services/ProjectionThreads`, and the `Layers/ProjectionThreads` SQL —
+  git merged them additively, producing duplicate keys/columns (TS1117, and a
+  genuinely broken INSERT). **After any future merge that touches thread
+  metadata, grep the projection layer for duplicated field names.**
+  - Web: upstream's `pinThread`/`unpinThread` and the fork's `setThreadPinned`
+    (via `thread.meta.update`) both survive in `useThreadActions.ts`. `SidebarV2`
+    uses upstream's; the fork's v1 `Sidebar.tsx` still uses `setThreadPinned`.
+    Both converge on the same column. Collapsing v1 onto `pinThread`/`unpinThread`
+    is a cleanup worth doing next time `Sidebar.tsx` is touched.
+  - Mobile: the fork's pin surface was **dropped** in favour of upstream's
+    (`thread-list-v2-items.tsx` was taken wholesale; `useThreadListActions`
+    exposes upstream's `pinThread`/`unpinThread`; `AppSymbol`'s fork-only
+    `pin.fill` entry is gone). The fork-only **v1** rows still take a single
+    `onTogglePinThread`, now derived locally from upstream's two actions in
+    `HomeScreen.tsx` and `ThreadNavigationSidebar.tsx`.
+- **Bounded thread replay: upstream fully converged (`ca72e381c`).** Upstream's
+  thread-detail catch-up now computes the gap against
+  `orchestrationEngine.latestSequence` and falls back to a fresh snapshot past
+  `THREAD_RESUME_MAX_GAP`, which is a strictly better form of the fork's bounded
+  `readEvents(afterSequence)`. **The fork's divergence in `ws.ts` is retired** —
+  both subscription paths are now upstream's. Do not re-introduce
+  `Number.MAX_SAFE_INTEGER` replay.
+- **Renderer-crash recovery: upstream converged too (`36caf34c6`).** The fork's
+  escalating-backoff `scheduleRendererGoneRecovery` was replaced by upstream's
+  bounded recovery (500 ms reload, max 3 attempts per rolling 60 s). The fork's
+  exported, tested `isRecoverableMainRendererGoneReason` predicate was kept in
+  place of upstream's narrower inline `crashed|oom|abnormal-exit` check, so
+  `memory-eviction`/`launch-failed`/`killed` still recover.
+- **Desktop state paths moved into a new upstream module.** Upstream extracted
+  `resolveDesktopBaseDir`/`resolveDesktopStateDir` into
+  `apps/desktop/src/app/DesktopStatePaths.ts`, which **hardcodes `~/.t3`** — it
+  was repointed at the fork's `.a2code`. Upstream's new
+  `DesktopEarlyElectronStartup.ts` (Linux secret-storage backend, `6f04a5cff`)
+  likewise hardcodes `linuxWmClass: "t3code(-dev)"`; repointed at `a2code(-dev)`
+  so it matches `DesktopEnvironment`, and its tests repointed off `.t3`.
+  `DesktopEnvironment` keeps the fork's `a2code` / `A2 Code` dir names on top of
+  upstream's new helpers, `xdgDataHome` applications dir, and `appImagePath`.
+- **Mobile `repositoryGroups.ts` deleted upstream (`47dfc6526`).** The fork's
+  `NewTaskRouteScreen` grouping already runs through upstream's `projectScopes`
+  from `new-task-flow-provider` (which is machine-scoped via
+  `useMachineProjects`), so the fork's `groupProjectsByRepository` import and its
+  test were dropped. Machine scoping (`useMachineProjects`,
+  `useWorkspaceState(machineEnvironmentId)`) survives in both new-task screens,
+  and `mobile-preferences` carries both `machineEnvironmentId` and upstream's
+  `projectGroupingMode`.
+- **`effect` patch re-derived again**, as expected on every bump (beta.102 →
+  beta.103). Verified the committed patch touches `dist/Schema.js`,
+  `dist/Schema.d.ts`, and `src/Schema.ts` in addition to upstream's
+  `McpServer`/`RpcClient` hunks.
+- **`SimpleWorkEntryRow` was split upstream** into a dispatcher plus
+  `PlainWorkEntryRow` (agent-spawn CTA rows). The fork's in-chat-find
+  `searchExpanded` prop is threaded through both halves — re-apply if a future
+  merge re-splits that component.
+- **Settings rows are now search-indexed** (`e5c754706`): upstream replaced the
+  literal `title="…"` prop with `{...searchableSetting("theme")}`. The fork's
+  "A2 Code" copy lives in `description`, which is unaffected.
+- Test fixtures needed the other side's fields again: `queuedPrompts: []` in
+  upstream's `decider.pinned.test.ts`, and `kind`/`shellVersion` in the fork's
+  `desktopUpdate.toast.test.tsx` `DesktopUpdateState` fixture.
+- Fork package versions stay on the `0.0.25-amit` marker (upstream is at
+  `0.0.32`).
+
 ## 2026-08-01 fork feature (mobile machine-scoped environment selector) — merge notes
 
 The mobile app now mirrors the web fork's persisted, machine-wide environment
@@ -395,12 +470,14 @@ the next merge; the per-feature sections below were updated to match.
 - Adds operational hardening found while debugging a local installed-app crash
   on 2026-07-09. These changes are fork-specific until/unless upstream grows
   equivalent replay/session safeguards.
-- **Bounded WebSocket event catch-up.** Shell/thread subscriptions previously
-  used `readEvents(afterSequence, Number.MAX_SAFE_INTEGER)`, so a stale client
-  cursor could force the backend to decode the entire global
-  `orchestration_events` table before filtering. On a large local DB this drove
-  the desktop backend into Node heap OOM. The fork now uses the event store's
-  default bounded replay for catch-up; cold loads still use snapshots.
+- **Bounded WebSocket event catch-up — RETIRED as a fork divergence (2026-08-06).**
+  Shell/thread subscriptions previously used
+  `readEvents(afterSequence, Number.MAX_SAFE_INTEGER)`, so a stale client cursor
+  could force the backend to decode the entire global `orchestration_events`
+  table before filtering, driving the desktop backend into Node heap OOM.
+  Upstream now bounds **both** paths itself (gap vs `latestSequence`, fresh
+  snapshot past `SHELL_RESUME_MAX_GAP` / `THREAD_RESUME_MAX_GAP`), so `ws.ts` is
+  upstream's again. Just never let `Number.MAX_SAFE_INTEGER` back in.
 - **Stop-button stale projection cleanup.** If a turn start is requested but no
   provider turn id is ever materialized, interrupt/stop events now delete the
   pending-start placeholder so the UI does not stay stuck on "working" with
@@ -655,6 +732,13 @@ activities)` pairs `user-input.requested` questions with the matching
 
 ### Pinned project threads
 
+- **Largely superseded by upstream as of the 2026-08-06 merge** — upstream
+  shipped its own pinning on the same `pinned_at` column, with a `threadPinning`
+  capability and `thread.pin`/`thread.unpin` commands. The mobile fork surface
+  was dropped entirely; on web, only the v1 `Sidebar.tsx` still drives pinning
+  through the fork's `setThreadPinned` (`thread.meta.update`). See that merge's
+  notes above. The description below is retained for the fork-added migration
+  `035_ProjectionThreadsPinnedAt`, which stays frozen.
 - Adds a persisted per-thread `pinnedAt` metadata field. Pinned threads stay at
   the top of their project's thread list, ordered by most recent pin time before
   falling back to the existing sidebar thread sort. The sidebar renders a pin

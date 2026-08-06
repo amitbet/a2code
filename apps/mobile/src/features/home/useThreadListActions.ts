@@ -1,5 +1,5 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
-import { canSettle } from "@t3tools/client-runtime/state/thread-settled";
+import { canSettle, canSnooze } from "@t3tools/client-runtime/state/thread-settled";
 import * as Cause from "effect/Cause";
 import * as Haptics from "expo-haptics";
 import { useCallback, useRef } from "react";
@@ -22,14 +22,21 @@ function environmentSupportsSettlement(environmentId: EnvironmentThreadShell["en
   );
 }
 
-type ThreadListAction =
-  | "archive"
-  | "unarchive"
-  | "delete"
-  | "settle"
-  | "unsettle"
-  | "pin"
-  | "unpin";
+function environmentSupportsSnooze(environmentId: EnvironmentThreadShell["environmentId"]) {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadSnooze === true
+  );
+}
+
+function environmentSupportsPinning(environmentId: EnvironmentThreadShell["environmentId"]) {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadPinning === true
+  );
+}
+
+type ThreadListAction = "archive" | "unarchive" | "delete" | "settle" | "unsettle";
 
 const ACTION_VERBS: Record<ThreadListAction, string> = {
   archive: "archived",
@@ -37,8 +44,6 @@ const ACTION_VERBS: Record<ThreadListAction, string> = {
   delete: "deleted",
   settle: "settled",
   unsettle: "un-settled",
-  pin: "pinned",
-  unpin: "unpinned",
 };
 
 function actionFailureMessage(action: ThreadListAction, cause: Cause.Cause<unknown>): string {
@@ -58,8 +63,6 @@ function actionFailureTitle(action: ThreadListAction): string {
   if (action === "unarchive") return "Could not unarchive thread";
   if (action === "settle") return "Could not settle thread";
   if (action === "unsettle") return "Could not un-settle thread";
-  if (action === "pin") return "Could not pin thread";
-  if (action === "unpin") return "Could not unpin thread";
   return "Could not delete thread";
 }
 
@@ -72,9 +75,6 @@ function useThreadActionExecutor(
   const deleteMutation = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
   const settleMutation = useAtomCommand(threadEnvironment.settle, { reportFailure: false });
   const unsettleMutation = useAtomCommand(threadEnvironment.unsettle, { reportFailure: false });
-  const updateMetadataMutation = useAtomCommand(threadEnvironment.updateMetadata, {
-    reportFailure: false,
-  });
   const inFlightThreadKeys = useRef(new Set<string>());
 
   const executeAction = useCallback(
@@ -120,23 +120,6 @@ function useThreadActionExecutor(
           );
           return false;
         }
-        if (action === "pin" || action === "unpin") {
-          // Pin rides thread.meta.update: the server normalizes pinnedAt to
-          // the command's occurrence time; null unpins.
-          const result = await updateMetadataMutation({
-            environmentId: thread.environmentId,
-            input: {
-              threadId: thread.id,
-              pinnedAt: action === "pin" ? new Date().toISOString() : null,
-            },
-          });
-          if (result._tag === "Failure") {
-            Alert.alert(actionFailureTitle(action), actionFailureMessage(action, result.cause));
-            return false;
-          }
-          onCompleted?.(action, thread);
-          return true;
-        }
         const result =
           action === "unsettle"
             ? // reason "user" pins the thread active: auto-settle stays
@@ -179,7 +162,6 @@ function useThreadActionExecutor(
       settleMutation,
       unarchiveMutation,
       unsettleMutation,
-      updateMetadataMutation,
     ],
   );
 
@@ -224,10 +206,18 @@ export function useThreadListActions(): {
   readonly archiveThread: (thread: EnvironmentThreadShell) => void;
   readonly confirmDeleteThread: (thread: EnvironmentThreadShell) => void;
   readonly settleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
+  readonly snoozeThread: (thread: EnvironmentThreadShell, snoozedUntil: string) => Promise<boolean>;
+  readonly unsnoozeThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly unsettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
-  readonly toggleThreadPinned: (thread: EnvironmentThreadShell) => void;
+  readonly pinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
+  readonly unpinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
 } {
   const executeAction = useThreadActionExecutor();
+  const snoozeMutation = useAtomCommand(threadEnvironment.snooze, { reportFailure: false });
+  const unsnoozeMutation = useAtomCommand(threadEnvironment.unsnooze, { reportFailure: false });
+  const pinMutation = useAtomCommand(threadEnvironment.pin, { reportFailure: false });
+  const unpinMutation = useAtomCommand(threadEnvironment.unpin, { reportFailure: false });
+  const snoozeInFlightThreadKeys = useRef(new Set<string>());
 
   const archiveThread = useCallback(
     (thread: EnvironmentThreadShell) => {
@@ -235,24 +225,171 @@ export function useThreadListActions(): {
     },
     [executeAction],
   );
-  const toggleThreadPinned = useCallback(
-    (thread: EnvironmentThreadShell) => {
-      void executeAction(thread.pinnedAt ? "unpin" : "pin", thread);
-    },
-    [executeAction],
-  );
   const settleThread = useCallback(
     async (thread: EnvironmentThreadShell) => (await executeAction("settle", thread)) === true,
     [executeAction],
+  );
+  const snoozeThread = useCallback(
+    async (thread: EnvironmentThreadShell, snoozedUntil: string) => {
+      const key = scopedThreadKey(thread.environmentId, thread.id);
+      if (snoozeInFlightThreadKeys.current.has(key)) {
+        return false;
+      }
+      snoozeInFlightThreadKeys.current.add(key);
+      try {
+        if (!environmentSupportsSnooze(thread.environmentId)) {
+          Alert.alert(
+            "Could not snooze thread",
+            "This environment's server does not support snoozing yet. Update the server to use Snooze.",
+          );
+          return false;
+        }
+        if (!canSnooze(thread, { now: new Date().toISOString() })) {
+          Alert.alert(
+            "Could not snooze thread",
+            thread.hasPendingApprovals || thread.hasPendingUserInput
+              ? "This thread is waiting on you. Respond to the pending request before snoozing it."
+              : "This thread is still starting a turn. Try again once it's running.",
+          );
+          return false;
+        }
+
+        selectionHaptic();
+        const result = await snoozeMutation({
+          environmentId: thread.environmentId,
+          input: {
+            threadId: thread.id,
+            snoozedUntil,
+          },
+        });
+        if (result._tag === "Failure") {
+          const error = Cause.squash(result.cause);
+          Alert.alert(
+            "Could not snooze thread",
+            error instanceof Error && error.message.trim().length > 0
+              ? error.message
+              : "The thread could not be snoozed.",
+          );
+          return false;
+        }
+        return true;
+      } finally {
+        snoozeInFlightThreadKeys.current.delete(key);
+      }
+    },
+    [snoozeMutation],
+  );
+  const unsnoozeThread = useCallback(
+    async (thread: EnvironmentThreadShell) => {
+      const key = scopedThreadKey(thread.environmentId, thread.id);
+      if (snoozeInFlightThreadKeys.current.has(key)) {
+        return false;
+      }
+      snoozeInFlightThreadKeys.current.add(key);
+      try {
+        if (!environmentSupportsSnooze(thread.environmentId)) {
+          Alert.alert(
+            "Could not wake thread",
+            "This environment's server does not support snoozing yet. Update the server to wake this thread.",
+          );
+          return false;
+        }
+
+        selectionHaptic();
+        const result = await unsnoozeMutation({
+          environmentId: thread.environmentId,
+          input: { threadId: thread.id, reason: "user" },
+        });
+        if (result._tag === "Failure") {
+          const error = Cause.squash(result.cause);
+          Alert.alert(
+            "Could not wake thread",
+            error instanceof Error && error.message.trim().length > 0
+              ? error.message
+              : "The thread could not be woken.",
+          );
+          return false;
+        }
+        return true;
+      } finally {
+        snoozeInFlightThreadKeys.current.delete(key);
+      }
+    },
+    [unsnoozeMutation],
   );
   const unsettleThread = useCallback(
     async (thread: EnvironmentThreadShell) => (await executeAction("unsettle", thread)) === true,
     [executeAction],
   );
+  const pinThread = useCallback(
+    async (thread: EnvironmentThreadShell) => {
+      if (!environmentSupportsPinning(thread.environmentId)) {
+        Alert.alert(
+          "Could not pin thread",
+          "This environment's server does not support pinning yet. Update the server to use Pin.",
+        );
+        return false;
+      }
+      selectionHaptic();
+      const result = await pinMutation({
+        environmentId: thread.environmentId,
+        input: { threadId: thread.id },
+      });
+      if (result._tag === "Failure") {
+        const error = Cause.squash(result.cause);
+        Alert.alert(
+          "Could not pin thread",
+          error instanceof Error && error.message.trim().length > 0
+            ? error.message
+            : "The thread could not be pinned.",
+        );
+        return false;
+      }
+      return true;
+    },
+    [pinMutation],
+  );
+  const unpinThread = useCallback(
+    async (thread: EnvironmentThreadShell) => {
+      if (!environmentSupportsPinning(thread.environmentId)) {
+        Alert.alert(
+          "Could not unpin thread",
+          "This environment's server does not support pinning yet. Update the server to use Pin.",
+        );
+        return false;
+      }
+      selectionHaptic();
+      const result = await unpinMutation({
+        environmentId: thread.environmentId,
+        input: { threadId: thread.id },
+      });
+      if (result._tag === "Failure") {
+        const error = Cause.squash(result.cause);
+        Alert.alert(
+          "Could not unpin thread",
+          error instanceof Error && error.message.trim().length > 0
+            ? error.message
+            : "The thread could not be unpinned.",
+        );
+        return false;
+      }
+      return true;
+    },
+    [unpinMutation],
+  );
 
   const confirmDeleteThread = useConfirmDeleteThread(executeAction);
 
-  return { archiveThread, confirmDeleteThread, settleThread, unsettleThread, toggleThreadPinned };
+  return {
+    archiveThread,
+    confirmDeleteThread,
+    settleThread,
+    snoozeThread,
+    unsnoozeThread,
+    unsettleThread,
+    pinThread,
+    unpinThread,
+  };
 }
 
 export function useArchivedThreadListActions(
