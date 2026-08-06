@@ -38,6 +38,33 @@ describe("toolActivity", () => {
     });
   });
 
+  // Cursor (ACP) leaves `rawInput` empty and sends no `locations`; the edited
+  // file's path is only present on the diff content block.
+  it("uses the diff content block path for file changes", () => {
+    expect(
+      deriveToolActivityPresentation({
+        itemType: "file_change",
+        title: "Edit",
+        data: {
+          kind: "edit",
+          rawInput: {},
+          content: [
+            {
+              type: "diff",
+              path: "/Users/dev/app/src/index.ts",
+              oldText: "a",
+              newText: "b",
+            },
+          ],
+        },
+        fallbackSummary: "Edit",
+      }),
+    ).toEqual({
+      summary: "Changed files",
+      detail: "/Users/dev/app/src/index.ts",
+    });
+  });
+
   it("drops duplicated generic read-file detail when no path is available", () => {
     expect(
       deriveToolActivityPresentation({

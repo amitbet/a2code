@@ -1086,6 +1086,54 @@ describe("deriveWorkLogEntries", () => {
     expect(entry?.command).toBe("bun run lint");
   });
 
+  it("never previews file contents as the detail of a read-file entry", () => {
+    // Cursor persists reads as kind:"read" + rawOutput.content and no path, so
+    // the raw-output fallback would render a line of the file where the
+    // filename belongs.
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "read-tool",
+        kind: "tool.completed",
+        summary: "Read file",
+        tone: "tool",
+        payload: {
+          itemType: "dynamic_tool_call",
+          data: {
+            kind: "read",
+            rawInput: {},
+            rawOutput: { content: "const url = new URL(options.url);\n" },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities);
+    expect(entry?.label).toBe("Read file");
+    expect(entry?.detail).toBeUndefined();
+  });
+
+  it("keeps a resolved read-file path as the detail", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "read-tool-with-path",
+        kind: "tool.completed",
+        summary: "Read file",
+        tone: "tool",
+        payload: {
+          itemType: "dynamic_tool_call",
+          detail: "/tmp/app.ts",
+          data: {
+            kind: "read",
+            rawOutput: { content: "const url = new URL(options.url);\n" },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities);
+    expect(entry?.detail).toBe("/tmp/app.ts");
+  });
+
   it("extracts failed tool lifecycle status from item payloads", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -1403,7 +1451,7 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
-  it("uses completed read-file output previews and still collapses the same tool call", () => {
+  it("collapses a read-file tool call without previewing the file's contents", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "read-update",
@@ -1447,9 +1495,9 @@ describe("deriveWorkLogEntries", () => {
     expect(entries[0]).toMatchObject({
       id: "read-complete",
       toolTitle: "Read File",
-      detail: 'import * as Effect from "effect/Effect"',
       itemType: "dynamic_tool_call",
     });
+    expect(entries[0]?.detail).toBeUndefined();
   });
 
   it("does not use command stdout as the detail when Cursor omits the command input", () => {

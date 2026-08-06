@@ -120,7 +120,19 @@ function collectPaths(value: unknown, paths: string[], seen: Set<string>, depth:
       return;
     }
   }
-  for (const nestedKey of ["locations", "item", "input", "result", "rawInput", "data", "changes"]) {
+  // `content` carries ACP tool-call content blocks; a `diff` block is the only
+  // place providers like Cursor report the edited file's path (they leave
+  // `rawInput` empty and send no `locations`).
+  for (const nestedKey of [
+    "locations",
+    "item",
+    "input",
+    "result",
+    "rawInput",
+    "data",
+    "changes",
+    "content",
+  ]) {
     if (!(nestedKey in record)) {
       continue;
     }

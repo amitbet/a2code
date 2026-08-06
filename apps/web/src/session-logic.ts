@@ -1503,6 +1503,22 @@ function isCommandToolDetail(payload: Record<string, unknown> | null, heading: s
   );
 }
 
+/**
+ * True for file reads, whose `rawOutput.content` is the *file's* text rather
+ * than a description of the work. Providers that report the path (via
+ * `locations`, `rawInput`, or a diff block) already have it resolved into
+ * `payload.detail` server-side by `deriveToolActivityPresentation`; when they
+ * don't (Cursor sends only `kind: "read"` + `rawOutput.content`), previewing
+ * the content renders a line of the file where the filename belongs. Showing
+ * nothing is the honest fallback.
+ */
+function isFileReadToolDetail(payload: Record<string, unknown> | null, heading: string): boolean {
+  const data = asRecord(payload?.data);
+  const kind = asTrimmedString(data?.kind)?.toLowerCase();
+  const title = asTrimmedString(payload?.title ?? heading)?.toLowerCase();
+  return kind === "read" || title === "read file";
+}
+
 function extractToolDetail(
   payload: Record<string, unknown> | null,
   heading: string,
@@ -1516,7 +1532,7 @@ function extractToolDetail(
     return detail;
   }
 
-  if (isCommandToolDetail(payload, heading)) {
+  if (isCommandToolDetail(payload, heading) || isFileReadToolDetail(payload, heading)) {
     return null;
   }
 
