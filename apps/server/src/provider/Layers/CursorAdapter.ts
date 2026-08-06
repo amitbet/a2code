@@ -141,6 +141,21 @@ interface CursorSessionContext {
    * >0 means a turn is actively running, so a new sendTurn is a steer that
    * continues it, and only the last remaining prompt settles the turn. */
   promptsInFlight: number;
+  /**
+   * Resolved by `interruptTurn` so a cancelled turn settles on our own timeline
+   * rather than the agent's. cursor-agent does not reliably answer a prompt it
+   * was told to cancel, and the cancel can land before the prompt is even sent,
+   * so every prompt races this signal. Recreated per turn.
+   */
+  turnCancelled: Deferred.Deferred<void> | undefined;
+  /**
+   * Set when a turn is interrupted, cleared when the next turn starts. Between
+   * those, cursor-agent output belongs to work the user already stopped, so it
+   * is dropped instead of being appended after the cancelled turn. Scoped to the
+   * post-cancel window rather than "no active turn" so session/load replay,
+   * which also arrives outside a turn, still comes through.
+   */
+  droppingOutputAfterCancel: boolean;
   stopped: boolean;
 }
 
@@ -368,6 +383,13 @@ export function makeCursorAdapter(
     const offerRuntimeEvent = (event: ProviderRuntimeEvent) =>
       PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid);
 
+    /**
+     * Publishes agent output that belongs to a turn, dropping it while the
+     * session is in the post-cancel window (see `droppingOutputAfterCancel`).
+     */
+    const offerTurnOutputEvent = (ctx: CursorSessionContext, event: ProviderRuntimeEvent) =>
+      ctx.droppingOutputAfterCancel ? Effect.void : offerRuntimeEvent(event);
+
     const refreshCursorUsage = Effect.fn("CursorAdapter.refreshCursorUsage")(function* () {
       const context = Array.from(sessions.values())
         .toReversed()
@@ -470,7 +492,8 @@ export function makeCursorAdapter(
           return;
         }
         ctx.lastPlanFingerprint = fingerprint;
-        yield* offerRuntimeEvent(
+        yield* offerTurnOutputEvent(
+          ctx,
           makeAcpPlanUpdatedEvent({
             stamp: yield* makeEventStamp(),
             provider: PROVIDER,
@@ -819,6 +842,8 @@ export function makeCursorAdapter(
             lastPlanFingerprint: undefined,
             activeTurnId: undefined,
             promptsInFlight: 0,
+            turnCancelled: undefined,
+            droppingOutputAfterCancel: false,
             stopped: false,
           };
 
@@ -832,7 +857,8 @@ export function makeCursorAdapter(
                   case "ModeChanged":
                     return;
                   case "AssistantItemStarted":
-                    yield* offerRuntimeEvent(
+                    yield* offerTurnOutputEvent(
+                      ctx,
                       makeAcpAssistantItemEvent({
                         stamp: yield* makeEventStamp(),
                         provider: PROVIDER,
@@ -844,7 +870,8 @@ export function makeCursorAdapter(
                     );
                     return;
                   case "AssistantItemCompleted":
-                    yield* offerRuntimeEvent(
+                    yield* offerTurnOutputEvent(
+                      ctx,
                       makeAcpAssistantItemEvent({
                         stamp: yield* makeEventStamp(),
                         provider: PROVIDER,
@@ -877,7 +904,8 @@ export function makeCursorAdapter(
                       event.rawPayload,
                       "acp.jsonrpc",
                     );
-                    yield* offerRuntimeEvent(
+                    yield* offerTurnOutputEvent(
+                      ctx,
                       makeAcpToolCallEvent({
                         stamp: yield* makeEventStamp(),
                         provider: PROVIDER,
@@ -895,7 +923,8 @@ export function makeCursorAdapter(
                       event.rawPayload,
                       "acp.jsonrpc",
                     );
-                    yield* offerRuntimeEvent(
+                    yield* offerTurnOutputEvent(
+                      ctx,
                       makeAcpContentDeltaEvent({
                         stamp: yield* makeEventStamp(),
                         provider: PROVIDER,
@@ -988,6 +1017,14 @@ export function makeCursorAdapter(
         // resolving from here on does not settle the turn; the matching
         // decrement is the `ensuring` below.
         ctx.promptsInFlight += 1;
+        // A steer joins the running turn's existing signal; a new turn gets a
+        // fresh one. Created before `turn.started` is published so an interrupt
+        // racing that event still has something to resolve.
+        if (steeringTurnId === undefined || ctx.turnCancelled === undefined) {
+          ctx.turnCancelled = yield* Deferred.make<void>();
+        }
+        ctx.droppingOutputAfterCancel = false;
+        const turnCancelled = ctx.turnCancelled;
 
         return yield* Effect.gen(function* () {
           const turnModelSelection =
@@ -1073,15 +1110,23 @@ export function makeCursorAdapter(
             });
           }
 
-          const result = yield* ctx.acp
-            .prompt({
-              prompt: promptParts,
-            })
-            .pipe(
-              Effect.mapError((error) =>
-                mapAcpToAdapterError(PROVIDER, input.threadId, "session/prompt", error),
+          // Whichever comes first wins: the agent's reply, or our own cancel.
+          // `raceFirst` leaves the losing prompt RPC to the runtime, which
+          // `interruptTurn` has already told to cancel.
+          const result = yield* Effect.raceFirst(
+            ctx.acp
+              .prompt({
+                prompt: promptParts,
+              })
+              .pipe(
+                Effect.mapError((error) =>
+                  mapAcpToAdapterError(PROVIDER, input.threadId, "session/prompt", error),
+                ),
               ),
-            );
+            Deferred.await(turnCancelled).pipe(
+              Effect.as({ stopReason: "cancelled" } satisfies EffectAcpSchema.PromptResponse),
+            ),
+          );
 
           const turnRecord = ctx.turns.find((turn) => turn.id === turnId);
           if (turnRecord) {
@@ -1100,6 +1145,12 @@ export function makeCursorAdapter(
           // superseded prompt resolving (usually cancelled) while another is
           // in flight or pending must leave the merged turn running.
           if (ctx.promptsInFlight === 1) {
+            // The turn is over: drop the active-turn binding before publishing
+            // so any late agent output has no turn to attach to (see
+            // `offerTurnOutputEvent`), and a later sendTurn opens a new turn.
+            ctx.activeTurnId = undefined;
+            ctx.turnCancelled = undefined;
+            ctx.session = { ...ctx.session, activeTurnId: undefined };
             yield* offerRuntimeEvent({
               type: "turn.completed",
               ...(yield* makeEventStamp()),
@@ -1142,6 +1193,12 @@ export function makeCursorAdapter(
             ),
           ),
         );
+        ctx.droppingOutputAfterCancel = true;
+        // Settle on our own timeline: cursor-agent may never answer the prompt
+        // it was told to cancel, and the stop button must not depend on it.
+        if (ctx.turnCancelled !== undefined) {
+          yield* Deferred.succeed(ctx.turnCancelled, undefined).pipe(Effect.ignore);
+        }
       });
 
     const respondToRequest: CursorAdapterShape["respondToRequest"] = (
