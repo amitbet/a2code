@@ -65,6 +65,7 @@ import {
   type AcpSessionModeState,
   parsePermissionRequest,
 } from "../acp/AcpRuntimeModel.ts";
+import { recoverCursorReadPath } from "../acp/CursorReadPathRecovery.ts";
 import { makeAcpNativeLoggerFactory } from "../acp/AcpNativeLogging.ts";
 import { applyCursorAcpModelSelection, makeCursorAcpRuntime } from "../acp/CursorAcpSupport.ts";
 import {
@@ -904,6 +905,12 @@ export function makeCursorAdapter(
                       event.rawPayload,
                       "acp.jsonrpc",
                     );
+                    const toolCall = yield* recoverCursorReadPath({
+                      toolCall: event.toolCall,
+                      cwd: ctx.session.cwd,
+                      path,
+                      childProcessSpawner,
+                    });
                     yield* offerTurnOutputEvent(
                       ctx,
                       makeAcpToolCallEvent({
@@ -911,7 +918,7 @@ export function makeCursorAdapter(
                         provider: PROVIDER,
                         threadId: ctx.threadId,
                         turnId: ctx.activeTurnId,
-                        toolCall: event.toolCall,
+                        toolCall,
                         rawPayload: event.rawPayload,
                       }),
                     );

@@ -5,15 +5,18 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeURL from "node:url";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { assert, it } from "@effect/vitest";
+import { assert, expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import { createModelSelection } from "@t3tools/shared/model";
 
 import {
@@ -29,8 +32,52 @@ import {
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import type { CursorAdapterShape } from "../Services/CursorAdapter.ts";
+import { cursorReadPathProbe, recoverCursorReadPath } from "../acp/CursorReadPathRecovery.ts";
 import { makeCursorAdapter } from "./CursorAdapter.ts";
 const decodeCursorSettings = Schema.decodeSync(CursorSettings);
+
+it("selects a bounded, distinctive fragment for Cursor read-path recovery", () => {
+  expect(
+    cursorReadPathProbe(
+      [
+        "import { x } from './x';",
+        "const value = makeSomethingWithAnEspeciallyDistinctiveName(options);",
+        "}",
+      ].join("\n"),
+    ),
+  ).toBe("const value = makeSomethingWithAnEspeciallyDistinctiveName(options);");
+  expect(cursorReadPathProbe("tiny\n{}\n")).toBeUndefined();
+  expect(cursorReadPathProbe("x".repeat(500))).toHaveLength(240);
+});
+
+it.effect("recovers Cursor's omitted read path from unique workspace content", () =>
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const cwd = yield* fileSystem.makeTempDirectoryScoped({ prefix: "cursor-read-path-" });
+    const expectedPath = path.join(cwd, "src", "distinctive.ts");
+    yield* fileSystem.makeDirectory(path.dirname(expectedPath), { recursive: true });
+    const content = "export const cursorReadRecoverySentinel = 'uniquely-identifiable-value';\n";
+    yield* fileSystem.writeFileString(expectedPath, content);
+
+    const recovered = yield* recoverCursorReadPath({
+      cwd,
+      path,
+      childProcessSpawner,
+      toolCall: {
+        toolCallId: "read-1",
+        kind: "read",
+        title: "Read file",
+        status: "completed",
+        data: { kind: "read", rawInput: {}, rawOutput: { content } },
+      },
+    });
+
+    expect(recovered.detail).toBe(expectedPath);
+    expect(recovered.data.locations).toEqual([{ path: expectedPath }]);
+  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+);
 
 // Test-local service tag so the rest of the file can keep using `yield* CursorAdapter`.
 class CursorAdapter extends Context.Service<CursorAdapter, CursorAdapterShape>()(
