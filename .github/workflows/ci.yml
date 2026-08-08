@@ -61,7 +61,7 @@ jobs:
     name: Build Android standalone APK
     needs: resolve_latest_release
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     permissions:
       contents: write
     env:
@@ -130,6 +130,8 @@ jobs:
           ./gradlew \
             -Dorg.gradle.jvmargs="-Xmx4096m -XX:MaxMetaspaceSize=1024m -Dfile.encoding=UTF-8" \
             -Dorg.gradle.workers.max=2 \
+            -PreactNativeArchitectures=arm64-v8a \
+            --build-cache \
             assembleRelease
 
       - name: Upload Android APK
