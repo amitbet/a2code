@@ -91,18 +91,60 @@ background work for another machine is not stranded.
 - **Shared selection logic:** `packages/client-runtime/src/state/machineScope.ts`
   owns the fallback resolver and scope predicate; the web and mobile state
   layers retain platform-specific persistence and atoms.
-- **Mobile state and projections:** `apps/mobile/src/state/machineScope.ts`,
-  `apps/mobile/src/persistence/mobile-preferences.ts`, `apps/mobile/src/state/entities.ts`,
-  `apps/mobile/src/state/workspace.ts`, and `apps/mobile/src/state/use-pending-new-tasks.ts`.
-- **Mobile UI:** `apps/mobile/src/components/MachineSwitcher.tsx`,
-  `apps/mobile/src/features/home/HomeHeader.tsx`,
-  `apps/mobile/src/features/threads/ThreadNavigationSidebar.tsx`,
-  `apps/mobile/src/features/layout/AdaptiveWorkspaceLayout.tsx`, plus the
-  project/new-task screens.
+- **Mobile selection and persistence:** `apps/mobile/src/state/machineScope.ts`
+  resolves the registered machine and gives the current in-memory selection
+  precedence over the older persisted value, so a tap updates the UI
+  immediately while the preference write completes. `apps/mobile/src/state/environments.ts`
+  exposes the hook/setter, and `apps/mobile/src/persistence/mobile-preferences.ts`
+  persists `machineEnvironmentId`.
+- **Scoped projections and status:** `apps/mobile/src/state/entities.ts` filters
+  projects and thread shells, `apps/mobile/src/state/workspace.ts` projects
+  connection/snapshot status for the selected environment, and
+  `apps/mobile/src/state/use-pending-new-tasks.ts` filters queued task
+  presentation. Outbox draining remains deliberately global.
+- **Switcher and Android interaction:** `apps/mobile/src/components/MachineSwitcher.tsx`
+  owns the shared switcher and native iOS menu item.
+  `apps/mobile/src/components/AndroidAnchoredMenu.tsx` attaches the open callback
+  directly to a valid visible child press target on Android; keep this instead
+  of restoring the nested wrapper-only press path, which can make a visible
+  trigger appear inert.
+- **Home and sidebar UI:** `apps/mobile/src/features/home/HomeHeader.tsx`,
+  `HomeRouteScreen.tsx`, and `home-list-filter-menu.ts`, plus
+  `apps/mobile/src/features/threads/ThreadNavigationSidebar.tsx` and
+  `sidebar-native-header-items.ts`. The old per-screen environment filter is
+  excluded because the machine switcher owns that scope.
+- **Project/new-task flows:** `apps/mobile/src/features/projects/AddProjectScreen.tsx`,
+  `apps/mobile/src/features/threads/NewTaskRouteScreen.tsx`,
+  `NewTaskDraftScreen.tsx`, and `new-task-flow-provider.tsx` only expose the
+  selected machine's projects and use that machine for new-task defaults.
+- **Navigation:** `apps/mobile/src/features/layout/AdaptiveWorkspaceLayout.tsx`
+  replaces an open split-layout thread route with Home when the user selects a
+  different machine.
+- **Known strict-isolation gaps:** mobile thread/detail routes do not yet reject
+  route parameters outside the selected machine, so a restored navigation state
+  or deep link can still open another machine's thread. In addition,
+  `useMachineProjects`, `useMachineThreadShells`, pending-task filtering, and
+  search deliberately fail open while `machineEnvironmentId` is `null`; during
+  that unresolved window they can consider every environment. Do not describe
+  mobile as enforcing a strict selected-machine boundary until route guards and
+  fail-closed unresolved-state behavior are added and covered by a multi-environment
+  integration test.
 - **Merge hotspots:** preserve the machine scope when upstream changes mobile
   connection catalogs, home/sidebar filtering, workspace status, project
-  creation, or new-task environment selection. Do not scope the outbox drain
-  or other background runtime collections to the selected machine.
+  creation, new-task environment selection, Android anchored-menu triggers, or
+  thread route handling. Do not scope the outbox drain or other background
+  runtime collections to the selected machine.
+
+## 2026-08-01 fork feature (provider health-check cache) — merge notes
+
+`apps/server/src/provider/makeManagedServerProvider.ts` caches a successful
+provider check for 24 hours so periodic background maintenance does not
+repeatedly launch agent processes or re-read their protected application data.
+Failed checks are not cached, changed settings invalidate the entry, and an
+explicit user refresh bypasses the cache. Preserve the distinction between a
+periodic cached refresh and an explicit uncached refresh when upstream changes
+provider maintenance scheduling. Tests live in
+`apps/server/src/provider/makeManagedServerProvider.test.ts`.
 
 ## 2026-08-01 fork feature (machine-scoped environment selector) — merge notes
 

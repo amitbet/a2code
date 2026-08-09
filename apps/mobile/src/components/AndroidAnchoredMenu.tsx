@@ -1,6 +1,6 @@
 import type { MenuAction, MenuComponentProps } from "@react-native-menu/menu";
 import { BlurView } from "expo-blur";
-import type { ReactNode } from "react";
+import { cloneElement, isValidElement, type ReactElement, type ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { StyleProp, ViewStyle } from "react-native";
 import { BackHandler, Pressable, ScrollView, useColorScheme, View } from "react-native";
@@ -45,10 +45,10 @@ export type AndroidAnchoredMenuProps = {
   readonly className?: string;
   readonly style?: StyleProp<ViewStyle>;
   /**
-   * Plain children open the menu on tap (the wrapper owns the press). A
-   * render function keeps the children interactive and hands them `open` to
-   * call from their own gesture — e.g. a row that selects on tap and opens
-   * this menu on long-press.
+   * Plain element children open the menu from their own press target. Other
+   * plain children fall back to a pressable wrapper. A render function keeps
+   * the children interactive and hands them `open` to call from their own
+   * gesture — e.g. a row that selects on tap and opens this menu on long-press.
    */
   readonly children: ReactNode | ((open: () => void) => ReactNode);
 };
@@ -197,6 +197,12 @@ export function AndroidAnchoredMenu(props: AndroidAnchoredMenuProps) {
       {typeof props.children === "function" ? (
         <View ref={anchorRef} collapsable={false} className={props.className} style={props.style}>
           {props.children(open)}
+        </View>
+      ) : isValidElement(props.children) ? (
+        <View ref={anchorRef} collapsable={false} className={props.className} style={props.style}>
+          {cloneElement(props.children as ReactElement<{ onPress?: () => void }>, {
+            onPress: open,
+          })}
         </View>
       ) : (
         <Pressable

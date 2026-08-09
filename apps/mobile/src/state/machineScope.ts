@@ -20,10 +20,11 @@ const selectedMachineEnvironmentIdAtom = Atom.make<EnvironmentId | null>(null).p
 export const machineEnvironmentIdAtom = Atom.make((get): EnvironmentId | null => {
   const catalog = get(environmentCatalog.catalogValueAtom);
   const preferences = get(mobilePreferencesAtom);
-  const selected =
+  const persisted =
     AsyncResult.isSuccess(preferences) && preferences.value.machineEnvironmentId
       ? (preferences.value.machineEnvironmentId as EnvironmentId)
-      : get(selectedMachineEnvironmentIdAtom);
+      : null;
+  const selected = get(selectedMachineEnvironmentIdAtom) ?? persisted;
 
   return resolveMachineEnvironmentId({ entries: catalog.entries, selected });
 }).pipe(Atom.withLabel("mobile-machine-environment-id"));
