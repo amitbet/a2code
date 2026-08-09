@@ -45,14 +45,7 @@ import {
 import { TouchableOpacity } from "react-native-gesture-handler";
 import ImageViewing from "react-native-image-viewing";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Animated, {
-  FadeIn,
-  FadeInUp,
-  useSharedValue,
-  withTiming,
-  type LayoutAnimationsValues,
-  type SharedValue,
-} from "react-native-reanimated";
+import Animated, { type SharedValue } from "react-native-reanimated";
 import { useThemeColor } from "../../lib/useThemeColor";
 import { useFontFamily } from "../../lib/useFontFamily";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
@@ -117,14 +110,6 @@ function formatMessageTime(input: string): string {
   return MESSAGE_TIME_FORMATTER.format(timestamp);
 }
 
-// Rows shift when content above them grows (streaming text, work-log folds);
-// animating the container position turns those jumps into slides. Applied
-// conditionally — see the gated transition in ThreadFeed: while browsing
-// history the animation must NOT run, or every estimate→actual size
-// correction plays as a visible slide against the instant scroll-offset
-// compensation from maintainVisibleContentPosition.
-const FEED_ITEM_LAYOUT_DURATION_MS = 180;
-
 // Pre-measurement heights for getFixedItemSize, mirroring renderFeedEntry's
 // classNames. The fold row's min-h-11 (44px) stays taller than its single
 // text-sm line at every supported base font size (26px at the 22pt maximum),
@@ -134,15 +119,6 @@ const TURN_FOLD_HEIGHT = 56; // min-h-11 (44) + mb-3 (12)
 // The working row has no min-height clamp — its height follows the scaled
 // text-xs line height (see workingRowHeight in ThreadFeed).
 const WORKING_ROW_VERTICAL_EXTRAS = 24; // py-1 (8) + mb-4 (16)
-
-// Entering animations must only play for rows born just now — LegendList
-// remounts rows when they scroll back into view, and replaying an entrance for
-// old content would be its own kind of jank.
-const FRESH_ENTRY_WINDOW_MS = 3_000;
-function isFreshTimestamp(input: string): boolean {
-  const timestamp = Date.parse(input);
-  return Number.isFinite(timestamp) && Date.now() - timestamp < FRESH_ENTRY_WINDOW_MS;
-}
 
 export interface ThreadFeedProps {
   readonly environmentId: EnvironmentId;
@@ -897,12 +873,8 @@ function renderFeedEntry(
       !message.streaming;
 
     if (isUser) {
-      const enterAnimated = isFreshTimestamp(message.createdAt);
       return (
-        <Animated.View
-          className="mb-5 items-end"
-          {...(enterAnimated ? { entering: FadeInUp.duration(220) } : {})}
-        >
+        <Animated.View className="mb-5 items-end">
           <View
             className="min-w-0 gap-2 rounded-[20px] px-3.5 py-2.5"
             style={{
@@ -932,10 +904,7 @@ function renderFeedEntry(
               );
             })}
           </View>
-          <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
-            <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
-              {timestampLabel}
-            </Text>
+          <View className="mt-1 flex-row flex-wrap items-center justify-end gap-1 pr-0.5">
             {message.text.trim().length > 0 ? (
               <CopyTextButton
                 accessibilityLabel="Copy message"
@@ -945,6 +914,9 @@ function renderFeedEntry(
                 iconSize={13}
               />
             ) : null}
+            <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
+              {timestampLabel}
+            </Text>
           </View>
         </Animated.View>
       );
@@ -956,12 +928,8 @@ function renderFeedEntry(
       return null;
     }
 
-    const enterAnimated = isFreshTimestamp(message.createdAt);
     return (
-      <Animated.View
-        className={cn(showAssistantMeta ? "mb-5 px-1" : "mb-2 px-1")}
-        {...(enterAnimated ? { entering: FadeIn.duration(220) } : {})}
-      >
+      <Animated.View className={cn(showAssistantMeta ? "mb-5 px-1" : "mb-2 px-1")}>
         {message.text.trim().length > 0 ? (
           hasNativeSelectableMarkdownText() ? (
             <SelectableMarkdownText
@@ -993,7 +961,7 @@ function renderFeedEntry(
           );
         })}
         {showAssistantMeta ? (
-          <View className="mt-1 flex-row items-center gap-1">
+          <View className="mt-1 flex-row flex-wrap items-center gap-1">
             <CopyTextButton
               accessibilityLabel="Copy message"
               text={message.text}
@@ -1330,6 +1298,24 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   );
   const [viewportHeight, setViewportHeight] = useState(0);
   const [disclosureToggleSettling, setDisclosureToggleSettling] = useState(false);
+  // Live-follow latch. LegendList's maintainScrollAtEnd alone re-pins the feed
+  // whenever the viewport drifts back inside its geometric threshold, which
+  // yanked users off history they were reading every time a stream chunk grew
+  // a row. Follow breaks when the user scrolls up and away, and re-arms only
+  // when the list actually returns to the end (or on send / thread switch).
+  const [endFollowEnabled, setEndFollowEnabled] = useState(true);
+  const endFollowEnabledRef = useRef(true);
+  // A "user scroll session" spans from drag start through the end of its
+  // momentum; only motion inside a session can break follow, so MVCP
+  // compensations and programmatic scrolls never strand a follower.
+  const userScrollSessionRef = useRef(false);
+  const setEndFollow = useCallback((enabled: boolean) => {
+    if (endFollowEnabledRef.current === enabled) {
+      return;
+    }
+    endFollowEnabledRef.current = enabled;
+    setEndFollowEnabled(enabled);
+  }, []);
   const [interactionState, setInteractionState] = useState<{
     readonly copiedRowId: string | null;
     readonly expandedWorkGroups: Record<string, boolean>;
@@ -1434,11 +1420,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     },
     [props.onHeaderMaterialVisibilityChange],
   );
-  // True while the viewport sits within ~one screen of the list end — the
-  // only region where layout shifts should animate. Starts true because the
-  // list opens pinned to the end.
-  const nearListEnd = useSharedValue(true);
-
   const handleScroll = useCallback(
     (event: NativeSyntheticEvent<NativeScrollEvent>) => {
       // anchorTopInset, not topContentInset: under automatic insets the list
@@ -1446,40 +1427,40 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
       // UIKit's adjustedContentInset, so topContentInset is 0 here). Add the
       // header height back or the material toggles a full header too late.
       reportHeaderMaterialVisibility(event.nativeEvent.contentOffset.y + anchorTopInset > 6);
-      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-      nearListEnd.value =
-        contentSize.height - layoutMeasurement.height - contentOffset.y < layoutMeasurement.height;
+      // Latch bookkeeping. LegendList recomputes its inset-aware end distance
+      // before invoking this handler, so getState() is current. Returning to
+      // the end re-arms follow no matter who scrolled (the user, or our own
+      // scroll-to-end); moving away breaks it only during a user-initiated
+      // scroll session, so MVCP compensations and programmatic repositioning
+      // can never strand a follower.
+      const listState = props.listRef.current?.getState();
+      if (listState) {
+        if (listState.isWithinMaintainScrollAtEndThreshold) {
+          setEndFollow(true);
+        } else if (userScrollSessionRef.current) {
+          setEndFollow(false);
+        }
+      }
     },
-    [reportHeaderMaterialVisibility, anchorTopInset, nearListEnd],
+    [reportHeaderMaterialVisibility, anchorTopInset, props.listRef, setEndFollow],
   );
-
-  // Gated variant of the 180ms feed layout slide. Instant while browsing
-  // history: maintainVisibleContentPosition compensates the scroll offset in
-  // the same frame a row's measured size lands, so an instant reposition is
-  // invisible — animating it is exactly what made cold upward scrolls slide
-  // and jump. Near the end the slide stays on: streaming growth and sends
-  // shift rows at rest, where the animation is the thing preventing a hard
-  // visual snap.
-  const feedItemLayoutTransition = useMemo(() => {
-    return (values: LayoutAnimationsValues) => {
-      "worklet";
-      const duration = nearListEnd.value ? FEED_ITEM_LAYOUT_DURATION_MS : 0;
-      return {
-        initialValues: {
-          originX: values.currentOriginX,
-          originY: values.currentOriginY,
-          width: values.currentWidth,
-          height: values.currentHeight,
-        },
-        animations: {
-          originX: withTiming(values.targetOriginX, { duration }),
-          originY: withTiming(values.targetOriginY, { duration }),
-          width: withTiming(values.targetWidth, { duration }),
-          height: withTiming(values.targetHeight, { duration }),
-        },
-      };
-    };
-  }, [nearListEnd]);
+  const handleScrollBeginDrag = useCallback(() => {
+    userScrollSessionRef.current = true;
+  }, []);
+  // The session must survive past finger-lift so momentum that carries the
+  // user away from the end still breaks follow; a drag released with no
+  // momentum ends its session at the release itself, otherwise at momentum
+  // end. Leaving a session open would let a later animated maintain-scroll
+  // read as user motion and break follow spuriously.
+  const handleScrollEndDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const velocity = event.nativeEvent.velocity?.y ?? 0;
+    if (Math.abs(velocity) < 0.05) {
+      userScrollSessionRef.current = false;
+    }
+  }, []);
+  const handleMomentumScrollEnd = useCallback(() => {
+    userScrollSessionRef.current = false;
+  }, []);
   const handleViewportLayout = useCallback((event: LayoutChangeEvent) => {
     const nextWidth = Math.round(event.nativeEvent.layout.width);
     const nextHeight = Math.round(event.nativeEvent.layout.height);
@@ -1490,6 +1471,19 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   useEffect(() => {
     reportHeaderMaterialVisibility(false);
   }, [props.threadId, reportHeaderMaterialVisibility]);
+  // A thread switch opens pinned to the end; a send explicitly returns to the
+  // live edge (ThreadDetailScreen scrolls the new message into place). Both
+  // re-arm follow regardless of where the user had scrolled before.
+  useEffect(() => {
+    userScrollSessionRef.current = false;
+    setEndFollow(true);
+  }, [props.threadId, setEndFollow]);
+  useEffect(() => {
+    if (props.anchorMessageId !== null) {
+      userScrollSessionRef.current = false;
+      setEndFollow(true);
+    }
+  }, [props.anchorMessageId, setEndFollow]);
 
   const expandedWorkGroupIds = useMemo(() => {
     const ids = new Set<string>();
@@ -1817,7 +1811,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
                 }
               : { scrollIndicatorInsets: { top: topContentInset, bottom: 0 } })}
             {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
-            itemLayoutAnimation={feedItemLayoutTransition}
             // Patched LegendList prop (patches/@legendapp__list@3.2.0.patch):
             // lets its scroll math clamp programmatic scrolls to -headerInset
             // instead of 0, so initialScrollAtEnd/maintainScrollAtEnd on short
@@ -1842,7 +1835,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             // anchor scrolls also lets it correct a scroll that landed on a
             // stale end target once the anchor row finishes measuring.
             maintainScrollAtEnd={
-              disclosureToggleSettling
+              disclosureToggleSettling || !endFollowEnabled
                 ? false
                 : {
                     animated: true,
@@ -1891,6 +1884,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             alignItemsAtEnd
             initialScrollAtEnd
             onScroll={handleScroll}
+            onScrollBeginDrag={handleScrollBeginDrag}
+            onScrollEndDrag={handleScrollEndDrag}
+            onMomentumScrollEnd={handleMomentumScrollEnd}
             scrollEventThrottle={16}
             ListHeaderComponent={
               usesNativeAutomaticInsets ? null : <View style={{ height: topContentInset }} />
