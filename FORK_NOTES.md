@@ -3,6 +3,115 @@
 This file tracks fork-specific divergences that are likely to conflict when
 merging `upstream/main`.
 
+## 2026-08-14 upstream merge (sidebar v2 promoted to default, turn plan chips, PR surfaces) — migration notes
+
+Merged `upstream/main` through `7e01d33f0` (206 commits). Notable integrations:
+
+- **The sidebar files were RENAMED and git did not detect it.** Upstream's
+  `0de954073` made sidebar v2 the default: v1 `Sidebar.tsx` → **`LegacySidebar.tsx`**
+  and `SidebarV2.tsx` → **`Sidebar.tsx`** (`SidebarV2.tsx` deleted). Git therefore
+  diffed the fork's _v1_ `Sidebar.tsx` against upstream's _v2_-derived `Sidebar.tsx`
+  (20 bogus conflicts) and reported `SidebarV2.tsx` as modify/delete. **Resolution:
+  two hand-run 3-way merges with `git merge-file`**, which is the technique to reuse
+  if upstream ever reshuffles these files again:
+  - `Sidebar.tsx` = merge(base `SidebarV2.tsx`, fork `SidebarV2.tsx`, upstream `Sidebar.tsx`)
+  - `LegacySidebar.tsx` = merge(base `Sidebar.tsx`, fork `Sidebar.tsx`, upstream `LegacySidebar.tsx`)
+    The legacy sidebar is still reachable behind `useLegacySidebarEnabled()`, so both
+    files carry fork behavior.
+- **Fork thread actions were promoted into the shared menu builder.** The fork's
+  `Fork thread`, `Copy thread ref`, and `Export thread (zip)` items lived only in the
+  v1 sidebar, so the rename would have silently removed them from the default surface.
+  They now live in upstream's `apps/web/src/components/threadActionMenu.logic.ts`
+  (`ThreadActionMenuId` + `buildThreadActionMenuItems`) and are handled in **both**
+  consumers — `Sidebar.tsx` (`handleThreadContextMenu`) and
+  `apps/web/src/hooks/useThreadActionMenu.ts` (the chat header menu). Adding a fork
+  action to that builder without handling it in both places makes it a no-op in one
+  surface; `threadActionMenu.logic.test.ts` asserts the exact id list.
+- **Migration renumbering held again.** Upstream added 037–040; fork ids 33–38 are
+  frozen, so upstream's became **039–042** (`ProjectionTurnsKeysetIndex`,
+  `ProjectionThreadsPinOrderKey`, `ProjectionProjectsDefaultThreadEnvMode`,
+  `ProjectionProjectFaviconPath`), with the favicon test's `layer(...)` label and its
+  `toMigrationInclusive` bounds (41/42) repointed. Fork's next free id is **43**.
+- **`turn-plan` timeline rows are a new row kind — every switch over rows needs a
+  case.** Upstream added `deriveTurnPlans`/`TurnPlanEntry` and a `turn-plan`
+  `TimelineEntry`/`MessagesTimelineRow` variant beside the fork's `user-input` variant.
+  `deriveTimelineEntries` now takes **both** `turnPlans` and `userInputExchanges`
+  (turn plans first), and `chatSearch.ts.getRowSearchText` gained a `turn-plan` case
+  (indexes the plan step text) — that switch is exhaustive and is the first thing to
+  break on a new row kind.
+- **`MessagesTimeline` list internals were reworked; the search wiring was re-applied
+  on top.** Upstream added `liveFollowEnabled`/`TIMELINE_MAINTAIN_SCROLL_AT_END`, a
+  `maintainVisibleContentPosition` const (now `size: true` + `restore: true`), and a
+  `TimelineLoadEarlierHeader`. The fork's `TimelineSearchCtx` wrapper, `{searchBar}`,
+  `setTimelineHostElement` ref, and `data-chat-scroll-container` were re-wrapped
+  around upstream's list.
+- **Live-follow: upstream converged past the fork on both platforms.**
+  - Web: the fork's `timelineInteractionSurface` listener effect was replaced by
+    upstream's scroll-node opt-out listeners (direction-aware wheel, end-band touch,
+    scrollbar-vs-content pointerdown, keyboard). The fork's state + `ref=` were removed.
+  - Mobile: the fork's `05c89bac8` follow latch was replaced by upstream's extracted,
+    unit-tested `thread-feed-live-follow.ts` state machine (`ThreadFeed.tsx` taken
+    wholesale). Do not re-introduce a local latch.
+- **Thread error banner: upstream converged (`57b105267`).** The fork's
+  `dismissedServerErrorsByThreadKey` map was replaced by upstream's session-scoped
+  mask (`getThreadErrorBannerKey` / `shouldShowThreadErrorBanner` /
+  `dismissThreadErrorBannerForSession` + a dismiss tick), which also survives
+  reconnects. `rawServerError` and the fork's clearing effect are gone.
+- **`apps/server/vite.config.ts`: upstream converged past the fork.** The fork's local
+  inverted `shouldBundleCliDependency` was superseded by upstream's shared
+  `scripts/lib/cli-external-packages.ts` (`CLI_RUNTIME_EXTERNAL_PREFIXES` +
+  `isExternalCliDependency`), which both the bundler and `build-desktop-artifact.ts`
+  derive from. Upstream also stopped unpacking `node_modules` wholesale from the
+  Windows asar, so keep deriving from that one list rather than re-adding a local one.
+- **`SidebarUpdatePill` became a compact icon button in the sidebar footer, and
+  `SidebarUpdateArchitectureWarning` split out.** Upstream's structure was taken
+  wholesale, then the fork's **single-click apply with no confirmation** was
+  re-applied (upstream's `dialogs.confirm` block deleted, `result.requiresRelaunch`
+  guard restored, `handleAction` back to non-async). The fork's local
+  `downloadProgress` was dropped as redundant — `getDesktopUpdateButtonTooltip`
+  already formats it.
+- **`ProviderSettingsPanel` was extracted out of `SettingsPanels.tsx`.** Upstream's
+  new `apps/web/src/components/settings/ProviderSettingsPanel.tsx` is now the home of
+  the fork's **`providerModelDefaults`** wiring (the `isDirty` check, the
+  `updateProviderModelDefaults` setter, the delete/reset cleanups, and the
+  `defaultModelOptions`/`onDefaultModelOptionsChange` card props). That feature is
+  fork-only end to end (contracts, `composerDraftStore`, `ProviderInstanceCard`) —
+  only the panel wiring needed re-homing. `SettingsPanels.tsx` was taken wholesale and
+  only the fork's dual-version `AboutVersionTitle` + `primaryServerConfigAtom` were
+  re-applied; the fork's "A2 Code" theme-row copy is gone because upstream replaced
+  that row with `ThemeLibrary`.
+- **`DesktopBridge.confirm` was removed upstream** (it survives on `LocalApi` with
+  options). The fork's `getPathForFile` sits beside upstream's new `pickThemeFiles`
+  in both `preload.ts` and `packages/contracts/src/ipc.ts`.
+- **`markThreadUnread` is fork-narrowed to one argument** (the fork's explicit
+  `unreadThreadIds` flag replaced the timestamp form). Upstream's new
+  `useThreadActionMenu.ts` and its own multi-select handler both passed
+  `thread.latestTurn?.completedAt`; drop that argument wherever it reappears.
+- **`ChatView` gained a read-only environment _indicator_, which is not the
+  fork-removed environment _picker_.** Upstream's `logicalProjectEnvironments` /
+  `showComposerEnvironmentIndicator` block is required (consumed by the composer), and
+  `useProjects` had to be imported. The fork's duplicate `projectGroupingSettings`
+  line was dropped, and the fork's early `activeThreadLastVisitedAt` was renamed to
+  `routeThreadLastVisitedAt` to avoid colliding with upstream's `activeThreadKey`-keyed
+  declaration further down the same function.
+- **Upstream-only workflows keep arriving.** `mobile-fingerprint-check.yml`,
+  `thread-transfer-report.yml`, and `web-preview.yml` were dropped (as was
+  `mobile-eas-production.yml` again). `.github/workflows` is byte-identical to the
+  pre-merge fork tip and still holds only `ci.yml` + `release.yml`.
+- **Test fixtures needed the other side's fields, as always:** `queuedPrompts: []` in
+  upstream's `threads-pagination.test.ts`; `providerModelDefaults` in upstream's
+  `ProviderSettingsPanel.environment.test.tsx` delete/reset assertions;
+  `turn-plan`-aware ids in `threadActionMenu.logic.test.ts`; and upstream's
+  `maintain-visible-content-position-size="true"`/`-restore="true"` in
+  `MessagesTimeline.test.tsx` (alongside the fork's `loading="lazy"` assertions).
+  `scripts/build-desktop-artifact.test.ts` also merged duplicate `FileSystem`/`Path`
+  imports — grep new test files for TS2300 after a merge.
+- **`effect` stayed on beta.103, so the patch did not need re-deriving** this time.
+  Verified `patches/effect@4.0.0-beta.103.patch` still touches `dist/Schema.js`,
+  `dist/Schema.d.ts`, and `src/Schema.ts` on top of upstream's `McpServer`/`RpcClient`
+  hunks.
+- Fork package versions stay on the `0.0.25-amit` marker (upstream is at `0.0.33`).
+
 ## 2026-08-06 upstream merge (upstream thread pinning, libghostty terminals, Linux startup) — migration notes
 
 Merged `upstream/main` through `a2ca89aa1` (86 commits). Notable integrations:
@@ -763,8 +872,14 @@ activities)` pairs `user-input.requested` questions with the matching
     (the shared transcript reference works across providers).
     `forkQueuedPrompt` dispatches the atomic queue-fork command and navigates to
     the projected target thread.
-  - `apps/web/src/components/Sidebar.tsx` — **modified**: `Fork thread` menu
-    item + threads `forkThread` through the sidebar prop chain.
+  - `apps/web/src/components/threadActionMenu.logic.ts` — **modified**: `fork` id +
+    `Fork thread` item in the shared `buildThreadActionMenuItems` list, so both the
+    default sidebar and the chat header offer it (2026-08-14).
+  - `apps/web/src/components/Sidebar.tsx` (default, v2-derived) and
+    `apps/web/src/hooks/useThreadActionMenu.ts` (chat header) — **modified**: each
+    handles `case "fork"` via `forkThread`.
+  - `apps/web/src/components/LegacySidebar.tsx` (the old v1 sidebar) — **modified**:
+    `Fork thread` menu item + threads `forkThread` through the sidebar prop chain.
   - `apps/web/src/components/ChatView.tsx` — **modified**: queued prompts expose
     a **Fork** action alongside Edit/Steer; it uses `forkQueuedPrompt`, so it
     receives the same implicit source reference as regular forks.
@@ -809,8 +924,9 @@ activities)` pairs `user-input.requested` questions with the matching
     registered in `apps/server/src/persistence/Migrations.ts` as id `35`.
   - `apps/web/src/hooks/useThreadActions.ts` — **modified**: `setThreadPinned`
     dispatches through `thread.meta.update`.
-  - `apps/web/src/components/Sidebar.tsx` — **modified**: context-menu actions
-    and pin icon beside thread titles.
+  - `apps/web/src/components/LegacySidebar.tsx` — **modified**: context-menu actions
+    and pin icon beside thread titles. (Was `Sidebar.tsx` before the 2026-08-14
+    sidebar rename; the default sidebar uses upstream's `pinThread`/`unpinThread`.)
 - Mobile surface (`apps/mobile`, added 2026-07-25 — `pinnedAt` already flowed
   through the shared shell schemas, these changes only add UI + ordering):
   - `src/features/home/useThreadListActions.ts` — **modified**: `pin`/`unpin`
@@ -856,7 +972,10 @@ RootStackType` in `src/Stack.tsx`) is unstable near its complexity limit
     from the message text, resolves each thread (skips self/unknown, caps at
     `MAX_THREAD_REFERENCES`), persists a complete transcript artifact per
     reference, and appends their path-only instructions to the provider prompt.
-  - `apps/web/src/components/Sidebar.tsx` — **modified**: `Copy thread ref`
+  - `apps/web/src/components/threadActionMenu.logic.ts` — **modified**:
+    `copy-thread-ref` id + item; handled in `Sidebar.tsx` and
+    `useThreadActionMenu.ts`, each with their own `copyThreadRefToClipboard`.
+  - `apps/web/src/components/LegacySidebar.tsx` — **modified**: `Copy thread ref`
     context-menu item + `copyThreadRefToClipboard`.
   - `packages/shared/src/composerInlineTokens.ts` — **modified**:
     `collectMentionTokens` skips `@thread_ref:<id>`. The token shares the `@`
@@ -895,7 +1014,10 @@ RootStackType` in `src/Stack.tsx`) is unstable near its complexity limit
   - `apps/server/src/server.ts` — **modified**: registers `threadExportRouteLayer`
     in `makeRoutesLayer`.
   - `apps/server/package.json` — **modified**: adds the `fflate` dependency.
-  - `apps/web/src/components/Sidebar.tsx` — **modified**: `Export thread (zip)`
+  - `apps/web/src/components/threadActionMenu.logic.ts` — **modified**: `export-zip`
+    id + item; handled in `Sidebar.tsx` and `useThreadActionMenu.ts` (both resolve the
+    prepared connection and stream `fetchEnvironmentThreadExport` to a blob download).
+  - `apps/web/src/components/LegacySidebar.tsx` — **modified**: `Export thread (zip)`
     context-menu item; builds the env-aware export URL from the prepared
     connection (`readPreparedConnection(environmentId)` → `environmentEndpointUrl(
 httpBaseUrl, pathname)`; the pre-merge `resolveEnvironmentHttpUrl` helper was
@@ -1088,9 +1210,11 @@ useAccountRateLimitSnapshot(selectedInstanceId)` (NOT a per-thread
     hook; `handleAddProjectForEnvironment` is now a thin close-on-success
     wrapper; the local `createProject` atom command and related imports were
     removed.
-  - `apps/web/src/components/Sidebar.tsx` — **modified**: `SidebarProjectsContent`
-    spreads `useAddProjectDropZone().dropZoneProps` onto its `<SidebarContent>`
-    with an accent/ring highlight while a drop hovers.
+  - `apps/web/src/components/LegacySidebar.tsx` — **modified**:
+    `SidebarProjectsContent` spreads `useAddProjectDropZone().dropZoneProps` onto its
+    `<SidebarContent>` with an accent/ring highlight while a drop hovers. **Not yet
+    ported to the default (v2-derived) sidebar** — folder drop-to-add-project is
+    legacy-sidebar-only since the 2026-08-14 rename.
 - Known limitation: on Windows, dropping a `\\wsl$\...` folder targets the
   local Windows environment (surfacing the server's validation error) instead
   of routing to the WSL backend like the palette's WSL-aware flow.
@@ -1309,6 +1433,21 @@ build:desktop` → `vp run dist:payload:asset`, using the
   being dropped. Because the composition always rebuilds the object,
   `ClientProjection.test.ts` asserts `toStrictEqual`, not `toBe`.
 
+### Sidebar files (renamed 2026-08-14)
+
+- `apps/web/src/components/Sidebar.tsx` is the **default** sidebar (upstream's former
+  `SidebarV2.tsx`). `apps/web/src/components/LegacySidebar.tsx` is the old v1 sidebar,
+  still reachable behind `useLegacySidebarEnabled()`. `SidebarV2.tsx` no longer exists.
+- Fork behavior lives in both: machine scoping (`useMachineEnvironmentId` +
+  `useEnvironmentProjects`/`useEnvironmentThreadShells`), the project todo sheet, and
+  explicit-unread rows in the default one; the full v1 surface (fork/copy-ref/export,
+  pin toggle, folder drop zone) in the legacy one.
+- Per-thread menu actions belong in the shared
+  `apps/web/src/components/threadActionMenu.logic.ts` builder and must be handled in
+  **both** `Sidebar.tsx` and `apps/web/src/hooks/useThreadActionMenu.ts`.
+- If upstream renames these again, redo the merge with `git merge-file` per the
+  2026-08-14 notes rather than trusting git's rename detection.
+
 ### Chat timeline search wiring
 
 - File: `apps/web/src/components/chat/MessagesTimeline.tsx`
@@ -1334,7 +1473,10 @@ build:desktop` → `vp run dist:payload:asset`, using the
   - `apps/server/src/persistence/{Services,Layers}/ProjectionThreads.ts` +
     `Migrations.ts` (migration registry)
   - `apps/server/src/provider/Layers/{ProviderService,CodexSessionRuntime}.ts`
-  - `apps/web/src/components/Sidebar.tsx`,
+  - `apps/web/src/components/threadActionMenu.logic.ts`,
+    `apps/web/src/components/Sidebar.tsx`,
+    `apps/web/src/components/LegacySidebar.tsx`,
+    `apps/web/src/hooks/useThreadActionMenu.ts`,
     `apps/web/src/components/chat/ChatComposer.tsx`,
     `apps/web/src/composer-logic.ts`, `apps/web/src/hooks/useThreadActions.ts`
 - Fork-specific concern: the user-facing flow hangs off `forkedFromId` in the

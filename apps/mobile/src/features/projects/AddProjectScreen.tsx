@@ -27,7 +27,7 @@ import {
   inferProjectTitleFromPath,
 } from "@t3tools/client-runtime/state/projects";
 import { CommandId, type EnvironmentId, ProjectId } from "@t3tools/contracts";
-import { StackActions, useNavigation } from "@react-navigation/native";
+import { CommonActions, StackActions, useNavigation } from "@react-navigation/native";
 import { SymbolView } from "../../components/AppSymbol";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, Alert, Pressable, ScrollView, View } from "react-native";
@@ -414,13 +414,12 @@ function SourceControlRow(props: {
       icon={icon}
       isFirst={props.isFirst}
       onPress={() =>
-        navigation.navigate("NewTaskSheet", {
-          screen: "AddProjectRepository",
-          params: {
+        navigation.dispatch(
+          StackActions.push("AddProjectRepository", {
             environmentId: props.selectedEnvironmentId,
             source: props.source,
-          },
-        })
+          }),
+        )
       }
     />
   );
@@ -510,12 +509,11 @@ export function AddProjectSourceScreen() {
               }
               isFirst
               onPress={() =>
-                navigation.navigate("NewTaskSheet", {
-                  screen: "AddProjectLocal",
-                  params: {
+                navigation.dispatch(
+                  StackActions.push("AddProjectLocal", {
                     environmentId: selectedEnvironment.environmentId,
-                  },
-                })
+                  }),
+                )
               }
             />
             {(["url", ...sortAddProjectProviderSources(readiness)] as AddProjectRemoteSource[]).map(
@@ -559,10 +557,18 @@ function useCreateProject(environment: EnvironmentOption | null) {
       if (existing) {
         Alert.alert("Project already exists", existing.title);
         navigation.dispatch(
-          StackActions.replace("NewTaskDraft", {
-            environmentId: existing.environmentId,
-            projectId: existing.id,
-            title: existing.title,
+          CommonActions.reset({
+            index: 0,
+            routes: [
+              {
+                name: "NewTaskDraft",
+                params: {
+                  environmentId: existing.environmentId,
+                  projectId: existing.id,
+                  title: existing.title,
+                },
+              },
+            ],
           }),
         );
         return;
@@ -583,10 +589,18 @@ function useCreateProject(environment: EnvironmentOption | null) {
         return result;
       }
       navigation.dispatch(
-        StackActions.replace("NewTaskDraft", {
-          environmentId: environment.environmentId,
-          projectId,
-          title: inferProjectTitleFromPath(workspaceRoot),
+        CommonActions.reset({
+          index: 0,
+          routes: [
+            {
+              name: "NewTaskDraft",
+              params: {
+                environmentId: environment.environmentId,
+                projectId,
+                title: inferProjectTitleFromPath(workspaceRoot),
+              },
+            },
+          ],
         }),
       );
       return result;
@@ -624,15 +638,14 @@ export function AddProjectRepositoryScreen(props: {
     const provider = addProjectRemoteSourceProvider(source);
     if (!provider) {
       const remoteUrl = repositoryInput.trim();
-      navigation.navigate("NewTaskSheet", {
-        screen: "AddProjectDestination",
-        params: {
+      navigation.dispatch(
+        StackActions.push("AddProjectDestination", {
           environmentId: environment.environmentId,
           source,
           remoteUrl,
           repositoryTitle: remoteUrl,
-        },
-      });
+        }),
+      );
       setIsSubmitting(false);
       return;
     }
@@ -648,15 +661,14 @@ export function AddProjectRepositoryScreen(props: {
       setError(errorMessage(Cause.squash(result.cause)));
     } else {
       const repository = result.value;
-      navigation.navigate("NewTaskSheet", {
-        screen: "AddProjectDestination",
-        params: {
+      navigation.dispatch(
+        StackActions.push("AddProjectDestination", {
           environmentId: environment.environmentId,
           source,
           remoteUrl: repository.sshUrl,
           repositoryTitle: repository.nameWithOwner,
-        },
-      });
+        }),
+      );
     }
     setIsSubmitting(false);
   }, [environment, isSubmitting, lookupRepositoryQuery, repositoryInput, navigation, source]);
