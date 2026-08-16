@@ -2,6 +2,7 @@ import * as Layer from "effect/Layer";
 
 import { OrchestrationCommandReceiptRepositoryLive } from "../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventStoreLive } from "../persistence/Layers/OrchestrationEventStore.ts";
+import { ProjectionThreadSearchRepositoryLive } from "../persistence/Layers/ProjectionThreadSearch.ts";
 import { OrchestrationEngineLive } from "./Layers/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./Layers/ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./Layers/ProjectionSnapshotQuery.ts";
@@ -21,6 +22,10 @@ export const OrchestrationInfrastructureLayerLive = Layer.mergeAll(
   OrchestrationProjectionSnapshotQueryLive,
   OrchestrationEventInfrastructureLayerLive,
   OrchestrationProjectionPipelineLayerLive,
+  // Read-only FTS query over the message projection, consumed by the MCP
+  // `threads` toolkit. Lives here so it resolves `SqlClient` from the same
+  // persistence layer as the other projection readers.
+  ProjectionThreadSearchRepositoryLive,
   // Shared background-liveness and plan-progress registries: written by
   // runtime ingestion, read by the snapshot query. provideMerge feeds the
   // same instance to the snapshot query here and re-exports it for runtime

@@ -997,6 +997,60 @@ RootStackType` in `src/Stack.tsx`) is unstable near its complexity limit
   and `composerInlineTokens.test.ts` / `composer-editor-mentions.test.ts` guard
   the tokenizer exclusion that makes every composer path behave that way.
 
+### Agent-initiated thread history search (MCP `threads` toolkit)
+
+- Where `@thread_ref` requires the user to name the thread up front, this lets
+  the agent find prior threads itself: `thread_search` runs FTS5 keyword search
+  over projected message text and returns title + highlighted snippet;
+  `thread_read` materializes one transcript via the same
+  `createThreadContextArtifact` primitive and returns its path only. Both are
+  project-scoped.
+- **Cross-project boundary:** off by default via
+  `enableCrossProjectThreadSearch`. When disabled, the project predicate is part
+  of the FTS query itself, so other projects' rows are never read, and the
+  `otherProjectMatches` escalation hint is withheld (the count alone leaks that
+  something elsewhere matched). When enabled, one scan orders in-project matches
+  first, `scope: "project"` still returns only in-project threads plus the
+  count, and `scope: "all"` returns everything labelled by project title.
+  `thread_read` enforces the same boundary, so an agent cannot bypass search by
+  passing a thread id it learned elsewhere.
+- Files:
+  - `apps/server/src/persistence/Migrations/043_ProjectionThreadMessagesFts.ts`
+    (+ test) — **fork-added**: external-content FTS5 index over
+    `projection_thread_messages` with triggers filtered to settled
+    (`is_streaming = 0`) `user`/`assistant` rows, plus an explicit backfill
+    (FTS5 `rebuild` would ignore those filters). FTS5 is compiled into both
+    `bun:sqlite` and `node:sqlite`, so no loadable extension is involved.
+  - `apps/server/src/persistence/Services/ProjectionThreadSearch.ts` and
+    `apps/server/src/persistence/Layers/ProjectionThreadSearch.ts` (+ test) —
+    **fork-added**: search repository. Note `bm25`/`snippet` are FTS5 auxiliary
+    functions and cannot be nested in an aggregate, so ranking is per message
+    and collapses per thread in `bestPerThread`.
+  - `apps/server/src/mcp/toolkits/threads/{tools,handlers}.ts` — **fork-added**:
+    the toolkit, mirroring `toolkits/preview/`.
+  - `apps/server/src/mcp/McpHttpServer.ts` — **modified**: registers
+    `ThreadsToolkitRegistrationLive` alongside the preview toolkits in `layer`.
+  - `apps/server/src/mcp/McpInvocationContext.ts` — **modified**: `"threads"`
+    added to `McpCapability`; `requireMcpCapability` narrowed to `"preview"`
+    because its failure type is preview-specific.
+  - `apps/server/src/mcp/McpSessionRegistry.ts` — **modified**: capability set
+    is now `["preview", "threads"]`.
+  - `apps/server/src/orchestration/runtimeLayer.ts` — **modified**:
+    `ProjectionThreadSearchRepositoryLive` merged into
+    `OrchestrationInfrastructureLayerLive` so it resolves `SqlClient` there.
+    Providing it at the routes layer instead leaks `SqlClient` into
+    `makeRoutesLayer`'s requirements and breaks `server.test.ts`.
+  - `packages/contracts/src/settings.ts` — **modified**:
+    `enableCrossProjectThreadSearch` (defaults false).
+  - `apps/server/src/provider/CodexDeveloperInstructions.ts` — **modified**:
+    `T3_CODE_THREAD_HISTORY_INSTRUCTIONS` appended after the browser block in
+    both mode prompts. Codex-only, matching the existing browser instructions;
+    other providers get the tool descriptions but no prompt scaffolding.
+- **Merge guard:** the migration test asserts the streaming case (a message must
+  not enter the index until `is_streaming` flips to 0) and delete/edit
+  consistency; the repository test asserts the scope boundary in both
+  directions. Both are fork-added files, so they are merge-safe.
+
 ### Thread export (zip)
 
 - A third consumer of the thread-artifact primitive: download a thread as a zip

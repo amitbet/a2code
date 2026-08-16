@@ -546,6 +546,16 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  // Lets `thread_search` read threads outside the calling thread's project.
+  // Off by default: projects are the boundary people use to separate unrelated
+  // work (customers, clients, side projects), and an agent pulling one
+  // project's transcript into another's context is a leak no prompt wording
+  // prevents. When off, the search query itself is project-scoped in SQL and
+  // the out-of-project match count is withheld too, since the count alone
+  // reveals that something elsewhere matched.
+  enableCrossProjectThreadSearch: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
   backgroundActivity: BackgroundActivitySettings,
   // Legacy flat fields retained for old settings files and old clients. New
   // consumers should resolve `backgroundActivity` instead.

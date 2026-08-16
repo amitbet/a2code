@@ -11,6 +11,19 @@ For browser work, first call \`preview_status\`. If no automation-capable previe
 Do not switch to global browser skills, Chrome, Node REPL browser automation, standalone Playwright, or agent-browser merely because the preview is initially closed or a first call fails. Use an alternative browser system only when the T3 preview tools are absent, the user explicitly requests another browser, or \`preview_open\` returns an explicit unsupported/unavailable error. A failed T3 preview tool call should be inspected and retried with corrected arguments when the error is actionable.
 `;
 
+const T3_CODE_THREAD_HISTORY_INSTRUCTIONS = `
+
+## T3 Code conversation history
+
+The \`t3-code\` MCP server exposes \`thread_search\` and \`thread_read\` over this project's earlier threads. Earlier threads are where prior decisions, previous attempts, and known dead ends live, and the user will not always remember to point you at them.
+
+Search before deep repo exploration when the request refers to earlier work, past decisions, a previous attempt, or a convention the repo does not explain on its own. Skip it for self-contained requests: a one-line edit, a direct question about code in front of you, or anything where prior context cannot change the answer.
+
+Keep the lookup light. Search with a few concrete terms, and open at most one or two promising threads with \`thread_read\`, which writes a transcript to disk and returns its path for you to read. If nothing relevant surfaces, stop searching and continue with the task rather than trying more phrasings.
+
+Treat what you find as history, not as current truth: it describes work as it was, and the repository may have moved on. Verify anything load-bearing against the current state before relying on it, and say when a conclusion came from an earlier thread.
+`;
+
 export const CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Plan Mode (Conversational)
 
 You work in 3 phases, and you should *chat your way* to a great plan before finalizing it. A great plan is very detailed-intent- and implementation-wise-so that it can be handed to another engineer or agent to be implemented right away. It must be **decision complete**, where the implementer does not need to make any decisions.
@@ -139,7 +152,7 @@ Do not ask "should I proceed?" in the final output. The user can easily switch o
 Only produce at most one \`<proposed_plan>\` block per turn, and only when you are presenting a complete spec.
 
 If the user stays in Plan mode and asks for revisions after a prior \`<proposed_plan>\`, any new \`<proposed_plan>\` must be a complete replacement. If the user indicates that the prior plan is not acceptable but does not provide enough information to produce a complete replacement, address the concern and continue planning without producing a \`<proposed_plan>\` block. If the follow-up neither requires changes nor calls the plan into question (e.g. clarifying question), answer it before the block, then reproduce the prior \`<proposed_plan>\` unchanged.
-${T3_CODE_BROWSER_TOOL_INSTRUCTIONS}
+${T3_CODE_BROWSER_TOOL_INSTRUCTIONS}${T3_CODE_THREAD_HISTORY_INSTRUCTIONS}
 </collaboration_mode>`;
 
 export const CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS = `<collaboration_mode># Collaboration Mode: Default
@@ -153,7 +166,7 @@ Your active mode changes only when new developer instructions with a different \
 Use the \`request_user_input\` tool only when it is listed in the available tools for this turn.
 
 In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
-${T3_CODE_BROWSER_TOOL_INSTRUCTIONS}
+${T3_CODE_BROWSER_TOOL_INSTRUCTIONS}${T3_CODE_THREAD_HISTORY_INSTRUCTIONS}
 </collaboration_mode>`;
 
 export interface CodexRuntimeInfo {
