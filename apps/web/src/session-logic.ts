@@ -74,6 +74,7 @@ export interface WorkLogEntry {
   tone: "thinking" | "tool" | "info" | "error";
   toolTitle?: string;
   toolData?: unknown;
+  generatedImage?: { readonly dataUrl: string; readonly alt?: string };
   itemType?: ToolLifecycleItemType;
   requestKind?: PendingApproval["requestKind"];
   /** From runtime item / task payload `status` when present (e.g. tool.updated). */
@@ -1008,6 +1009,17 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     const data = asRecord(payload?.data);
     if (data?.item !== undefined) {
       entry.toolData = data.item;
+    }
+  }
+  if (itemType === "image_view") {
+    const generatedImage = asRecord(asRecord(payload?.data)?.generatedImage);
+    const dataUrl = generatedImage?.dataUrl;
+    const alt = generatedImage?.alt;
+    if (typeof dataUrl === "string" && dataUrl.startsWith("data:image/")) {
+      entry.generatedImage = {
+        dataUrl,
+        ...(typeof alt === "string" && alt.length > 0 ? { alt } : {}),
+      };
     }
   }
   if (itemType) {

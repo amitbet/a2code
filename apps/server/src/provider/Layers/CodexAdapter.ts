@@ -1138,6 +1138,40 @@ function mapToRuntimeEvents(
     return completed ? [completed] : [];
   }
 
+  if (event.method === "rawResponseItem/completed") {
+    const payload = readPayload(
+      EffectCodexSchema.V2RawResponseItemCompletedNotification,
+      event.payload,
+    );
+    const item = payload?.item;
+    if (!item || item.type !== "image_generation_call" || item.status !== "completed") {
+      return [];
+    }
+    const result = trimText(item.result);
+    if (!result) {
+      return [];
+    }
+    const revisedPrompt = trimText(item.revised_prompt);
+    return [
+      {
+        ...runtimeEventBase(event, canonicalThreadId),
+        type: "item.completed",
+        payload: {
+          itemType: "image_view",
+          status: "completed",
+          title: "Generated image",
+          ...(revisedPrompt ? { detail: revisedPrompt } : {}),
+          data: {
+            generatedImage: {
+              dataUrl: `data:image/png;base64,${result}`,
+              ...(revisedPrompt ? { alt: revisedPrompt } : {}),
+            },
+          },
+        },
+      },
+    ];
+  }
+
   if (
     event.method === "item/reasoning/summaryPartAdded" ||
     event.method === "item/commandExecution/terminalInteraction"

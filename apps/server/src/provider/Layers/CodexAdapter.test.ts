@@ -574,6 +574,52 @@ function startLifecycleRuntime() {
 }
 
 lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
+  it.effect("maps generated image response items to renderable image activities", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      yield* runtime.emit({
+        id: asEventId("evt-generated-image"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "rawResponseItem/completed",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            type: "image_generation_call",
+            id: "image_1",
+            result: "aW1hZ2U=",
+            revised_prompt: "A paper harbor",
+            status: "completed",
+          },
+        },
+      });
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+
+      NodeAssert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some" || firstEvent.value.type !== "item.completed") {
+        return;
+      }
+      NodeAssert.deepStrictEqual(firstEvent.value.payload, {
+        itemType: "image_view",
+        status: "completed",
+        title: "Generated image",
+        detail: "A paper harbor",
+        data: {
+          generatedImage: {
+            dataUrl: "data:image/png;base64,aW1hZ2U=",
+            alt: "A paper harbor",
+          },
+        },
+      });
+    }),
+  );
+
   it.effect("maps completed agent message items to canonical item.completed events", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();

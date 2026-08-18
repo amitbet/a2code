@@ -282,6 +282,26 @@ export function projectActivityPayload(
     };
   }
 
+  if (payload.itemType === "image_view") {
+    const generatedImage = asRecord(data.generatedImage);
+    const dataUrl = asTrimmedString(generatedImage?.dataUrl);
+    if (dataUrl?.startsWith("data:image/")) {
+      const alt = asTrimmedString(generatedImage?.alt);
+      return {
+        ...activity,
+        payload: {
+          ...payload,
+          data: {
+            generatedImage: {
+              dataUrl,
+              ...(alt ? { alt } : {}),
+            },
+          },
+        },
+      };
+    }
+  }
+
   const projectedData: Record<string, unknown> = {};
   const item = projectCommandData(data);
   if (item) {

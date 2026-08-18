@@ -2466,6 +2466,7 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
 }) {
   const { workEntry, workspaceRoot, searchExpanded = false } = props;
   const activity = use(TimelineRowActivityCtx);
+  const rowContext = use(TimelineRowCtx);
   const [expanded, setExpanded] = useState(false);
   // While find has a match in this row, mount the tool body (command/detail) so
   // the highlighter can find matches that live in the otherwise-collapsed output.
@@ -2607,6 +2608,31 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
           </div>
         </div>
       </div>
+      {workEntry.generatedImage ? (
+        <button
+          type="button"
+          className="mt-2 w-fit cursor-zoom-in overflow-hidden rounded-lg border border-border/80 bg-background/70"
+          aria-label="Preview generated image"
+          onClick={(event) => {
+            event.stopPropagation();
+            rowContext.onImageExpand({
+              images: [
+                {
+                  name: workEntry.generatedImage?.alt ?? "Generated image",
+                  src: workEntry.generatedImage!.dataUrl,
+                },
+              ],
+              index: 0,
+            });
+          }}
+        >
+          <img
+            src={workEntry.generatedImage.dataUrl}
+            alt={workEntry.generatedImage.alt ?? "Generated image"}
+            className="block h-auto max-h-[480px] max-w-full object-contain"
+          />
+        </button>
+      ) : null}
       {effectiveExpanded && canExpand && expandedBody ? (
         <div
           className="mt-1 ms-7 cursor-default border-s border-border/45 ps-3 pt-0.5"

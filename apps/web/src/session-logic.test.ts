@@ -898,6 +898,23 @@ describe("workEntryIndicatesToolFailure", () => {
 });
 
 describe("deriveWorkLogEntries", () => {
+  it("exposes generated images from image-view activities", () => {
+    const dataUrl = "data:image/png;base64,aW1hZ2U=";
+    const [entry] = deriveWorkLogEntries([
+      makeActivity({
+        id: "generated-image",
+        kind: "tool.completed",
+        summary: "Generated image",
+        payload: {
+          itemType: "image_view",
+          data: { generatedImage: { dataUrl, alt: "A paper harbor" } },
+        },
+      }),
+    ]);
+
+    expect(entry?.generatedImage).toEqual({ dataUrl, alt: "A paper harbor" });
+  });
+
   it("omits tool started entries and keeps completed entries", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

@@ -21,6 +21,23 @@ function activity(payload: Record<string, unknown>): OrchestrationThreadActivity
  * assertions are the tripwire.
  */
 describe("projectActivityPayload agent-field survival", () => {
+  it("retains generated image data needed by the timeline", () => {
+    const dataUrl = "data:image/png;base64,aW1hZ2U=";
+    const projected = projectActivityPayload(
+      activity({
+        itemType: "image_view",
+        data: {
+          generatedImage: { dataUrl, alt: "A paper harbor" },
+          internalMetadata: "drop me",
+        },
+      }),
+    );
+
+    expect((projected.payload as Record<string, unknown>).data).toEqual({
+      generatedImage: { dataUrl, alt: "A paper harbor" },
+    });
+  });
+
   it("preserves tool attribution (agentId/parentToolUseId) through data slimming", () => {
     const projected = projectActivityPayload(
       activity({
