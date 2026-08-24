@@ -263,19 +263,21 @@ export function useEnvironmentIdentificationMode(): EnvironmentIdentificationMod
   });
 }
 
-/**
- * Whether the legacy sidebar (Settings → General → Legacy features) replaces
- * the default one.
- *
- * Held at the default sidebar until client settings hydrate: the pre-hydration
- * snapshot is just the schema defaults, so resolving against it could mount one
- * sidebar and then swap it out once persisted settings land — remounting the
- * whole tree for everyone instead of only for legacy opt-ins.
- */
+export function resolveProjectTreeSidebarEnabled(input: {
+  settingsHydrated: boolean;
+  enabled: boolean;
+}): boolean {
+  return !input.settingsHydrated || input.enabled;
+}
+
+/** Whether the primary project-tree sidebar is active. */
 export function useLegacySidebarEnabled(): boolean {
   const settingsHydrated = useClientSettingsHydrated();
   const legacySidebarEnabled = useClientSettingsValue().legacySidebarEnabled;
-  return settingsHydrated && legacySidebarEnabled;
+  return resolveProjectTreeSidebarEnabled({
+    settingsHydrated,
+    enabled: legacySidebarEnabled,
+  });
 }
 
 /** Read current settings for one environment, merged with client-local preferences. */

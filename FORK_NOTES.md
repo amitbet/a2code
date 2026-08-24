@@ -3,6 +3,29 @@
 This file tracks fork-specific divergences that are likely to conflict when
 merging `upstream/main`.
 
+## 2026-08-24 project-tree sidebar restored as the primary layout
+
+The fork reversed upstream's sidebar promotion. The original per-project tree is
+again the default and the flat active/settled list is optional.
+
+- `packages/contracts/src/settings.ts` defaults `legacySidebarEnabled` to `true`.
+  The old field name remains part of the persisted schema so existing settings files
+  keep working. Do not rename or invert it during an upstream merge without adding a
+  settings migration. An explicit `false` still selects the flat list.
+- `apps/web/src/hooks/useSettings.ts` keeps the compatibility-named
+  `useLegacySidebarEnabled()` hook because its callers already encode the two layout
+  branches. `resolveProjectTreeSidebarEnabled()` returns `true` before client settings
+  hydrate, then uses the persisted value. This prevents every program restart from
+  mounting the flat list before switching to the project tree.
+- `apps/web/src/components/settings/SettingsPanels.tsx` exposes the choice as
+  "Project tree sidebar" in the main General section, not under Legacy features.
+  `apps/web/src/components/settings/settingsSearch.ts` uses the matching
+  `project-tree-sidebar` search id and label.
+- `apps/web/src/components/AppSidebarLayout.tsx` still renders
+  `LegacyThreadSidebar` when the hook returns `true`. The component and hook names are
+  now implementation-history names, not product labels. Preserve this branch direction
+  unless the internal files are renamed together.
+
 ## 2026-08-14 upstream merge (sidebar v2 promoted to default, turn plan chips, PR surfaces) — migration notes
 
 Merged `upstream/main` through `7e01d33f0` (206 commits). Notable integrations:
@@ -16,8 +39,8 @@ Merged `upstream/main` through `7e01d33f0` (206 commits). Notable integrations:
   if upstream ever reshuffles these files again:
   - `Sidebar.tsx` = merge(base `SidebarV2.tsx`, fork `SidebarV2.tsx`, upstream `Sidebar.tsx`)
   - `LegacySidebar.tsx` = merge(base `Sidebar.tsx`, fork `Sidebar.tsx`, upstream `LegacySidebar.tsx`)
-    The legacy sidebar is still reachable behind `useLegacySidebarEnabled()`, so both
-    files carry fork behavior.
+    The project-tree sidebar is the fork's primary layout and remains selected through
+    the compatibility-named `useLegacySidebarEnabled()`, so both files carry fork behavior.
 - **Fork thread actions were promoted into the shared menu builder.** The fork's
   `Fork thread`, `Copy thread ref`, and `Export thread (zip)` items lived only in the
   v1 sidebar, so the rename would have silently removed them from the default surface.

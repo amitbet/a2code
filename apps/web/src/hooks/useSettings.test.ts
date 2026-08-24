@@ -6,7 +6,26 @@ import {
 import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 import { describe, expect, it } from "vite-plus/test";
 
-import { mergeEnvironmentSettings, resolveEnvironmentIdentificationMode } from "./useSettings";
+import {
+  mergeEnvironmentSettings,
+  resolveEnvironmentIdentificationMode,
+  resolveProjectTreeSidebarEnabled,
+} from "./useSettings";
+
+describe("resolveProjectTreeSidebarEnabled", () => {
+  it("uses the primary project-tree sidebar while settings hydrate", () => {
+    expect(resolveProjectTreeSidebarEnabled({ settingsHydrated: false, enabled: false })).toBe(
+      true,
+    );
+  });
+
+  it("restores either persisted choice after hydration", () => {
+    expect(resolveProjectTreeSidebarEnabled({ settingsHydrated: true, enabled: true })).toBe(true);
+    expect(resolveProjectTreeSidebarEnabled({ settingsHydrated: true, enabled: false })).toBe(
+      false,
+    );
+  });
+});
 
 describe("resolveEnvironmentIdentificationMode", () => {
   it("keeps identification hidden until client settings hydrate", () => {

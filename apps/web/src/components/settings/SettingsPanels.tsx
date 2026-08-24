@@ -1667,7 +1667,6 @@ function AutoSettleDaysInput({
 const LEGACY_FEATURE_TARGET_IDS: ReadonlySet<string> = new Set([
   "legacy-plan-mode",
   "legacy-token-streaming",
-  "legacy-sidebar",
 ]);
 
 /**
@@ -1746,19 +1745,6 @@ function LegacyFeaturesSection() {
                 />
               }
             />
-            <SettingsRow
-              {...searchableSetting("legacy-sidebar")}
-              description="Brings back the original sidebar with per-project thread trees. The default sidebar shows one flat list: active work as rich cards, settled threads as compact rows."
-              control={
-                <Switch
-                  checked={settings.legacySidebarEnabled}
-                  onCheckedChange={(checked) =>
-                    updateSettings({ legacySidebarEnabled: Boolean(checked) })
-                  }
-                  aria-label="Sidebar (legacy)"
-                />
-              }
-            />
           </div>
         </CollapsiblePanel>
       </Collapsible>
@@ -1822,6 +1808,32 @@ export function GeneralSettingsPanel() {
   return (
     <SettingsPageContainer>
       <SettingsSection title="General">
+        <SettingsRow
+          {...searchableSetting("project-tree-sidebar")}
+          description="Show projects and their threads as a tree in the main sidebar. Turn this off to use the flat active and settled thread list."
+          resetAction={
+            settings.legacySidebarEnabled !== DEFAULT_UNIFIED_SETTINGS.legacySidebarEnabled ? (
+              <SettingResetButton
+                label="project tree sidebar"
+                onClick={() =>
+                  updateSettings({
+                    legacySidebarEnabled: DEFAULT_UNIFIED_SETTINGS.legacySidebarEnabled,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.legacySidebarEnabled}
+              onCheckedChange={(checked) =>
+                updateSettings({ legacySidebarEnabled: Boolean(checked) })
+              }
+              aria-label="Project tree sidebar"
+            />
+          }
+        />
+
         <SettingsRow
           {...searchableSetting("project-grouping")}
           description="Combine matching repositories across environments."

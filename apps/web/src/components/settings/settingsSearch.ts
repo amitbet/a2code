@@ -170,8 +170,8 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
-    id: "legacy-sidebar",
-    title: "Sidebar (legacy)",
+    id: "project-tree-sidebar",
+    title: "Project tree sidebar",
     to: "/settings/general",
   },
   {
