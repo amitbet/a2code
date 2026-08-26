@@ -1,10 +1,14 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect } from "react";
 import ChatView from "../components/ChatView";
-import { threadHasAuthoritativeUserMessage } from "../components/ChatView.logic";
+import {
+  resolveDraftPromotionNavigationTarget,
+  threadHasAuthoritativeUserMessage,
+} from "../components/ChatView.logic";
 import {
   DraftId,
   markPromotedDraftThreadByRef,
+  useBackgroundDraftSubmissionPending,
   useComposerDraftStore,
 } from "../composerDraftStore";
 import { SidebarInset } from "../components/ui/sidebar";
@@ -35,9 +39,13 @@ function DraftChatThreadRouteView() {
   // The server can publish its session/turn before its user-message echo. We
   // may render that live server state in place, but navigating now would
   // remount ChatView and discard the only copy of the optimistic first prompt.
-  const canonicalThreadRef = threadHasAuthoritativeUserMessage(serverThread)
-    ? serverThreadRef
-    : null;
+  const serverThreadStarted = threadHasAuthoritativeUserMessage(serverThread);
+  const backgroundSubmissionPending = useBackgroundDraftSubmissionPending(serverThreadRef);
+  const canonicalThreadRef = resolveDraftPromotionNavigationTarget({
+    serverThreadRef,
+    serverThreadStarted,
+    backgroundSubmissionPending,
+  });
 
   useEffect(() => {
     if (outsideMachineScope) {

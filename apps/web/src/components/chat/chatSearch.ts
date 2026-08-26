@@ -61,8 +61,19 @@ export function getRowSearchText(row: MessagesTimelineRow): string {
     }
     case "turn-plan":
       return row.turnPlan.plan.steps.map((step) => step.step).join("\n");
+    case "work-live": {
+      const parts: string[] = [];
+      const entry = row.entry;
+      if (entry.toolTitle) parts.push(entry.toolTitle);
+      if (entry.label) parts.push(entry.label);
+      if (entry.command) parts.push(entry.command);
+      else if (entry.rawCommand) parts.push(entry.rawCommand);
+      if (entry.detail) parts.push(entry.detail);
+      if (entry.changedFiles?.length) parts.push(entry.changedFiles.join(" "));
+      return parts.join("\n");
+    }
     case "work-toggle":
-      return "";
+      return row.summary ?? "";
     case "working":
       return "";
   }

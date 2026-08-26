@@ -40,6 +40,7 @@ const makeElectronAppLayer = (calls: ElectronAppCalls) =>
   Layer.succeed(ElectronApp.ElectronApp, {
     metadata: Effect.die("unexpected metadata read"),
     name: Effect.succeed("A2 Code"),
+    systemLocale: Effect.succeed("en-US"),
     whenReady: Effect.void,
     quit: Effect.void,
     exit: () => Effect.void,
@@ -218,7 +219,9 @@ describe("DesktopAppIdentity", () => {
         // the shell version; the build line carries the shell version + commit.
         assert.equal(calls.setAboutPanelOptions[0]?.applicationVersion, "content 1.2.3");
         assert.equal(calls.setAboutPanelOptions[0]?.version, "shell 1.2.3 · 0123456789ab");
-        assert.deepEqual(calls.setDockIcon, ["/icon.png"]);
+        // Packaged: the bundle's own icon stands, so a custom one the user
+        // attached survives.
+        assert.deepEqual(calls.setDockIcon, []);
       }),
       {
         calls,
@@ -284,6 +287,30 @@ describe("DesktopAppIdentity", () => {
       }),
       {
         calls,
+      },
+    );
+  });
+
+  it.effect("sets the dock icon only when running unpackaged", () => {
+    const calls: ElectronAppCalls = {
+      setAboutPanelOptions: [],
+      setDockIcon: [],
+      setName: [],
+    };
+
+    return withIdentity(
+      Effect.gen(function* () {
+        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
+        yield* identity.configure;
+
+        // Electron shows a generic icon for an unpackaged run, which is the
+        // reason this call exists at all.
+        assert.deepEqual(calls.setDockIcon, ["/icon.png"]);
+      }),
+      {
+        calls,
+        environment: { isPackaged: false },
+        pngIconPath: Option.some("/icon.png"),
       },
     );
   });

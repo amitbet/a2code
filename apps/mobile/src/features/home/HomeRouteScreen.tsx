@@ -3,6 +3,7 @@ import * as Order from "effect/Order";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useNavigation } from "@react-navigation/native";
 import { useEffect, useMemo, useState } from "react";
+import { Platform } from "react-native";
 
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
 import { useMachineProjects, useMachineThreadShells } from "../../state/entities";
@@ -13,7 +14,7 @@ import { useSavedRemoteConnections } from "../../state/use-remote-environment-re
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { WorkspaceEmptyDetail } from "../layout/WorkspaceEmptyDetail";
 import { WorkspaceSidebarToolbar } from "../layout/workspace-sidebar-toolbar";
-import { checkForAppUpdateOnLaunch } from "../updates/app-updates";
+import { checkForAppUpdateOnLaunch, startAppUpdateForegroundRecheck } from "../updates/app-updates";
 import { AndroidHomeFabLayout } from "./AndroidHomeFab";
 import { HomeScreen } from "./HomeScreen";
 import { HomeHeader } from "./HomeHeader";
@@ -38,6 +39,7 @@ export function HomeRouteScreen() {
 
   useEffect(() => {
     void checkForAppUpdateOnLaunch();
+    startAppUpdateForegroundRecheck();
   }, []);
 
   const {
@@ -113,7 +115,11 @@ export function HomeRouteScreen() {
     return (
       <>
         <NativeStackScreenOptions
-          options={{ title: "", headerTitle: "", unstable_headerLeftItems: () => [] }}
+          options={
+            Platform.OS === "android"
+              ? { headerShown: false }
+              : { title: "", headerTitle: "", unstable_headerLeftItems: () => [] }
+          }
         />
         <WorkspaceSidebarToolbar
           afterSidebarButton={
@@ -136,18 +142,20 @@ export function HomeRouteScreen() {
       onStartNewTask={() => navigation.navigate("NewTaskSheet", { screen: "NewTask" })}
     >
       <>
-        {/* Restore the compact title after the split branch blanks the detail
-            header. The brand slot doubles as the connection status surface:
-            while an environment reconnects, the lockup fades to a status label
-            in place (no layout shift in the list below). */}
+        {/* Restore the header after leaving split view; screen options are
+            shallow-merged. The brand slot also doubles as the connection
+            status surface while an environment reconnects. */}
         <NativeStackScreenOptions
-          options={getConnectionAwareBrandHeaderOptions({
-            onOpenEnvironments: () =>
-              navigation.navigate("SettingsSheet", {
-                screen: "SettingsContent",
-                params: { screen: "SettingsEnvironments" },
-              }),
-          })}
+          options={{
+            ...getConnectionAwareBrandHeaderOptions({
+              onOpenEnvironments: () =>
+                navigation.navigate("SettingsSheet", {
+                  screen: "SettingsContent",
+                  params: { screen: "SettingsEnvironments" },
+                }),
+            }),
+            headerShown: true,
+          }}
         />
         <HomeHeader
           environments={environments}

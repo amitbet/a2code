@@ -3,6 +3,120 @@
 This file tracks fork-specific divergences that are likely to conflict when
 merging `upstream/main`.
 
+## 2026-08-26 upstream merge (attachment uploads, tool-activity collapse, PR surfaces) — migration notes
+
+Merged `upstream/main` through `a3a8cbd60` (307 commits). Notable integrations:
+
+- **Migration renumbering held again.** Upstream added 041–043; fork ids 33–43 are frozen,
+  so upstream's became **044–046** (`AuthSessionClientConnection`,
+  `ProjectionThreadLinkedPullRequest`, `ProjectionThreadsUnsettledAt`), with the two
+  renamed `.test.ts` `layer(...)` labels and their `toMigrationInclusive` bounds repointed
+  (43/44 and 44/45). Fork's next free id is **47**.
+- **`ChatComposer.tsx` and `MessagesTimeline.tsx` were taken wholesale and the fork
+  pieces re-applied on top** — reconciling 12 and 10 interleaved conflicts in place was
+  not viable. Re-applied in the composer: the `RateLimitMeter` wiring (import,
+  `useAccountRateLimitSnapshot`, the `activeRateLimits` prop on
+  `ComposerFooterPrimaryActions` and both render sites), `shouldApplyProviderModelDefaults`
+  on `useEffectiveComposerModelState`, the `/fork` slash item + handler, the
+  `isImageFile`/`ATTACHMENT_SIZE_LIMIT_LABEL` file-attachment path (acceptance, unfiltered
+  paste, name+MIME chip), and the `phase === "running"` "Queue message" collapsed label.
+  Re-applied in the timeline: `TimelineSearchCtx` + `{searchBar}` + `setTimelineHostElement`
+  - `data-chat-scroll-container`, the `searchExpanded` threading (row → `WorkGroupSection`
+    → `SimpleWorkEntryRow` → `PlainWorkEntryRow` → `CollapsibleUserMessageBody`), the
+    `user-input` row branch, the generated-image button, `loading="lazy"`, and the
+    `buildToolCallExpandedBody` dedupe. **If either file conflicts heavily again, redo it
+    this way rather than merging hunk by hunk.**
+- **Upstream's attachment upload channel is image-only, so the fork's arbitrary file
+  attachments now take two paths.** `AttachmentCreateUploadUrlInput.mimeType` is a literal
+  union of image MIME types, so `ChatView`'s send path splits
+  `uploadableComposerImages` (images → mint/upload/`getUploadedAttachments`) from
+  non-images, which keep riding the inline `dataUrl` path. `thread.prompt.queue` was
+  widened to `Schema.Union([UploadChatAttachment, ChatAttachment])` (mirroring
+  `thread.turn.start`) so a queued prompt can carry uploaded attachments; the server
+  normalizer already handled both shapes. `getUploadedAttachments` still hardcodes
+  `type: "image"` — widening the upload channel to files is the follow-up if the inline
+  path ever needs to go away.
+- **`session-logic` tool detail: upstream converged past the fork, with the fork's
+  fallbacks kept.** Upstream's `extractToolOutput` (PR "show command output in work log")
+  now supplies the detail for command rows; the fork's `summarizeFailedCommandExit` is the
+  fallback when a command produced no usable output, and the fork's path/read-size logic
+  (`summarizeReadContentSize`, `classifyToolActivityAction`) still handles read/file-change
+  rows. Three fork tests were rewritten to the merged semantics (output wins, exit code
+  only when silent).
+- **`serverRuntimeStartup.ts` is upstream's again.** Upstream's `reconcileProviderSessions`
+  (orphaned starting/running sessions → `error`, `activeTurnId` cleared, directory binding
+  payload cleared) is a strict superset of the fork's
+  `reconcileStoppedProviderSessionProjections` at startup, and the two together broke
+  upstream's `orphanedProviderSessionStartup.integration.test.ts` (the fork pass marked the
+  thread `stopped` first, so the orphan pass skipped it). The fork function, its phase, and
+  its unit test were deleted. Do not re-add a second startup reconciler.
+- **`ProviderCommandReactor` interrupt: upstream's version adopted.** Interrupts now go out
+  by session (no `turnId` — orchestration turn ids are not provider turn ids) and carry
+  upstream's failure recovery (stop session, record `provider.turn.interrupt.failed`). The
+  fork test that asserted the `turnId` argument was updated.
+- **`ComposerPendingUserInputPanel` was taken wholesale.** Upstream's collapse-from-header
+  `Collapsible` replaced the fork's collapse/dismiss controls, so the fork's
+  `pendingUserInputPanelState` machinery in `ChatComposer` and the "Questions" restore
+  button are **gone**. The panel now takes only
+  `pendingUserInputs`/`respondingRequestIds`/`answers`/`questionIndex`/`onToggleOption`/`onAdvance`.
+- **`threadActionMenu.logic.ts`: fork items merged into upstream's nested structure.**
+  Upstream moved the copy actions into a `copy` submenu and added `archive`, so
+  `copy-thread-ref` is now a **child of `copy`**, `fork` sits after `rename`, and
+  `export-zip` stays top-level before `archive`. `threadActionMenu.logic.test.ts` asserts
+  the exact top-level id list — update it whenever an item moves.
+- **`ComposerPrimaryActions`: the fork's Queue-while-running branch wins.** Upstream added
+  `showSendWhileRunning` (a mobile-only send button beside Stop) whose tail branch is
+  unreachable behind the fork's early `if (isRunning)` return. The Queue button gained
+  `aria-label="Queue message"` and upstream's two running-state tests were rewritten to
+  assert the fork affordance.
+- **`desktopUpdate.logic`: the fork's installer semantics kept.** The `in-place` branch is
+  unchanged; the installer branch keeps the fork's "auto-download, apply on one click"
+  shape (upstream's `status === "available" → download` clause and its
+  "prefers a newly available release" test were dropped, since the fork never emits
+  `kind: "installer"`). `getDesktopUpdateInstallConfirmationMessage` keeps its `platform`
+  parameter and the A2 Code / Windows-install copy.
+- **`apps/desktop/resources/icon.{png,ico,icns}` were deleted** with upstream: icons are
+  generated from `assets/<brand>/` (`BRAND_ASSET_PATHS`) into the staged resources dir, and
+  `DesktopAssets` prefers the source-tree brand asset. The fork's branded `assets/prod`
+  files are unaffected. `scripts/build-desktop-artifact.ts` keeps `A2 Code` for the Linux
+  protocol name and product name (upstream's literals came back in this merge — the tests
+  at the DMG title and Linux protocol assertions are the tripwires).
+- **`DesktopEnvironment`: upstream added `serverRoot`** (packaged Windows resolves the
+  server tree from `resources/server.asar`). The fork's `bundledBackendEntryPath` now
+  derives from `serverRoot`, not `appRoot`, so the payload fallback points at the same tree
+  as `backendEntryPath`.
+- **`DesktopUpdates.{ts,test.ts}` stayed the fork's** (payload-only facade). Upstream's
+  update in this window was entirely electron-installer internals
+  (`activeUpdateActionRef`, channel-change guards); per the payload feature notes it was
+  not re-wired.
+- **Mobile: upstream replaced the grouped sidebar-header pill.** `ThreadNavigationSidebar`'s
+  header is now upstream's flat `flex-row items-center gap-2.5` row, so `MachineSwitcher`
+  renders ungrouped there (the local `SidebarHeaderButtonGroup` and the `grouped` props are
+  gone). `sortThreadsForListV2` now sorts pinned block → upstream's
+  `activeThreadAnchorTimestampMs` → id, and its type parameter carries both `pinnedAt` and
+  `unsettledAt`.
+- **`SidebarChrome` adopted upstream's `hidden … md:flex` brand-link classes** on the fork's
+  branded (`AppWordmark` + `APP_NAME_SUFFIX` + version tooltip) link;
+  `threadSidebarWidth.test.ts` greps the file for that exact class string. The dead
+  `sidebar-brand` class was dropped.
+- **Upstream-only workflows keep arriving.** `desktop-macos-preview.yml`, `publish-aur.yml`,
+  and `mobile-showcase-screenshots.yml` were dropped. `.github/workflows` is byte-identical
+  to the pre-merge fork tip and still holds only `ci.yml` + `release.yml`.
+- **Test fixtures needed the other side's fields, as always:** `forkedFromId: null` in
+  upstream's `ProjectionRepositories.test.ts` linked-PR row, `isExpandedToolGroupEntry` /
+  `isLastExpandedToolGroupEntry` in the fork's `chatSearch.test.ts` work row, and
+  `planModeEnabled={false}` on `ProviderInstanceCard`'s defaults `TraitsPicker` (upstream
+  made the prop required). `chatSearch.ts.getRowSearchText` gained a `work-live` case and
+  now returns the `work-toggle` summary — that switch is still the first thing to break on
+  a new row kind.
+- **Known environment-only failure:** `apps/server/src/entrypoint.test.ts` >
+  "matches through a symlinked entrypoint" fails on macOS because `os.tmpdir()` is itself a
+  symlink (`/var` → `/private/var`), so `realpathSync` never equals the unresolved module
+  URL. The file is byte-identical to upstream; it passes on Linux CI.
+- `effect` stayed on beta.103, so the fork patch did not need re-deriving. `pnpm-lock.yaml`
+  was regenerated (the fork's `effect` patch hash differs from upstream's).
+- Fork package versions stay on the `0.0.25-amit` marker (upstream is at `0.0.34`).
+
 ## 2026-08-24 project-tree sidebar restored as the primary layout
 
 The fork reversed upstream's sidebar promotion. The original per-project tree is
@@ -54,7 +168,8 @@ Merged `upstream/main` through `7e01d33f0` (206 commits). Notable integrations:
   frozen, so upstream's became **039–042** (`ProjectionTurnsKeysetIndex`,
   `ProjectionThreadsPinOrderKey`, `ProjectionProjectsDefaultThreadEnvMode`,
   `ProjectionProjectFaviconPath`), with the favicon test's `layer(...)` label and its
-  `toMigrationInclusive` bounds (41/42) repointed. Fork's next free id is **43**.
+  `toMigrationInclusive` bounds (41/42) repointed. (Superseded: the fork's next free id is
+  now **47** — see the 2026-08-26 notes.)
 - **`turn-plan` timeline rows are a new row kind — every switch over rows needs a
   case.** Upstream added `deriveTurnPlans`/`TurnPlanEntry` and a `turn-plan`
   `TimelineEntry`/`MessagesTimelineRow` variant beside the fork's `user-input` variant.
@@ -996,8 +1111,9 @@ RootStackType` in `src/Stack.tsx`) is unstable near its complexity limit
     `MAX_THREAD_REFERENCES`), persists a complete transcript artifact per
     reference, and appends their path-only instructions to the provider prompt.
   - `apps/web/src/components/threadActionMenu.logic.ts` — **modified**:
-    `copy-thread-ref` id + item; handled in `Sidebar.tsx` and
-    `useThreadActionMenu.ts`, each with their own `copyThreadRefToClipboard`.
+    `copy-thread-ref` id + item — since 2026-08-26 a **child of upstream's `copy`
+    submenu**; handled in `Sidebar.tsx` and `useThreadActionMenu.ts`, each with their own
+    `copyThreadRefToClipboard`.
   - `apps/web/src/components/LegacySidebar.tsx` — **modified**: `Copy thread ref`
     context-menu item + `copyThreadRefToClipboard`.
   - `packages/shared/src/composerInlineTokens.ts` — **modified**:

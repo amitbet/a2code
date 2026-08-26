@@ -75,14 +75,30 @@ describe("desktop update button state", () => {
     expect(getDesktopUpdateButtonTooltip(state)).toContain("Click to retry");
   });
 
-  it("prefers install when a downloaded version already exists", () => {
+  it("keeps install action available after a background updater error", () => {
     const state: DesktopUpdateState = {
       ...baseState,
-      status: "available",
+      status: "error",
+      downloadedVersion: "1.1.0",
+      availableVersion: "1.1.0",
+      message: "background updater error",
+      errorContext: null,
+      canRetry: true,
+    };
+    expect(shouldShowDesktopUpdateButton(state)).toBe(true);
+    expect(resolveDesktopUpdateButtonAction(state)).toBe("install");
+    expect(getDesktopUpdateButtonTooltip(state)).toContain("Click to restart and install");
+  });
+
+  it("hides the install action while checking for a newer release", () => {
+    const state: DesktopUpdateState = {
+      ...baseState,
+      status: "checking",
       availableVersion: "1.1.0",
       downloadedVersion: "1.1.0",
+      downloadPercent: 100,
     };
-    expect(resolveDesktopUpdateButtonAction(state)).toBe("install");
+    expect(resolveDesktopUpdateButtonAction(state)).toBe("none");
   });
 
   it("hides the button for non-actionable check errors", () => {
@@ -325,30 +341,15 @@ describe("desktop update UI helpers", () => {
     ).toContain("Install update and restart A2 Code?");
   });
 
-  it("warns Windows users that a silent installation can take several minutes", () => {
-    const message = getDesktopUpdateInstallConfirmationMessage(
-      {
+  it("keeps the same install confirmation copy across desktop platforms", () => {
+    expect(
+      getDesktopUpdateInstallConfirmationMessage({
         availableVersion: "1.1.0",
         downloadedVersion: "1.1.0",
-      },
-      "Win32",
+      }),
+    ).toBe(
+      "Install update 1.1.0 and restart A2 Code?\n\nAny running tasks will be interrupted. Make sure you're ready before continuing.",
     );
-
-    expect(message).toContain("may remain closed for several minutes");
-    expect(message).toContain("no installer window may appear");
-    expect(message).toContain("will reopen automatically");
-  });
-
-  it("keeps the additional silent installation warning Windows-specific", () => {
-    const message = getDesktopUpdateInstallConfirmationMessage(
-      {
-        availableVersion: "1.1.0",
-        downloadedVersion: "1.1.0",
-      },
-      "MacIntel",
-    );
-
-    expect(message).not.toContain("may remain closed for several minutes");
   });
 });
 
@@ -371,7 +372,7 @@ describe("canCheckForUpdate", () => {
     );
   });
 
-  it("returns false once an update has been downloaded", () => {
+  it("returns true once an update has been downloaded so newer releases can be found", () => {
     expect(
       canCheckForUpdate({
         ...baseState,
@@ -379,7 +380,7 @@ describe("canCheckForUpdate", () => {
         availableVersion: "1.1.0",
         downloadedVersion: "1.1.0",
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("returns true when idle", () => {

@@ -1,12 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import {
-  DEFAULT_MODEL,
-  ProjectId,
-  ProviderDriverKind,
-  ProviderInstanceId,
-  ThreadId,
-  TurnId,
-} from "@t3tools/contracts";
+import { DEFAULT_MODEL, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
@@ -20,7 +13,6 @@ import * as Stream from "effect/Stream";
 import * as ServerConfig from "./config.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
-import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDirectory.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 
@@ -114,126 +106,6 @@ it.effect("launchStartupHeartbeat does not block the caller while counts are loa
       );
     }),
   ),
-);
-
-it.effect(
-  "reconcileStoppedProviderSessionProjections stops stale running session projections",
-  () =>
-    Effect.gen(function* () {
-      const threadId = ThreadId.make("thread-stale-runtime");
-      const providerInstanceId = ProviderInstanceId.make("claudeAgent");
-      const dispatches = yield* Ref.make<ReadonlyArray<unknown>>([]);
-
-      yield* ServerRuntimeStartup.reconcileStoppedProviderSessionProjections.pipe(
-        Effect.provideService(ProviderSessionDirectory.ProviderSessionDirectory, {
-          upsert: () => Effect.die("unused"),
-          getProvider: () => Effect.die("unused"),
-          getBinding: () => Effect.die("unused"),
-          listThreadIds: () => Effect.die("unused"),
-          listBindings: () =>
-            Effect.succeed([
-              {
-                threadId,
-                provider: ProviderDriverKind.make("claudeAgent"),
-                providerInstanceId,
-                adapterKey: "claudeAgent",
-                runtimeMode: "full-access",
-                status: "stopped",
-                resumeCursor: null,
-                runtimePayload: {
-                  activeTurnId: null,
-                  lastRuntimeEvent: "provider.stopAll",
-                  lastRuntimeEventAt: "2026-07-09T09:36:02.253Z",
-                },
-                lastSeenAt: "2026-07-09T09:36:02.253Z",
-              },
-            ]),
-        }),
-        Effect.provideService(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
-          getCommandReadModel: () => Effect.die("unused"),
-          getSnapshot: () => Effect.die("unused"),
-          getShellSnapshot: () => Effect.die("unused"),
-          getArchivedShellSnapshot: () => Effect.die("unused"),
-          getSnapshotSequence: () => Effect.die("unused"),
-          searchThreads: () => Effect.die("unused"),
-          getCounts: () => Effect.die("unused"),
-          getActiveProjectByWorkspaceRoot: () => Effect.die("unused"),
-          getProjectShellById: () => Effect.die("unused"),
-          getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
-          getThreadCheckpointContext: () => Effect.die("unused"),
-          getFullThreadDiffContext: () => Effect.die("unused"),
-          getThreadShellById: () =>
-            Effect.succeed(
-              Option.some({
-                id: threadId,
-                projectId: ProjectId.make("project-stale-runtime"),
-                title: "Stale runtime",
-                modelSelection: {
-                  instanceId: providerInstanceId,
-                  model: "claude-fable-5",
-                },
-                runtimeMode: "full-access",
-                interactionMode: "default",
-                branch: null,
-                worktreePath: null,
-                latestTurn: {
-                  turnId: TurnId.make("turn-stale-runtime"),
-                  state: "running",
-                  requestedAt: "2026-07-09T09:35:01.942Z",
-                  startedAt: "2026-07-09T09:35:01.942Z",
-                  completedAt: null,
-                  assistantMessageId: null,
-                },
-                createdAt: "2026-07-09T09:35:01.942Z",
-                updatedAt: "2026-07-09T09:35:59.391Z",
-                archivedAt: null,
-                pinnedAt: null,
-                settledOverride: null,
-                settledAt: null,
-                session: {
-                  threadId,
-                  status: "running",
-                  providerName: "claudeAgent",
-                  providerInstanceId,
-                  runtimeMode: "full-access",
-                  activeTurnId: TurnId.make("turn-stale-runtime"),
-                  lastError: null,
-                  updatedAt: "2026-07-09T09:35:48.794Z",
-                },
-                latestUserMessageAt: "2026-07-09T09:35:01.942Z",
-                hasPendingApprovals: false,
-                hasPendingUserInput: false,
-                hasActionableProposedPlan: false,
-              }),
-            ),
-          getThreadDetailById: () => Effect.die("unused"),
-          getThreadDetailSnapshot: () => Effect.die("unused"),
-        }),
-        Effect.provideService(OrchestrationEngine.OrchestrationEngineService, {
-          readEvents: () => Stream.empty,
-          latestSequence: Effect.succeed(0),
-          dispatch: (command) =>
-            Ref.update(dispatches, (existing) => [...existing, command]).pipe(
-              Effect.as({ sequence: 1 }),
-            ),
-          streamDomainEvents: Stream.empty,
-        } satisfies OrchestrationEngine.OrchestrationEngineService["Service"]),
-        Effect.provide(NodeServices.layer),
-      );
-
-      const [command] = yield* Ref.get(dispatches);
-      assert.equal((command as { readonly type?: string } | undefined)?.type, "thread.session.set");
-      assert.deepStrictEqual((command as { readonly session?: unknown } | undefined)?.session, {
-        threadId,
-        status: "stopped",
-        providerName: "claudeAgent",
-        providerInstanceId,
-        runtimeMode: "full-access",
-        activeTurnId: null,
-        lastError: null,
-        updatedAt: "2026-07-09T09:36:02.253Z",
-      });
-    }),
 );
 
 it.effect("resolveWelcomeBase derives cwd and project name from server config", () =>
