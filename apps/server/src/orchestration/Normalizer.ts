@@ -12,6 +12,7 @@ import {
 } from "@t3tools/contracts";
 
 import {
+  attachmentFileExtension,
   createAttachmentId,
   planAttachmentClaim,
   PENDING_ATTACHMENT_THREAD_SEGMENT,
@@ -19,7 +20,7 @@ import {
   resolveAttachmentPath,
 } from "../attachmentStore.ts";
 import { ServerConfig } from "../config.ts";
-import { parseBase64DataUrl } from "../imageMime.ts";
+import { inferImageExtension, parseBase64DataUrl } from "../imageMime.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 
 export const canonicalizeClientCommandTimestamps = (
@@ -180,12 +181,14 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
             });
             if (expectedPath !== claim.finalPath) {
               return yield* new OrchestrationDispatchCommandError({
-                message: `Attachment '${attachment.name}' cannot be sent: image type does not match the upload.`,
+                message: `Attachment '${attachment.name}' cannot be sent: attachment type does not match the upload.`,
               });
             }
 
             // Keep the pending copy until the turn succeeds. A failed thread
-            // bootstrap can then retry with a fresh thread id.
+            // bootstrap can then retry with a fresh thread id. A copy, not a
+            // hard link: an agent editing the delivered file in place must not
+            // mutate the retry source.
             yield* fileSystem.copyFile(claim.currentPath, claim.finalPath).pipe(
               Effect.mapError(
                 (cause) =>
@@ -217,7 +220,14 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
             });
           }
 
-          const attachmentId = createAttachmentId(canonicalCommand.threadId);
+          // Mint the id with the stored file's extension: resolveAttachmentPathById
+          // reads it back off the id and only probes image extensions otherwise.
+          const attachmentId = createAttachmentId(
+            canonicalCommand.threadId,
+            parsed.mimeType.startsWith("image/")
+              ? inferImageExtension({ mimeType: parsed.mimeType, fileName: attachment.name })
+              : attachmentFileExtension(attachment.name),
+          );
           if (!attachmentId) {
             return yield* new OrchestrationDispatchCommandError({
               message: "Failed to create a safe attachment id.",

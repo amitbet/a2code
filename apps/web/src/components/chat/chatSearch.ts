@@ -59,8 +59,6 @@ export function getRowSearchText(row: MessagesTimelineRow): string {
       }
       return parts.join("\n");
     }
-    case "turn-plan":
-      return row.turnPlan.plan.steps.map((step) => step.step).join("\n");
     case "work-live": {
       const parts: string[] = [];
       const entry = row.entry;

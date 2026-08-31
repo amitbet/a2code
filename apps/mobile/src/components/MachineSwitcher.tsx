@@ -10,7 +10,7 @@ import { ControlPillMenu } from "./ControlPill";
 import { SymbolView } from "./AppSymbol";
 import { AppText as Text } from "./AppText";
 import { withNativeGlassHeaderItem } from "../features/layout/native-glass-header-items";
-import { useThemeColor } from "../lib/useThemeColor";
+import { useUniwindTheme } from "../lib/useUniwindTheme";
 
 export interface MachineSwitcherEnvironment {
   readonly environmentId: EnvironmentId;
@@ -53,7 +53,7 @@ export function MachineSwitcher(props: {
   readonly onEnvironmentChange: (environmentId: EnvironmentId) => void;
   readonly grouped?: boolean;
 }) {
-  const iconColor = useThemeColor("--color-icon");
+  const iconColor = useUniwindTheme()["--color-icon"];
   const activeEnvironment =
     props.environments.find(
       (environment) => environment.environmentId === props.activeEnvironmentId,

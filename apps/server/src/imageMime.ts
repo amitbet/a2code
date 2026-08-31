@@ -1,6 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import Mime from "@effect/platform-node/Mime";
-import * as NodePath from "node:path";
 
 export const IMAGE_EXTENSION_BY_MIME_TYPE: Record<string, string> = {
   "image/avif": ".avif",
@@ -29,26 +28,6 @@ export const SAFE_IMAGE_FILE_EXTENSIONS = new Set([
   ".svg",
   ".tiff",
   ".webp",
-]);
-
-const SAFE_ATTACHMENT_FILE_EXTENSIONS = new Set([
-  ...SAFE_IMAGE_FILE_EXTENSIONS,
-  ".csv",
-  ".gz",
-  ".html",
-  ".htm",
-  ".json",
-  ".log",
-  ".md",
-  ".pdf",
-  ".svg",
-  ".tar",
-  ".tgz",
-  ".txt",
-  ".xml",
-  ".yaml",
-  ".yml",
-  ".zip",
 ]);
 
 // Whether `code` is a character the base64 payload may contain, aside from
@@ -152,34 +131,6 @@ export function inferImageExtension(input: { mimeType: string; fileName?: string
   const extensionMatch = /\.([a-z0-9]{1,8})$/i.exec(fileName);
   const fileNameExtension = extensionMatch ? `.${extensionMatch[1]!.toLowerCase()}` : "";
   if (SAFE_IMAGE_FILE_EXTENSIONS.has(fileNameExtension)) {
-    return fileNameExtension;
-  }
-
-  return ".bin";
-}
-
-// `Mime.getExtension` returns an extension without a leading dot (e.g. `pdf`),
-// whereas the SAFE_* sets are dotted (`.pdf`); normalize so lookups match.
-function normalizeMimeExtension(extension: string | null | undefined): string | undefined {
-  if (!extension) {
-    return undefined;
-  }
-  const lower = extension.toLowerCase();
-  return lower.startsWith(".") ? lower : `.${lower}`;
-}
-
-export function inferAttachmentExtension(input: { mimeType: string; fileName?: string }): string {
-  if (input.mimeType.toLowerCase().startsWith("image/")) {
-    return inferImageExtension(input);
-  }
-
-  const fromMimeExtension = normalizeMimeExtension(Mime.getExtension(input.mimeType));
-  if (fromMimeExtension && SAFE_ATTACHMENT_FILE_EXTENSIONS.has(fromMimeExtension)) {
-    return fromMimeExtension;
-  }
-
-  const fileNameExtension = NodePath.extname(input.fileName?.trim() ?? "").toLowerCase();
-  if (fileNameExtension && SAFE_ATTACHMENT_FILE_EXTENSIONS.has(fileNameExtension)) {
     return fileNameExtension;
   }
 

@@ -3,6 +3,90 @@
 This file tracks fork-specific divergences that are likely to conflict when
 merging `upstream/main`.
 
+## 2026-08-31 upstream merge (upstream ships file attachments, plan chips reverted) — migration notes
+
+Merged `upstream/main` through `e9c4775e8` (96 commits). The headline is that **upstream
+implemented arbitrary file attachments itself** (#8235 server, #8236 web, #8237 mobile), so a
+long-standing fork divergence was retired rather than re-applied.
+
+- **No migrations arrived.** Upstream is still at its 043; the fork's renumbered 044–046 are
+  untouched. Fork's next free id is still **47**.
+- **The fork's arbitrary-file-attachment stack was retired in favour of upstream's**, which is a
+  strict superset (real 50MB upload channel, video playback, needs-reattach markers, an _open_
+  `ChatAttachment` union with an unknown-type passthrough). Concretely removed: the widened
+  `ComposerImageAttachment`/`ComposerAttachment` union alias in `composerDraftStore.ts` (upstream's
+  separate `ComposerImageAttachment` + `ComposerFileAttachment` interfaces are back), the inline
+  `UploadChatFileAttachment` contract schema, the fork's `isImageFile`/`ATTACHMENT_SIZE_LIMIT_LABEL`
+  composer branch, `AttachmentPathDescriptor` + the prefix-scan `resolveAttachmentPathById`, and
+  `inferAttachmentExtension` in `imageMime.ts` (upstream's `attachmentFileExtension` replaces it).
+  **The fork's `thread.prompt.queue` widening to `Schema.Union([UploadChatAttachment, ChatAttachment])`
+  was kept** — queued prompts still need to carry uploaded attachments.
+- **Attachment ids now carry their file extension.** Upstream's `resolveAttachmentPathById` reads the
+  extension back off the id (`createAttachmentId(threadId, ext)`) and only _probes_ image extensions
+  as a fallback. Two fork call sites minted extension-less ids and would have become unresolvable:
+  `threadContextArtifact.ts` (the `.md` transcript behind thread forking) and `Normalizer.ts`'s
+  inline data-URL path. Both now pass an extension. **Any new `createAttachmentId` call for a
+  non-image must do the same.**
+- **Attachment type guards, not literal comparisons.** The union has an open member, so
+  `attachment.type === "image"` no longer narrows. Use `isImageAttachment` / `isFileAttachment`
+  from `apps/web/src/types.ts`.
+- **Upstream reverted its own turn-plan chips** (#8734 reverted #5558), so `TurnPlanEntry`,
+  the `turn-plan` timeline row, `TurnPlanTimelineRow`, the `deriveTimelineEntries` `turnPlans`
+  parameter, and the `chatSearch` `turn-plan` case are all gone. Plans now render via
+  `deriveActivePlanState`. The fork's **`user-input` row survives** alongside — when resolving these
+  files, keep `UserInputExchange`/`UserInputAnswerTimelineRow` and drop anything plan-shaped.
+- **`ProviderSettingsPanel.tsx` and `ProviderInstanceCard.tsx` were taken wholesale and the fork
+  pieces re-applied.** Upstream split provider settings into a list + editor with
+  `renderProviderInstance(row, mode)` and gave the card configuration/models tabs. The fork's
+  **"Default traits"** feature (`providerModelDefaults`, `defaultModelOptions`,
+  `onDefaultModelOptionsChange`, the `planModeEnabled={false}` `TraitsPicker`) now lives at the top
+  of the card's **models tab**. Redo it this way if these conflict again.
+- **`Sidebar.tsx`: the project picker is now a searchable `Combobox`** (#5931) driven by a
+  `projectScopeMenuState` reducer, so the fork's `projectScopeMenuOpen` state is gone. The fork's
+  per-project todo button moved inside upstream's `ComboboxItem` (guarded by `project ?`) and closes
+  the popup with `dispatchProjectScopeMenu({ type: "open-changed", open: false })`. The scoped
+  project-todo tooltip button was re-applied after `</Combobox>`.
+- **Mobile: `useThemeColor` is gone.** Upstream's Uniwind theme refactor (#7327) replaced CSS-variable
+  subscription with `useUniwindTheme()`, which returns the whole palette keyed by variable name; git
+  detected the fork's `lib/useThemeColor.ts` as renamed into upstream's `lib/useUniwindTheme.ts` and
+  deleted it. `useUniwindTheme()["--color-icon"]` is the direct replacement. `MachineSwitcher.tsx`
+  tints native `SymbolView` icons, so it was added to `THEME_INTEROP_ALLOWLIST` in
+  `oxlint-plugin-t3code/rules/no-mobile-uniwind-theme-escape-hatches.ts` — that rule is a hard
+  **error**, not a warning.
+- **`makeManagedServerProvider`: both gates kept, in order.** Upstream's
+  `checkProviderOnSettingsChange` early-return runs first (it can skip the probe entirely), then the
+  fork's `providerCheckCache` invalidate + `Cache.get`. Upstream's uncached
+  `const nextSnapshot = yield* input.checkProvider` was dropped as the duplicate.
+- **`ClaudeAdapter`: the fork's attachment `kind` switch was kept, upstream's image-only `continue`
+  was not.** Claude ingests PDFs as document blocks and text files inline, which upstream's
+  path-line-in-the-prompt fallback does not do. The loop now skips anything that is neither `image`
+  nor `file` (the union is open). Upstream's `normalizeClaudeContextUsageApiSnapshot` deletion
+  (#8610) was adopted.
+- **`ClaudeAdapter` usage semantics diverge deliberately.** The fork gates `maxTokens` on
+  `contextAccurate`: accumulated request totals (`result.usage` input+output) overcount the live
+  window, so the quota meter must not pair them with the context window. Upstream's new
+  "completes with result usage without querying current context usage" test asserted
+  `maxTokens: 200000`; that expectation was dropped (with a comment). Its real subject —
+  `getContextUsageCalls === 0` — still passes.
+- **Retired fork tests:** two `composerDraftStore.test.ts` tests asserting files land in
+  `draft.images`, and `thread-work-log.tsx`'s unused `visibleWorkLogActivities` (the same filter now
+  lives in `lib/threadActivity.ts`). `hydrateImagesFromPersisted` gained a `mimeType.startsWith("image/")`
+  guard so a draft persisted by an older fork build drops its stale non-image entry instead of
+  hydrating a broken image chip; its test now asserts that.
+- **Two known environment-only macOS failures** (both verified against a pristine `upstream/main`
+  worktree, neither caused by the merge):
+  - `apps/server/src/entrypoint.test.ts` > "matches through a symlinked entrypoint" — `os.tmpdir()`
+    is itself a symlink on macOS.
+  - `scripts/build-desktop-artifact.test.ts` > "skips the primary native probe for
+    cross-architecture Windows payloads" — on Apple Silicon the host arch _equals_ the `arm64`
+    target, so the cross-arch precondition never holds. Passes on x64 CI.
+- `.github/workflows` is byte-identical to the pre-merge fork tip and still holds only `ci.yml` +
+  `release.yml`. No upstream-only workflows arrived this window except
+  `desktop-macos-preview.yml`, which was dropped again.
+- `effect` stayed on beta.103, so the fork patch did not need re-deriving. `pnpm-lock.yaml` was
+  regenerated from the merged manifests.
+- Fork package versions stay on the `0.0.25-amit` marker (upstream is at `0.0.37`).
+
 ## 2026-08-26 upstream merge (attachment uploads, tool-activity collapse, PR surfaces) — migration notes
 
 Merged `upstream/main` through `a3a8cbd60` (307 commits). Notable integrations:
@@ -1297,6 +1381,16 @@ useAccountRateLimitSnapshot(selectedInstanceId)` (NOT a per-thread
 
 ### Arbitrary file attachments (not just images)
 
+> **RETIRED 2026-08-31 — upstream now owns this.** Upstream shipped its own file
+> attachments (#8235/#8236/#8237) as a strict superset: a real upload channel
+> (50MB), video playback, needs-reattach markers, and an open `ChatAttachment`
+> union with unknown-type passthrough. The fork's version was removed rather than
+> re-applied. **Do not re-apply the items below on future merges** — take
+> upstream's attachment code as-is. The section is kept only to explain what the
+> fork used to carry. Still fork-owned nearby: the `thread.prompt.queue`
+> attachment widening, and the `ClaudeAdapter` `kind` switch that ingests PDFs as
+> document blocks and text files inline.
+
 - Lets the composer accept **any** file type (PDF, JSON, CSV, logs, archives,
   …) via paste and drag-and-drop, not only images. Images keep their inline
   preview/zoom; non-image files render as a labelled chip (name + MIME type) in
@@ -1564,15 +1658,23 @@ build:desktop` → `vp run dist:payload:asset`, using the
 
 ### File attachment support
 
-- Expected conflict area (see the "Arbitrary file attachments" feature above
-  for the full file list). The server/contracts pieces tend to survive upstream
-  merges; the **web composer is the fragile part** — upstream composer/image
-  refactors keep narrowing it back to images-only.
-- When resolving: keep upstream's composer/timeline structural changes, then
-  re-apply (1) the widened `ComposerImageAttachment` alias, (2) the
-  branch-on-`isImageFile` logic in `addComposerImages`, (3) the unfiltered
-  `onComposerPaste`, and (4) the `attachment.type === "image"` / `previewUrl`
-  guards wherever image-only behaviour is assumed.
+- **No longer a seam as of 2026-08-31.** Upstream owns file attachments now, so
+  take upstream's composer/timeline/contract code wholesale and re-apply nothing.
+- Two things in this area are still fork-owned and _do_ need preserving:
+  - `thread.prompt.queue` widened to
+    `Schema.Union([UploadChatAttachment, ChatAttachment])` in
+    `packages/contracts/src/orchestration.ts`, so a queued prompt can carry
+    uploaded attachments.
+  - the `ClaudeAdapter` attachment `kind` switch (PDF → document block, text →
+    inline block), which upstream replaces with an image-only `continue`.
+- Gotchas that bite when touching attachments:
+  - The `ChatAttachment` union has an **open** member, so
+    `attachment.type === "image"` does not narrow. Use `isImageAttachment` /
+    `isFileAttachment` from `apps/web/src/types.ts`.
+  - Attachment ids **carry their file extension**; mint them with
+    `createAttachmentId(threadId, extension)`. `resolveAttachmentPathById` only
+    probes image extensions as a fallback, so an extension-less id for a
+    non-image file is unresolvable.
 
 ### Desktop Clerk auth callback
 
@@ -1638,6 +1740,11 @@ build:desktop` → `vp run dist:payload:asset`, using the
 - Per-thread menu actions belong in the shared
   `apps/web/src/components/threadActionMenu.logic.ts` builder and must be handled in
   **both** `Sidebar.tsx` and `apps/web/src/hooks/useThreadActionMenu.ts`.
+- 2026-08-31: the project picker is now upstream's searchable `Combobox` driven by the
+  `projectScopeMenuState` reducer — there is no `projectScopeMenuOpen` state any more. The fork's
+  per-project todo button lives inside the `ComboboxItem` (guarded by `project ?`, since an item can
+  have no project) and closes the popup with
+  `dispatchProjectScopeMenu({ type: "open-changed", open: false })`.
 - If upstream renames these again, redo the merge with `git merge-file` per the
   2026-08-14 notes rather than trusting git's rename detection.
 

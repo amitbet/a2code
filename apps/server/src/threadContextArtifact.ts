@@ -25,7 +25,11 @@ import * as Effect from "effect/Effect";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
 
-import { createAttachmentId, resolveAttachmentPath } from "./attachmentStore.ts";
+import {
+  attachmentFileExtension,
+  createAttachmentId,
+  resolveAttachmentPath,
+} from "./attachmentStore.ts";
 
 const TRANSCRIPT_MIME_TYPE = "text/markdown";
 
@@ -103,7 +107,9 @@ export const createThreadContextArtifact = Effect.fn("createThreadContextArtifac
   );
   const bytes = new TextEncoder().encode(transcript);
 
-  const attachmentId = createAttachmentId(input.threadId);
+  // The id carries the file extension so resolveAttachmentPathById can find the
+  // transcript again; non-image extensions are not probed by fallback.
+  const attachmentId = createAttachmentId(input.threadId, attachmentFileExtension(input.fileName));
   if (!attachmentId) {
     return undefined;
   }
@@ -115,7 +121,9 @@ export const createThreadContextArtifact = Effect.fn("createThreadContextArtifac
   };
   const attachmentPath = resolveAttachmentPath({
     attachmentsDir: input.attachmentsDir,
-    attachment: artifact,
+    // The transcript is a generic file attachment; only the path layout needs
+    // the discriminator, so it stays off ThreadContextArtifact itself.
+    attachment: { ...artifact, type: "file" },
   });
   if (!attachmentPath) {
     return undefined;
