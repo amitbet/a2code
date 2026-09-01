@@ -3,6 +3,49 @@
 This file tracks fork-specific divergences that are likely to conflict when
 merging `upstream/main`.
 
+## 2026-09-01 upstream merge (draft promotion gate, timeline `thinking` row) — migration notes
+
+Merged `upstream/main` through `b17cc3d1b` (27 commits). Small merge — 7 conflicts, all
+mechanical except the draft-promotion one below.
+
+- **No migrations arrived.** Upstream is still at its 043; the fork's renumbered 044-046 are
+  untouched. Fork's next free id is still **47**.
+- **The fork's `threadHasAuthoritativeUserMessage` draft-promotion gate was RETIRED.** Upstream
+  reworked `resolveDraftPromotionNavigationTarget` (`apps/web/src/components/ChatView.logic.ts`) to
+  take the whole `serverThread` and gate on `latestTurn.startedAt != null || session.status is
+error/stopped/interrupted`. That gate fires strictly later than the fork's "the server echoed a
+  user message" check (the prompt event that creates the user message also creates the turn), so the
+  fork's concern — remounting `ChatView` before the optimistic first prompt is durable — is
+  subsumed. Upstream's version additionally promotes on a startup failure with no user message, so
+  the canonical route can render the startup error instead of the draft hanging forever. The helper,
+  its three unit tests, and its `_chat.draft.$draftId.tsx` call site were all deleted; the fork's
+  `outsideMachineScope` guards in that route were preserved.
+- **New timeline row kind `thinking`** (upstream #8984, "keep agent activity visible between
+  actions") joined the `MessagesTimelineRow` union. The fork's in-chat find has an exhaustive
+  `switch (row.kind)` in `apps/web/src/components/chat/chatSearch.ts` — `thinking` was folded in
+  next to `working` as a text-less live status row. **Any future upstream row kind will break this
+  switch the same way; that is the intended tripwire, so add the case rather than a `default`.**
+- **`ChatComposer` slash menu:** upstream added `slashCommandItemsForPromptPosition(items,
+isAtPromptStart)`. The fork's `/fork` item now goes _inside_ that call's item array (the helper
+  only filters `type === "skill"`, so wrapping `/fork` is a no-op today but keeps the fork item on
+  the same code path).
+- **`ServerEnvironment.ts`:** upstream split identity acquisition into `makeIdentity`. The fork's
+  `resolveServerVersion` export (payload-aware `T3CODE_SERVER_VERSION` override) sits above it
+  untouched and is still consumed by the descriptor's `serverVersion`.
+- **`ChatView.tsx` send path:** upstream deleted the `beginLocalDispatch({ preparingWorktree: false
+})` call before `backgroundThreadRef` (worktree status now stays visible via the new
+  `isPreparingWorktree` prop on `MessagesTimeline`). Git aligned that deletion against the fork's
+  `shouldQueuePrompt` branch; the resolution keeps the fork's queue/else split and drops the line
+  from the else arm only. The two other `preparingWorktree: false` dispatches are upstream's and
+  stay.
+- **`CHAT_LIST_ANCHOR_OFFSET` moved** from `@t3tools/shared/chatList` to
+  `CHAT_TIMELINE_ANCHOR_OFFSET` in `./chat/timelineScrollAnchoring`.
+- **New mobile deps** (`expo-video`, `expo-document-picker`) — `vp i` is required after this merge
+  or `apps/mobile` typecheck fails with TS2307.
+- **CI/workflows did not conflict** this window; `git diff f3e7062ba HEAD -- .github/workflows` is
+  empty and only `ci.yml` + `release.yml` are present.
+- Upstream deleted the root `app.json` (#8934); the fork carries no divergence there.
+
 ## 2026-08-31 upstream merge (upstream ships file attachments, plan chips reverted) — migration notes
 
 Merged `upstream/main` through `e9c4775e8` (96 commits). The headline is that **upstream

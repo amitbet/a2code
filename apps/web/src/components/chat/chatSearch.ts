@@ -72,7 +72,9 @@ export function getRowSearchText(row: MessagesTimelineRow): string {
     }
     case "work-toggle":
       return row.summary ?? "";
+    // Live status rows carry no user-visible text to match against.
     case "working":
+    case "thinking":
       return "";
   }
 }
