@@ -124,7 +124,12 @@ import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
 import { threadEnvironment, useEnvironmentThread } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
-import { useEnvironment, useEnvironments, useMachineEnvironmentId } from "../state/environments";
+import {
+  useEnvironment,
+  useEnvironments,
+  useMachineEnvironmentId,
+  usePrimaryEnvironmentId,
+} from "../state/environments";
 import {
   buildThreadRouteParams,
   resolveActiveThreadRouteRef,
@@ -403,7 +408,12 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     reportFailure: false,
   });
   const environment = useEnvironment(thread.environmentId);
-  const primaryEnvironmentId = useMachineEnvironmentId();
+  // "Here" for the local-vs-remote badge. A null machine scope means no filter
+  // (cross-machine overview, or an unresolved catalog), so fall back to the
+  // real primary environment instead of treating every machine as local.
+  const machineEnvironmentId = useMachineEnvironmentId();
+  const catalogPrimaryEnvironmentId = usePrimaryEnvironmentId();
+  const primaryEnvironmentId = machineEnvironmentId ?? catalogPrimaryEnvironmentId;
   const isRemoteThread =
     primaryEnvironmentId !== null && thread.environmentId !== primaryEnvironmentId;
   const remoteEnvLabel = environment?.label ?? null;

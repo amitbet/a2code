@@ -9,7 +9,11 @@ import { Atom } from "effect/unstable/reactivity";
 import { CloudIcon, FolderGit2Icon, GitPullRequestIcon, TerminalIcon } from "lucide-react";
 import { useMemo } from "react";
 import { appAtomRegistry } from "../rpc/atomRegistry";
-import { useEnvironment, useMachineEnvironmentId } from "../state/environments";
+import {
+  useEnvironment,
+  useMachineEnvironmentId,
+  usePrimaryEnvironmentId,
+} from "../state/environments";
 import { useProject } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 import { linkedPullRequestDetailAtom } from "../state/pullRequests";
@@ -630,7 +634,12 @@ export function ThreadRowTrailingStatus({ thread }: { thread: SidebarThreadSumma
     threadId: thread.id,
   });
   const environment = useEnvironment(thread.environmentId);
-  const primaryEnvironmentId = useMachineEnvironmentId();
+  // In the cross-machine overview the machine scope is null; keep naming the
+  // owning machine by falling back to the real primary environment, since that
+  // label is the whole point of an overview row.
+  const machineEnvironmentId = useMachineEnvironmentId();
+  const catalogPrimaryEnvironmentId = usePrimaryEnvironmentId();
+  const primaryEnvironmentId = machineEnvironmentId ?? catalogPrimaryEnvironmentId;
   const isRemoteThread =
     primaryEnvironmentId !== null && thread.environmentId !== primaryEnvironmentId;
   const remoteEnvLabel = environment?.label ?? null;

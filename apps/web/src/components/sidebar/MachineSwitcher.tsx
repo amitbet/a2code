@@ -1,14 +1,16 @@
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { CloudIcon, MonitorIcon, ServerIcon } from "lucide-react";
+import { CloudIcon, LayersIcon, MonitorIcon, ServerIcon } from "lucide-react";
 import { useCallback, useMemo } from "react";
 
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { resolveThreadRouteTarget } from "../../threadRoutes";
 import {
   setMachineEnvironmentId,
+  setMachineOverview,
   useEnvironments,
   useMachineEnvironmentId,
+  useMachineOverviewActive,
 } from "../../state/environments";
 import { cn } from "../../lib/utils";
 import {
@@ -21,9 +23,15 @@ import {
   SelectValue,
 } from "../ui/select";
 
+// Shares the value space with environment ids in the Select; an environment id
+// is never this literal.
+const OVERVIEW_VALUE = "overview";
+const OVERVIEW_LABEL = "Overview";
+
 export function MachineSwitcher({ onBackdrop }: { readonly onBackdrop: boolean }) {
   const { environments } = useEnvironments();
   const machineEnvironmentId = useMachineEnvironmentId();
+  const overviewActive = useMachineOverviewActive();
   const navigate = useNavigate();
   const routeTarget = useParams({
     strict: false,
@@ -59,20 +67,32 @@ export function MachineSwitcher({ onBackdrop }: { readonly onBackdrop: boolean }
     machineItems[0] ??
     null;
 
-  const handleMachineChange = useCallback(
-    (environmentId: EnvironmentId) => {
-      if (environmentId === machineEnvironmentId) return;
+  const handleScopeChange = useCallback(
+    (value: string) => {
+      if (value === OVERVIEW_VALUE) {
+        if (overviewActive) return;
+        // The overview contains every machine, so the current route is still in
+        // scope — widening the scope never orphans where the user is standing.
+        setMachineOverview();
+        return;
+      }
+      const environmentId = value as EnvironmentId;
+      if (!overviewActive && environmentId === machineEnvironmentId) return;
       setMachineEnvironmentId(environmentId);
       if (routeEnvironmentId !== null && routeEnvironmentId !== environmentId) {
         void navigate({ to: "/", replace: true });
       }
     },
-    [machineEnvironmentId, navigate, routeEnvironmentId],
+    [machineEnvironmentId, navigate, overviewActive, routeEnvironmentId],
   );
 
   if (activeMachine === null) {
     return null;
   }
+
+  // The overview would show exactly one machine's work under an "all machines"
+  // label, so it is only offered once there is a second machine to aggregate.
+  const overviewAvailable = machineItems.length > 1;
 
   const MachineIcon = activeMachine.isPrimary ? MonitorIcon : CloudIcon;
   const triggerClassName = cn(
@@ -80,7 +100,7 @@ export function MachineSwitcher({ onBackdrop }: { readonly onBackdrop: boolean }
     onBackdrop ? "text-white/90 hover:text-white" : "text-muted-foreground hover:text-foreground",
   );
 
-  if (machineItems.length === 1) {
+  if (!overviewAvailable) {
     return (
       <div
         className={cn(
@@ -98,12 +118,15 @@ export function MachineSwitcher({ onBackdrop }: { readonly onBackdrop: boolean }
   return (
     <Select
       modal={false}
-      value={activeMachine.environmentId}
-      onValueChange={(value) => handleMachineChange(value as EnvironmentId)}
-      items={machineItems.map((machine) => ({
-        value: machine.environmentId,
-        label: machine.label,
-      }))}
+      value={overviewActive ? OVERVIEW_VALUE : activeMachine.environmentId}
+      onValueChange={(value) => handleScopeChange(value as string)}
+      items={[
+        { value: OVERVIEW_VALUE, label: OVERVIEW_LABEL },
+        ...machineItems.map((machine) => ({
+          value: machine.environmentId,
+          label: machine.label,
+        })),
+      ]}
     >
       <SelectTrigger
         variant="ghost"
@@ -112,10 +135,23 @@ export function MachineSwitcher({ onBackdrop }: { readonly onBackdrop: boolean }
         aria-label="Active machine"
         data-testid="machine-switcher"
       >
-        <ServerIcon className="size-3 shrink-0" />
+        {overviewActive ? (
+          <LayersIcon className="size-3 shrink-0" />
+        ) : (
+          <ServerIcon className="size-3 shrink-0" />
+        )}
         <SelectValue />
       </SelectTrigger>
       <SelectPopup>
+        <SelectGroup>
+          <SelectGroupLabel>Scope</SelectGroupLabel>
+          <SelectItem value={OVERVIEW_VALUE}>
+            <span className="inline-flex min-w-0 items-center gap-1.5">
+              <LayersIcon className="size-3 shrink-0" />
+              <span className="truncate">{OVERVIEW_LABEL}</span>
+            </span>
+          </SelectItem>
+        </SelectGroup>
         <SelectGroup>
           <SelectGroupLabel>Active machine</SelectGroupLabel>
           {machineItems.map((machine) => {

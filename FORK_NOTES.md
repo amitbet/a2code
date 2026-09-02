@@ -1026,6 +1026,64 @@ the next merge; the per-feature sections below were updated to match.
 
 ## Fork features
 
+### Cross-machine "Overview" scope (upstream's sidebar as the aggregate view)
+
+- **What it is.** The sidebar machine picker (`MachineSwitcher`) gained an **Overview**
+  entry above the machine list. Selecting it drops the machine filter entirely, so the
+  sidebar, landing page, draft hero, command palette and new-thread defaults all show
+  every registered machine at once. Because the fork's project-tree sidebar is rooted in
+  a single machine's workspace and cannot represent more than one, Overview always renders
+  **upstream's flat thread sidebar** (`Sidebar.tsx`) regardless of `legacySidebarEnabled`.
+  That is the point of the feature: upstream's aggregated list is the natural shape for a
+  cross-machine view, and the project tree stays the per-machine layout.
+- **The load-bearing rule: a `null` machine scope is "no filter", not "nothing".**
+  `isEnvironmentInMachineScope(x, null)` already returned `true`, so every route and
+  new-thread guard passes unchanged in Overview and nothing navigates away. The fork's
+  scoped entity hooks were the odd ones out — they returned `[]` for a null scope — so
+  `useEnvironmentProjects(null)` / `useEnvironmentThreadShells(null)` now return **all**
+  environments' entities. Every caller of those two hooks passes the machine scope and
+  nothing else, so this single change unscopes all seven scoped surfaces together.
+  **Reverting either hook to an empty list silently empties the whole Overview.**
+- **Data scope and presentation home are now separate.** Overview sets the data scope to
+  null, but rows still have to name the machine they came from — that label is the whole
+  value of an overview. So the local-vs-remote badge falls back to the real primary
+  environment: `machineEnvironmentId ?? usePrimaryEnvironmentId()` in `Sidebar.tsx`
+  (feeding `buildSidebarProjectSnapshots`' `primaryEnvironmentId`, which drives
+  `environmentPresence` and `remoteEnvironmentLabels`), `ThreadStatusIndicators.tsx`, and
+  `LegacySidebar.tsx`. Passing the raw null there would mark every machine "local" and
+  hide all badges.
+- **Overview needs two machines.** With one machine it would show exactly that machine's
+  work under an "all machines" label, so `isMachineOverviewSelected` requires
+  `entries.size > 1` and a stored Overview choice degrades to the default machine until a
+  second machine appears. The switcher keeps its static single-machine label in that case.
+- **Switching into Overview never navigates.** Widening the scope keeps the current route
+  in scope, unlike switching between machines (which still bounces to `/` when the route
+  belongs to the machine being left).
+- Files:
+  - `packages/client-runtime/src/state/machineScope.ts` (+ test) — **modified**:
+    `MACHINE_SCOPE_OVERVIEW` sentinel, `MachineScopeSelection` type,
+    `isMachineOverviewSelected`, and `resolveMachineEnvironmentId` returning `null` for a
+    live Overview selection. Pure and unit-tested; shared with mobile, which passes
+    `EnvironmentId | null` and is unaffected.
+  - `apps/web/src/state/machineScope.ts` — **modified**: persists the Overview choice in
+    the existing `t3code:machine-scope:v1` slot (an environment id is never the literal
+    `"overview"`), plus `machineOverviewActiveAtom` and `selectMachineOverview`.
+  - `apps/web/src/state/environments.ts` — **modified**: `useMachineOverviewActive` /
+    `setMachineOverview`.
+  - `apps/web/src/state/entities.ts` — **modified**: the null-scope semantics above.
+  - `apps/web/src/components/AppSidebarLayout.tsx` — **modified**: Overview forces the
+    flat sidebar (`legacySidebarEnabled && !machineOverviewActive`).
+  - `apps/web/src/components/sidebar/MachineSwitcher.tsx` — **modified**: the Overview
+    item, a `Scope`/`Active machine` group split, and a layers icon on the trigger.
+  - `apps/web/src/components/{Sidebar,ThreadStatusIndicators,LegacySidebar}.tsx` —
+    **modified**: the presentation-home fallback.
+- **Merge seam.** Upstream owns `Sidebar.tsx`, `MachineSwitcher` is fork-only, and the
+  entity hooks are fork-added. The risk on merge is upstream reintroducing
+  `useProjects()`/`useThreadShells()` directly in `Sidebar.tsx` (which would ignore the
+  machine scope entirely) or a well-meaning "fix" restoring the empty-array null branch in
+  `entities.ts`. Preserve both, and keep `primaryEnvironmentId` in `Sidebar.tsx` as the
+  `??` fallback rather than the raw machine scope.
+
 ### Desktop/backend reliability safeguards
 
 - Adds operational hardening found while debugging a local installed-app crash

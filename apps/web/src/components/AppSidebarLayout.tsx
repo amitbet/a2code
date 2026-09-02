@@ -17,6 +17,7 @@ import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings"
 import { cn, isMacPlatform } from "../lib/utils";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { useEnvironmentIdentificationMode, useLegacySidebarEnabled } from "../hooks/useSettings";
+import { useMachineOverviewActive } from "../state/environments";
 import LegacyThreadSidebar from "./LegacySidebar";
 import ThreadSidebar from "./Sidebar";
 import { SidebarChromeHeader } from "./sidebar/SidebarChrome";
@@ -148,6 +149,10 @@ function ProjectProjectionRetention() {
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const legacySidebarEnabled = useLegacySidebarEnabled();
+  // The project-tree sidebar is rooted in a single machine's workspace, so it
+  // cannot render the cross-machine overview. Overview always gets the flat
+  // thread sidebar, whatever the layout preference says.
+  const machineOverviewActive = useMachineOverviewActive();
   // Settings routes show the settings nav in place of whichever thread
   // sidebar is active.
   const pathname = useLocation({ select: (location) => location.pathname });
@@ -244,7 +249,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
               <SettingsSidebarNav pathname={pathname} />
             </Suspense>
           </>
-        ) : legacySidebarEnabled ? (
+        ) : legacySidebarEnabled && !machineOverviewActive ? (
           <LegacyThreadSidebar />
         ) : (
           <ThreadSidebar />

@@ -60,18 +60,27 @@ export function useProjectRefs(): ReadonlyArray<ScopedProjectRef> {
   return useAtomValue(environmentProjects.projectRefsAtom);
 }
 
+/**
+ * Projects for one machine. A `null` environment is the machine scope's "no
+ * filter" state — the cross-machine overview, or a catalog that has not
+ * resolved yet — and yields every environment's projects rather than none, so
+ * every scoped surface unscopes together.
+ */
 export function useEnvironmentProjects(
   environmentId: EnvironmentId | null,
 ): ReadonlyArray<EnvironmentProject> {
-  const projects = useAtomValue(
+  const allProjects = useAtomValue(environmentProjects.projectsAtom);
+  const scopedProjects = useAtomValue(
     environmentId === null
       ? EMPTY_PROJECTS_ATOM
       : environmentProjects.environmentProjectsAtom(environmentId),
   );
   return useMemo(
     () =>
-      environmentId === null ? [] : projects.map((project) => scopeProject(environmentId, project)),
-    [environmentId, projects],
+      environmentId === null
+        ? allProjects
+        : scopedProjects.map((project) => scopeProject(environmentId, project)),
+    [allProjects, environmentId, scopedProjects],
   );
 }
 
@@ -101,10 +110,13 @@ export function useThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
   return useAtomValue(environmentThreadShells.threadShellsAtom);
 }
 
+/** Thread shells for one machine, with the same `null` semantics as
+ * `useEnvironmentProjects`. */
 export function useEnvironmentThreadShells(
   environmentId: EnvironmentId | null,
 ): ReadonlyArray<EnvironmentThreadShell> {
-  const threads = useAtomValue(
+  const allThreads = useAtomValue(environmentThreadShells.threadShellsAtom);
+  const scopedThreads = useAtomValue(
     environmentId === null
       ? EMPTY_THREAD_SHELLS_ATOM
       : environmentThreadShells.environmentThreadsAtom(environmentId),
@@ -112,9 +124,9 @@ export function useEnvironmentThreadShells(
   return useMemo(
     () =>
       environmentId === null
-        ? []
-        : threads.map((thread) => scopeThreadShell(environmentId, thread)),
-    [environmentId, threads],
+        ? allThreads
+        : scopedThreads.map((thread) => scopeThreadShell(environmentId, thread)),
+    [allThreads, environmentId, scopedThreads],
   );
 }
 

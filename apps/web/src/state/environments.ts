@@ -14,7 +14,9 @@ import { primaryEnvironmentIdAtom } from "./primaryEnvironment";
 import {
   isEnvironmentInMachineScope,
   machineEnvironmentIdAtom,
+  machineOverviewActiveAtom,
   selectMachineEnvironment,
+  selectMachineOverview,
 } from "./machineScope";
 import { useEnvironmentQuery } from "./query";
 import { relayEnvironmentDiscovery } from "./relay";
@@ -71,6 +73,21 @@ export function useMachineEnvironmentId(): EnvironmentId | null {
 
 export function setMachineEnvironmentId(environmentId: EnvironmentId): void {
   selectMachineEnvironment(environmentId);
+}
+
+/**
+ * True while the cross-machine overview is selected. Scoped surfaces do not
+ * need this — `useMachineEnvironmentId()` already returns `null`, which means
+ * "no filter" — it is for the pieces that present the scope: the switcher
+ * label, and the sidebar choice (the per-machine project tree cannot represent
+ * more than one machine).
+ */
+export function useMachineOverviewActive(): boolean {
+  return useAtomValue(machineOverviewActiveAtom);
+}
+
+export function setMachineOverview(): void {
+  selectMachineOverview();
 }
 
 export { isEnvironmentInMachineScope };

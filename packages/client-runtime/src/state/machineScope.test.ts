@@ -1,7 +1,12 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { isEnvironmentInMachineScope, resolveMachineEnvironmentId } from "./machineScope.ts";
+import {
+  isEnvironmentInMachineScope,
+  isMachineOverviewSelected,
+  MACHINE_SCOPE_OVERVIEW,
+  resolveMachineEnvironmentId,
+} from "./machineScope.ts";
 
 function entry(tag: "PrimaryConnectionTarget" | "BearerConnectionTarget") {
   return { target: { _tag: tag } } as never;
@@ -39,5 +44,31 @@ describe("machine environment scope", () => {
     expect(isEnvironmentInMachineScope(environment, null)).toBe(true);
     expect(isEnvironmentInMachineScope(environment, EnvironmentId.make("other"))).toBe(false);
     expect(isEnvironmentInMachineScope(environment, environment)).toBe(true);
+  });
+
+  it("resolves the overview selection to an unscoped machine", () => {
+    const primary = EnvironmentId.make("primary");
+    const remote = EnvironmentId.make("remote");
+    const entries = new Map([
+      [primary, entry("PrimaryConnectionTarget")],
+      [remote, entry("BearerConnectionTarget")],
+    ]);
+    const selected = MACHINE_SCOPE_OVERVIEW;
+
+    expect(isMachineOverviewSelected({ entries, selected })).toBe(true);
+    expect(resolveMachineEnvironmentId({ entries, selected })).toBeNull();
+  });
+
+  it("degrades a stored overview choice to the default machine below two machines", () => {
+    const primary = EnvironmentId.make("primary");
+    const single = new Map([[primary, entry("PrimaryConnectionTarget")]]);
+    const selected = MACHINE_SCOPE_OVERVIEW;
+
+    expect(isMachineOverviewSelected({ entries: single, selected })).toBe(false);
+    expect(resolveMachineEnvironmentId({ entries: single, selected })).toBe(primary);
+
+    const empty = new Map<EnvironmentId, ReturnType<typeof entry>>();
+    expect(isMachineOverviewSelected({ entries: empty, selected })).toBe(false);
+    expect(resolveMachineEnvironmentId({ entries: empty, selected })).toBeNull();
   });
 });

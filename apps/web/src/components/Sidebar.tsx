@@ -106,7 +106,11 @@ import { useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
 import { useNowMinute } from "../hooks/useNowMinute";
-import { useEnvironments, useMachineEnvironmentId } from "../state/environments";
+import {
+  useEnvironments,
+  useMachineEnvironmentId,
+  usePrimaryEnvironmentId,
+} from "../state/environments";
 import { useEnvironmentProjects, useEnvironmentThreadShells } from "../state/entities";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
 import { vcsEnvironment } from "../state/vcs";
@@ -1864,7 +1868,12 @@ export default function Sidebar() {
     setTodoProject(project);
   }, []);
   const { environments } = useEnvironments();
-  const primaryEnvironmentId = machineEnvironmentId;
+  // Which machine counts as "here", for the local-vs-remote badges. In the
+  // cross-machine overview the data scope is null, but rows still have to name
+  // the machine they came from, so fall back to the real primary environment
+  // instead of treating everything as local.
+  const catalogPrimaryEnvironmentId = usePrimaryEnvironmentId();
+  const primaryEnvironmentId = machineEnvironmentId ?? catalogPrimaryEnvironmentId;
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
   const toggleThreadSelection = useThreadSelectionStore((s) => s.toggleThread);
