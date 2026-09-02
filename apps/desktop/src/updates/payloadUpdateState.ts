@@ -43,6 +43,8 @@ export function payloadUpdateStateToDesktopUpdateState(
     availableVersion: payload.availableVersion,
     downloadedVersion: null,
     releaseNotes: [],
+    // Payload manifests carry no release notes, so nothing is ever omitted.
+    omittedReleaseCount: 0,
     downloadPercent: null,
     checkedAt: payload.checkedAt,
     message: null,

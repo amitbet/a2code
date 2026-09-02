@@ -48,6 +48,11 @@ export interface ProviderRegistryShape {
     instanceId: ProviderInstanceId,
   ) => Effect.Effect<ReadonlyArray<ServerProvider>>;
 
+  readonly refreshWorkspaceSnapshot: (input: {
+    readonly instanceId: ProviderInstanceId;
+    readonly cwd: string;
+  }) => Effect.Effect<ReadonlyArray<ServerProvider>>;
+
   /**
    * Best-effort account rate-limit refresh for a live provider instance.
    * Optional for lightweight registry implementations and test doubles.

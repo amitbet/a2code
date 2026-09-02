@@ -33,7 +33,28 @@ describe("buildThreadActionMenuItems", () => {
         ...baseState,
         supports: { settlement: false, snooze: false, pinning: false, titleRegeneration: false },
       }),
-    ).toEqual(["rename", "fork", "mark-unread", "copy", "export-zip", "archive", "delete"]);
+    ).toEqual([
+      "rename",
+      "fork",
+      "mark-unread",
+      "copy",
+      "project-settings",
+      "export-zip",
+      "archive",
+      "delete",
+    ]);
+  });
+
+  it("groups project settings with utility actions before archive", () => {
+    const items = buildThreadActionMenuItems(baseState);
+    const copyIndex = items.findIndex((item) => item.id === "copy");
+    expect(items[copyIndex + 1]).toMatchObject({
+      id: "project-settings",
+      label: "Project settings",
+      icon: "settings",
+    });
+    expect(items[copyIndex + 2]?.id).toBe("export-zip");
+    expect(items[copyIndex + 3]?.id).toBe("archive");
   });
 
   it("includes branch items only for threads with a branch", () => {

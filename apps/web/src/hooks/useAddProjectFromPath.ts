@@ -5,7 +5,6 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback } from "react";
@@ -19,16 +18,13 @@ import {
 } from "../lib/projectPaths";
 import { getLatestThreadForProject } from "../lib/threadSort";
 import { newProjectId } from "../lib/utils";
-import { resolveDefaultProviderModelSelection } from "../providerInstances";
 import { useProjects, useThreadShells } from "../state/entities";
 import {
   isEnvironmentInMachineScope,
   useEnvironments,
   useMachineEnvironmentId,
-  usePrimaryEnvironmentId,
 } from "../state/environments";
 import { projectEnvironment } from "../state/projects";
-import { primaryServerProvidersAtom } from "../state/server";
 import { useAtomCommand } from "../state/use-atom-command";
 import { buildThreadRouteParams } from "../threadRoutes";
 import { useNewThreadHandler } from "./useHandleNewThread";
@@ -52,8 +48,6 @@ export function useAddProjectFromPath(): (input: AddProjectFromPathInput) => Pro
   const threads = useThreadShells();
   const { environments } = useEnvironments();
   const machineEnvironmentId = useMachineEnvironmentId();
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const providers = useAtomValue(primaryServerProvidersAtom);
   const sidebarThreadSortOrder = useClientSettings((settings) => settings.sidebarThreadSortOrder);
   const navigate = useNavigate();
   const handleNewThread = useNewThreadHandler();
@@ -150,9 +144,6 @@ export function useAddProjectFromPath(): (input: AddProjectFromPathInput) => Pro
       }
 
       const projectId = newProjectId();
-      const targetEnvironmentProviders =
-        environment?.serverConfig?.providers ??
-        (input.environmentId === primaryEnvironmentId ? providers : []);
       const createResult = await createProject({
         environmentId: input.environmentId,
         input: {
@@ -160,10 +151,11 @@ export function useAddProjectFromPath(): (input: AddProjectFromPathInput) => Pro
           title: inferProjectTitleFromPath(cwd),
           workspaceRoot: cwd,
           createWorkspaceRootIfMissing: true,
-          defaultModelSelection: resolveDefaultProviderModelSelection(
-            targetEnvironmentProviders,
-            null,
-          ),
+          // Project creation never exposes a model choice, so seeding one here
+          // reads back as an explicit user default it never was. Upstream
+          // reversed its own seeding (#9142) and ships migration 047 to clear
+          // the rows it already wrote.
+          defaultModelSelection: null,
         },
       });
       if (createResult._tag === "Failure") {
@@ -201,9 +193,7 @@ export function useAddProjectFromPath(): (input: AddProjectFromPathInput) => Pro
       environments,
       handleNewThread,
       navigate,
-      primaryEnvironmentId,
       projects,
-      providers,
       sidebarThreadSortOrder,
       threads,
       machineEnvironmentId,

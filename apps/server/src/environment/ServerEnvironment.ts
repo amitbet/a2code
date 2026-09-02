@@ -206,6 +206,14 @@ export const make = Effect.gen(function* () {
     desktopManaged: serverConfig.mode === "desktop",
     launcherManaged: launcher.managed,
   });
+  // Fork divergence: upstream advertises this whenever the desktop control fd
+  // is present, because its desktop app answers `requestDesktopUpdate` by
+  // driving electron-updater. This fork deleted that installer path (shell
+  // updates are a manual reinstall; in-app updates are JS payloads only), so
+  // no desktop listener exists to commit a remote install. Advertising it
+  // would surface an Update button that can never finish. See FORK_NOTES.md
+  // ("Payload hot-update channel").
+  const desktopAppUpdate = false;
 
   const descriptor: ExecutionEnvironmentDescriptor = {
     environmentId,
@@ -222,6 +230,7 @@ export const make = Effect.gen(function* () {
       fileAttachments: { maxUploadBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES },
       pullRequests: true,
       threadSettlement: true,
+      threadAutoSettlement: true,
       threadSnooze: true,
       environmentThemes: true,
       threadPinning: true,
@@ -229,7 +238,10 @@ export const make = Effect.gen(function* () {
       threadTitleRegeneration: true,
       threadPullRequestLinking: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
-      ...(serverSelfUpdate === "boot-service" ? { serverSelfUpdateProgress: true } : {}),
+      ...(serverSelfUpdate === "boot-service" || desktopAppUpdate
+        ? { serverSelfUpdateProgress: true }
+        : {}),
+      ...(desktopAppUpdate ? { desktopAppUpdate: true } : {}),
     },
   };
 

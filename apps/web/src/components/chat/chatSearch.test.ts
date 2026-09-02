@@ -44,8 +44,7 @@ describe("getRowSearchText", () => {
       kind: "work",
       id: "work-1",
       createdAt: "2024-01-01T00:00:00.000Z",
-      isExpandedToolGroupEntry: false,
-      isLastExpandedToolGroupEntry: false,
+      isExpandedToolGroup: false,
       groupedEntries: [
         {
           id: "entry-1",

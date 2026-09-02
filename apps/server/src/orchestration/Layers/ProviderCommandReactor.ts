@@ -12,6 +12,7 @@ import {
   type RuntimeMode,
   type TurnId,
 } from "@t3tools/contracts";
+import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
 import { parseThreadReferenceIds } from "@t3tools/shared/threadReference";
 import * as Cache from "effect/Cache";
@@ -70,7 +71,8 @@ type ProviderIntentEvent = Extract<
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
       | "thread.session-stop-requested"
-      | "thread.session-set";
+      | "thread.session-set"
+      | "thread.settled";
   }
 >;
 
@@ -119,7 +121,7 @@ function formatThreadTitleSection(message: ThreadTitleMessage): string | undefin
   if (message.role === "system") {
     return undefined;
   }
-  const text = message.text.trim();
+  const text = assistantCitationsToPlainText(message.text).trim();
   const attachmentSummary = (message.attachments ?? [])
     .map((attachment) => attachment.name)
     .join(", ");
@@ -691,18 +693,28 @@ const make = Effect.gen(function* () {
       thread,
       projects: project ? [project] : [],
     });
+    const refreshWorkspaceSnapshot = effectiveCwd
+      ? providerRegistry
+          .refreshWorkspaceSnapshot({ instanceId: desiredInstanceId, cwd: effectiveCwd })
+          .pipe(Effect.forkDetach)
+      : Effect.void;
 
-    const startProviderSession = (input?: { readonly resumeCursor?: unknown }) =>
-      providerService.startSession(threadId, {
-        threadId,
-        ...(preferredProvider ? { provider: preferredProvider } : {}),
-        providerInstanceId: desiredInstanceId,
-        ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
-        ...(thread.title ? { title: thread.title } : {}),
-        modelSelection: desiredModelSelection,
-        ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
-        runtimeMode: desiredRuntimeMode,
-      });
+    const startProviderSession = (input?: {
+      readonly resumeCursor?: unknown;
+      readonly provider?: ProviderDriverKind;
+    }) =>
+      providerService
+        .startSession(threadId, {
+          threadId,
+          ...(preferredProvider ? { provider: preferredProvider } : {}),
+          providerInstanceId: desiredInstanceId,
+          ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+          ...(thread.title ? { title: thread.title } : {}),
+          modelSelection: desiredModelSelection,
+          ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
+          runtimeMode: desiredRuntimeMode,
+        })
+        .pipe(Effect.tap(() => refreshWorkspaceSnapshot));
 
     const bindSessionToThread = (session: ProviderSession) =>
       Effect.gen(function* () {
@@ -760,6 +772,7 @@ const make = Effect.gen(function* () {
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange
       ) {
+        yield* refreshWorkspaceSnapshot;
         return existingSessionThreadId;
       }
 
@@ -1240,7 +1253,7 @@ const make = Effect.gen(function* () {
           projects: project ? [project] : [],
         }) ?? process.cwd();
       const generationInput = {
-        messageText: message.text,
+        messageText: assistantCitationsToPlainText(message.text),
         ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
         ...(event.payload.titleSeed !== undefined ? { titleSeed: event.payload.titleSeed } : {}),
       };
@@ -1634,6 +1647,24 @@ const make = Effect.gen(function* () {
       case "thread.session-set":
         yield* processSessionSet(event);
         return;
+      case "thread.settled": {
+        const thread = yield* projectionSnapshotQuery.getThreadShellById(event.payload.threadId);
+        if (
+          Option.isNone(thread) ||
+          thread.value.session == null ||
+          thread.value.session.status === "stopped"
+        ) {
+          return;
+        }
+        yield* orchestrationEngine.dispatch({
+          type: "thread.session.stop",
+          commandId: CommandId.make(`session-stop-for-settle:${event.commandId ?? event.eventId}`),
+          threadId: event.payload.threadId,
+          createdAt: event.occurredAt,
+          onlyIfSettled: true,
+        });
+        return;
+      }
     }
   });
 
@@ -1674,13 +1705,16 @@ const make = Effect.gen(function* () {
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
         event.type === "thread.session-stop-requested" ||
-        event.type === "thread.session-set"
+        event.type === "thread.session-set" ||
+        event.type === "thread.settled"
       ) {
         return yield* worker.enqueue(event);
       }
     });
 
-    yield* forkParked(Stream.runForEach(orchestrationEngine.streamDomainEvents, processEvent));
+    // Subscribe before returning, even while event handling waits for server activation.
+    const domainEvents = yield* orchestrationEngine.subscribeDomainEvents;
+    yield* forkParked(Stream.runForEach(domainEvents, processEvent));
 
     // The domain event stream is hot, so work pending before this reactor
     // starts cannot be resumed. Correlated completions only clear the request

@@ -3,6 +3,151 @@
 This file tracks fork-specific divergences that are likely to conflict when
 merging `upstream/main`.
 
+## 2026-09-02 upstream merge (remote desktop updates declined, Fable 5.1, model manifest) — migration notes
+
+Merged `upstream/main` through `5392c9bb9` (84 commits). Large merge — 48 conflicts. Headline:
+**upstream's remote desktop-update feature (#6554) was deliberately NOT adopted**, and Claude models
+moved to a manifest, which brings **Claude Fable 5.1** into the picker.
+
+### Migration renumbering
+
+- Upstream added **one** migration, `044_ClearAutomaticProjectModelDefaults`. The fork's 044 is taken
+  (`AuthSessionClientConnection`), so it was renumbered to the fork's next free id **047**. Its test
+  lives in `016_CanonicalizeModelSelections.test.ts`; the `layer(...)` name and both
+  `toMigrationInclusive` bounds were renumbered 43/44 → **46/47**.
+- Fork's next free migration id is now **48**.
+
+### Upstream feature declined: remote desktop app updates (#6554)
+
+Upstream added `DesktopRemoteUpdates` so a remote client can drive a desktop app update through a
+prepare/commit handoff. It is welded to the electron-installer path this fork deleted — both the
+implementation and its 842-line test suite import `ElectronUpdater`/`updateMachine`, and it needs
+`subscribe`/`isActionActive`/`isInstallActive`/`installPrepared` on `DesktopUpdates`, none of which
+the fork's payload-only facade has. FORK*NOTES' standing rule ("if upstream reworks the electron
+updater, do **not** re-wire it into `DesktopUpdates`") applies, and there is nothing for a remote
+install to \_do* in a fork whose shell updates are a manual reinstall.
+
+- **Deleted (kept deleted / removed after the merge):** `updateMachine.ts` + test (modify/delete,
+  stayed deleted), and the newly-added `DesktopRemoteUpdates.ts` + test, `remoteUpdateFlow.ts` +
+  test, `updatesTestHarness.ts`. The `DesktopRemoteUpdates.listen` wiring and import were dropped
+  from `DesktopApp.ts`.
+- **`DesktopUpdates.ts` / `.test.ts` are the fork's**, unchanged.
+- **`ServerEnvironment.ts`: `desktopAppUpdate` is hard-coded `false`** (upstream derives it from
+  `serverSelfUpdate === "desktop-managed" && desktopTelemetryControlFd !== undefined`, which the
+  fork's desktop _does_ satisfy — it passes fd 5). Left as upstream had it, the client would offer an
+  Update button that can never finish. `serverSelfUpdateProgress` therefore stays gated on
+  `boot-service` only. Upstream's test was renamed to
+  `"never advertises desktopAppUpdate, since the fork has no installer path"`.
+- **Upstream's server/web side was kept as-is** (`desktopUpdate/DesktopAppUpdate.ts`,
+  `DesktopTelemetryReceiver`, `ServerUpdateAction`), because the capability gate keeps it unreachable.
+  If the fork ever wants remote payload apply, the work is to add those four members to the payload
+  facade and flip the capability — not to restore electron-updater.
+- `apps/desktop/src/updates/releaseNotes.ts` remains **dead code** in the fork (only its own test
+  imports it); it was already dead at the previous fork tip, so upstream's improvements to it were
+  taken without re-wiring anything.
+
+### Claude models moved to a manifest — Fable 5.1
+
+- Upstream replaced `ClaudeProvider.ts`'s hardcoded model list with `apps/server/src/provider/model-manifest.json`
+  plus a remote-manifest fetch (#9084). **Claude Fable 5.1** (`claude-fable-5-1`, aliases `fable`,
+  `fable-5.1`, `claude-fable-5.1`) is `status: "current"`, `badge: "new"`, and requires Claude Code
+  **>= 2.1.257**; `claude-fable-5` is now `legacy`. Verified offered at the installed CLI 2.1.258 and
+  correctly gated out at 2.1.200.
+- **`selectedClaudeContextWindow` now takes `(catalog, modelSelection)`** instead of reading a
+  hardcoded switch. The fork's sendTurn context-window sync call site was updated. Because it is now
+  catalog-driven, the fork's test had to move off the real `claude-opus-4-6` onto upstream's
+  `SYNTHETIC_CLAUDE_MODEL_CATALOG` fixture (`SYNTHETIC_CLAUDE_CAPABLE_MODEL` + `contextWindow:
+"expanded"` = 1M). **Any fork test that names a real Claude model will silently stop resolving —
+  use the synthetic fixture.**
+
+### Claude usage normalization: fork keeps its own semantics
+
+Upstream now always emits `maxTokens` on usage snapshots and clamps oversized totals to the context
+window. The fork deliberately does neither unless the reading is _context-accurate_ (see
+`makeClaudeTokenUsageSnapshot`'s `contextAccurate` flag — accumulated `result.usage` totals overcount
+the live window). Resolution:
+
+- Re-applied the fork's expectations to two shared tests (`completes with result usage without
+querying current context usage`, `emits Claude context window on result completion usage
+snapshots`) — both had gained `maxTokens: 200000`.
+- **Deleted upstream's `clamps oversized Claude usage to the reported context window`** test: it
+  directly contradicts the fork's `keeps oversized Claude result totals when no context-accurate
+usage exists`, which is the deliberate fork fix.
+
+### Command-row detail: fork keeps output-as-detail
+
+Upstream reversed its own behavior so a command row's collapsed detail is empty when the provider
+reports no command text, renaming the test to `does not use command stdout as the detail...`. The
+fork keeps showing the output, because Cursor reports neither the command nor a title and the row
+renders blank otherwise. Reverted the test name and expectation, and kept the fork's tail in
+`extractToolDetail` (output → non-zero exit summary → read path → read size). Upstream's new
+`extractCommandOutputText` / `commandDetailRepeatsCommand` helpers were adopted for the preamble, and
+the fork's now-redundant `extractAcpTextContent` was deleted.
+
+### Project default model: adopted upstream's reversal
+
+Upstream stopped seeding `defaultModelSelection` at project creation (project creation never exposes
+a model choice) and shipped the migration above to clear rows it already wrote. The seeding came from
+upstream originally (`b6e1b3933`), so the fork followed: `useAddProjectFromPath.ts` now passes
+`defaultModelSelection: null`, dropping `resolveDefaultProviderModelSelection`,
+`primaryServerProvidersAtom` and `usePrimaryEnvironmentId` from that hook. Per the standing rule,
+upstream's re-inlined add-project block in `CommandPalette.tsx` was **discarded** and the change made
+inside the extracted hook.
+
+### Other notable resolutions
+
+- **`packages/shared/src/threadReference.ts` was an add/add conflict**: upstream shipped its own
+  unrelated `resolveThreadReferenceCopyTarget` (copy-active-thread-reference shortcut, #8994) under
+  the exact filename the fork uses for the `@thread_ref:` token helpers. Both now live in that one
+  module (both consumers import the same path); same for the test file.
+- **Timeline row flag renamed**: `isExpandedToolGroupEntry`/`isLastExpandedToolGroupEntry` →
+  upstream's `isExpandedToolGroup`. The fork's `searchExpanded` prop rides alongside it, and
+  `WorkGroupViewCtx` (upstream's persisted per-group expansion) coexists with `TimelineSearchCtx`.
+  The fork's `effectiveExpanded = expanded || searchExpanded` now also gates `expandedBody`, or a
+  search-forced row would expand to nothing.
+- **`MessagesTimeline.tsx` render tree**: upstream's citation viewport `<div>` (with
+  `AssistantSelectionToolbar` and `data-assistant-citation-viewport`) is wrapped in the fork's
+  `TimelineSearchCtx`, and uses the fork's combined `setTimelineHostElement` ref, which already
+  forwards to upstream's `setTimelineViewportElement`.
+- **`AcpSessionRuntime.prompt`**: kept the fork's cancel-epoch hardening and added upstream's
+  `options.dispatched` deferred, settled both after the fiber is published and on the
+  cancelled-before-dispatch path so a forked caller cannot park forever.
+- **`ProjectionPipeline`**: upstream split `thread.message-sent` into a fast path that folds
+  `latestUserMessageAt` directly; the fork's three `thread.prompt-*` cases now fall through to the
+  generic "bump `updatedAt`" group instead of sharing the message case.
+- **`ProviderCommandReactor`**: the intent-event union, dispatch switch and worker-enqueue predicate
+  all carry **both** the fork's `thread.session-set` (queued-prompt drain) and upstream's
+  `thread.settled`. `startProviderSession` took upstream's version (adds `provider` and
+  `refreshWorkspaceSnapshot`).
+- **Thread action menu order** is now `rename, fork, mark-unread, copy, project-settings,
+export-zip, archive, delete` — `project-settings` sits directly after `copy` so upstream's
+  adjacency assertion holds, with the fork's `export-zip` after it.
+- **`settings.ts`**: upstream's conflict side was a _duplicate_ `legacySidebarEnabled` declaration
+  (default `false`); the fork's existing one (default `true`, project-tree sidebar) was kept.
+- **Deleted as dead code** (upstream removed them and all their consumers):
+  `apps/web/src/components/SplashScreen.tsx` (fork's only change was `A2 Code` branding) and
+  `apps/web/src/historyBootstrap.ts`. Also removed upstream's two static-markup
+  `MessagesTimeline.test.tsx` anchoring tests, which AGENTS.md forbids writing.
+- **`SidebarChrome.tsx`** keeps the fork's `AppWordmark`/`APP_NAME_SUFFIX` branding + version
+  tooltip; upstream's `T3Wordmark` import was dropped.
+- **`scripts/package.json`**: upstream's dead-deps cleanup removed `@t3tools/contracts`, which
+  `scripts/build-payload-asset.ts` (fork) needs — restored. `yaml` really is unused now; left removed.
+- **Package versions** stay on the fork's `0.0.25-amit` (upstream moved to `0.0.38`).
+- **CI/workflows did not conflict except `release.yml`**, which was resolved to the fork's version;
+  `git diff 3cfa2ce17 HEAD -- .github/workflows` is empty and only `ci.yml` + `release.yml` exist.
+
+### Test-suite note
+
+`apps/server/src/entrypoint.test.ts > matches through a symlinked entrypoint` fails on macOS, before
+and after this merge: `os.tmpdir()` returns `/var/...`, which is itself a symlink to `/private/var/...`,
+so the fixture's own `moduleUrl` can never equal `realpathSync(link)`. Both `entrypoint.ts` and its
+test are byte-identical to the previous fork tip. Not merge fallout.
+
+`ProviderCommandReactor.test.ts`'s session-stop test was changed to wait on the **projected** stopped
+session rather than on `stopSession` having been called: the fork's extra worker hop (the
+queued-prompt drain enqueues `thread.session-set`) reliably lands the projection after upstream's
+proxy signal. Behavior was correct; the wait was on the wrong thing.
+
 ## 2026-09-01 upstream merge (draft promotion gate, timeline `thinking` row) — migration notes
 
 Merged `upstream/main` through `b17cc3d1b` (27 commits). Small merge — 7 conflicts, all
@@ -1755,6 +1900,21 @@ build:desktop` → `vp run dist:payload:asset`, using the
   handling unless there is a deliberate product decision to diverge in the
   UI.
 
+### Claude model catalog (manifest-driven since 2026-09-02)
+
+- Claude models live in `apps/server/src/provider/model-manifest.json` (plus a remote
+  manifest fetch), not in `ClaudeProvider.ts`. Model availability is gated per entry by
+  `adapter.claudeCode.minVersion` against the installed Claude Code version.
+- **Fork tests must not name a real Claude model.** Adapter tests run against upstream's
+  `SYNTHETIC_CLAUDE_MODEL_CATALOG` (`ClaudeModelCatalog.testFixtures.ts`), which contains
+  only synthetic slugs, so a real slug silently fails to resolve and any catalog-derived
+  value (context window, effort, api model id) comes back `undefined`.
+- The fork's usage-snapshot semantics diverge deliberately: `maxTokens` is emitted and
+  used tokens are clamped **only** for context-accurate readings. Upstream periodically
+  adds tests asserting the always-emit/always-clamp behavior; those contradict
+  `keeps oversized Claude result totals when no context-accurate usage exists` and should
+  be dropped, not adopted.
+
 ### Client-vs-transport snapshot projection
 
 - File: `apps/server/src/orchestration/ClientProjection.ts` (fork-added), used by
@@ -1831,7 +1991,9 @@ build:desktop` → `vp run dist:payload:asset`, using the
   `forked_from_id` in the full-detail queries; shell queries intentionally omit
   it.
 - Migration seam: `033_ProjectionThreadsForkedFrom` is fork-added. Fork ids
-  33-35 are frozen because existing fork DBs already recorded them (see the
+  33-35 are frozen because existing fork DBs already recorded them. **The fork's
+  next free migration id is 48** (upstream's 044 became the fork's 047 in the
+  2026-09-02 merge) (see the
   2026-07-24 merge notes): when upstream adds a migration with id >= 33,
   renumber **upstream's** file/registry entry to the fork's next free id
   (upstream's 33/34 became the fork's 36/37; upstream's 35 became the fork's
@@ -1981,6 +2143,15 @@ build:desktop` → `vp run dist:payload:asset`, using the
     builds `payload-<version>.tar.gz` + signed `payload-manifest.json`.
   - `.github/workflows/release.yml` — **modified**: builds + publishes the
     payload asset + manifest (see CI section).
+- **Remote desktop updates are declined, not pending (2026-09-02).** Upstream's
+  `DesktopRemoteUpdates` (#6554) drives a _shell installer_ update from a remote
+  client, so it has no meaning here. Its files are deleted in the fork and the
+  server advertises `desktopAppUpdate: false` unconditionally
+  (`ServerEnvironment.ts`) so no dead Update button appears. Upstream's
+  server/web half is retained but unreachable behind that gate. Adopting it
+  later means adding `subscribe` / `isActionActive` / `isInstallActive` /
+  `installPrepared` to this payload facade and flipping the capability — never
+  restoring `ElectronUpdater` or `updateMachine`.
 - **Merge note:** the updater defaults its manifest URL to
   `https://github.com/amitbet/a2code/releases/latest/download/payload-manifest.json`
   (mirrors `DEFAULT_DESKTOP_UPDATE_REPOSITORY` in `build-desktop-artifact.ts`).

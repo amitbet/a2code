@@ -42,3 +42,41 @@ export function parseThreadReferenceIds(text: string): ReadonlyArray<string> {
   }
   return ids;
 }
+
+/*
+ * Below: upstream's "copy active thread reference" target resolution (the
+ * keyboard shortcut / menu action picks the linked PR link over the raw thread
+ * id). Unrelated to the `@thread_ref:` token above, but both are "thread
+ * reference" concerns and both consumers import from this module path.
+ */
+
+export interface ThreadReferenceCopyTarget {
+  readonly kind: "pull-request" | "thread";
+  readonly value: string;
+  readonly clipboardTarget: string;
+  readonly successTitle: string;
+  readonly failureTitle: string;
+}
+
+export function resolveThreadReferenceCopyTarget(input: {
+  readonly threadId: string;
+  readonly linkedPullRequestUrl?: string | null;
+  readonly detectedPullRequestUrl?: string | null;
+}): ThreadReferenceCopyTarget {
+  const pullRequestUrl = input.linkedPullRequestUrl ?? input.detectedPullRequestUrl;
+  return pullRequestUrl
+    ? {
+        kind: "pull-request",
+        value: pullRequestUrl,
+        clipboardTarget: "pull request link",
+        successTitle: "PR link copied",
+        failureTitle: "Failed to copy PR link",
+      }
+    : {
+        kind: "thread",
+        value: input.threadId,
+        clipboardTarget: "thread ID",
+        successTitle: "Thread ID copied",
+        failureTitle: "Failed to copy thread ID",
+      };
+}
