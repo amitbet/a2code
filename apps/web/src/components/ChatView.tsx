@@ -183,7 +183,6 @@ import {
   deriveAgentPanelModel,
   foldSubagentActivities,
 } from "@t3tools/client-runtime/state/subagentRuntime";
-import { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
@@ -8183,14 +8182,13 @@ function ChatViewContent(props: ChatViewProps) {
   );
 }
 
+/**
+ * Machine scope is settled by the routes, which redirect a thread that leaves
+ * the selected machine. Re-deciding it here only added a way for the whole view
+ * to blank for one render while the catalog re-registers a remote connection,
+ * which loses the user's scroll, their text selection, and every DOM node the
+ * timeline had mounted.
+ */
 export default function ChatView(props: ChatViewProps) {
-  const machineEnvironmentId = useMachineEnvironmentId();
-  if (!isEnvironmentInMachineScope(props.environmentId, machineEnvironmentId)) {
-    return null;
-  }
-  return (
-    <DiffWorkerPoolProvider>
-      <ChatViewContent {...props} />
-    </DiffWorkerPoolProvider>
-  );
+  return <ChatViewContent {...props} />;
 }

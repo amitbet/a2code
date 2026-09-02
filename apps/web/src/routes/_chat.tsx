@@ -1,4 +1,6 @@
 import { Outlet, createFileRoute, redirect } from "@tanstack/react-router";
+
+import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useMemo } from "react";
 
@@ -176,10 +178,14 @@ function ChatRouteGlobalShortcuts() {
 
 function ChatRouteLayout() {
   return (
-    <>
+    // The diff worker pool is a process-wide singleton that terminates when its
+    // last provider unmounts, so it lives above the outlet. Mounting it per view
+    // rebuilt the whole pool — one worker per core, each reloading its themes and
+    // grammars — on every thread switch, machine swap, and transient route blank.
+    <DiffWorkerPoolProvider>
       <ChatRouteGlobalShortcuts />
       <Outlet />
-    </>
+    </DiffWorkerPoolProvider>
   );
 }
 
