@@ -307,6 +307,15 @@ interface MarkdownActionFailureContext {
   readonly copyTarget?: string;
 }
 
+/**
+ * One react-markdown renderer, called directly instead of mounted so that
+ * rebuilding it cannot change the component type React sees.
+ */
+type MarkdownComponentRenderer = {
+  (props: Record<string, unknown>): ReactNode;
+  displayName?: string;
+};
+
 function selectionIntersectsElement(element: HTMLElement | null): boolean {
   if (!element || typeof window === "undefined" || typeof window.getSelection !== "function") {
     return false;
@@ -2418,7 +2427,7 @@ function ChatMarkdown({
   /* eslint-disable react/no-unstable-nested-components -- ReactMarkdown requires component
    * renderers that close over this message's metadata. useMemo keeps them stable until that
    * metadata changes. */
-  const markdownComponents = useMemo<Components>(() => {
+  const markdownComponentsImpl = useMemo<Components>(() => {
     const fileLinkChip = (
       fileLinkMeta: MarkdownFileLinkMeta,
       copyMarkdown: string,
@@ -2887,6 +2896,34 @@ function ChatMarkdown({
     updateThreadPullRequestLink,
   ]);
   /* eslint-enable react/no-unstable-nested-components */
+
+  // react-markdown treats each entry above as a component *type*. Rebuilding
+  // that map — which any of the dependencies above does, including a remote
+  // environment re-emitting its server config on reconnect, or `text` growing
+  // by one token — therefore hands React new types for `p`, `code` and the
+  // rest, and React answers by unmounting every message body and building an
+  // identical one. That silently destroys the reader's text selection: an
+  // endpoint inside a replaced text node collapses, and a paragraph selection
+  // anchored on a surviving parent widens as its children are swapped.
+  //
+  // So the map React sees is built once and never replaced. Its entries call
+  // the current renderer as a plain function rather than mounting it, so a
+  // rebuilt renderer changes behaviour without introducing a new type, and
+  // React updates the existing text nodes in place.
+  const markdownComponentsImplRef = useRef(markdownComponentsImpl);
+  markdownComponentsImplRef.current = markdownComponentsImpl;
+  const markdownComponents = useMemo<Components>(() => {
+    const stable: Record<string, MarkdownComponentRenderer> = {};
+    for (const tag of Object.keys(markdownComponentsImplRef.current)) {
+      const render: MarkdownComponentRenderer = (props) =>
+        (
+          markdownComponentsImplRef.current as Record<string, MarkdownComponentRenderer | undefined>
+        )[tag]?.(props) ?? null;
+      render.displayName = `ChatMarkdown(${tag})`;
+      stable[tag] = render;
+    }
+    return stable as Components;
+  }, []);
 
   const remarkPlugins = useMemo(
     () => [
