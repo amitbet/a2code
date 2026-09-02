@@ -150,6 +150,7 @@ import {
   type ParsedPreviewAnnotation,
 } from "~/lib/previewAnnotation";
 import { cn } from "~/lib/utils";
+import { useSelectionPinnedRowKeys, virtualRowKeyProps } from "~/lib/virtualizedRowSelection";
 import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { formatChatTimestampTooltip, formatDayAwareTimestamp } from "../../timestampFormat";
@@ -224,6 +225,9 @@ interface TimelineSearchState {
 const EMPTY_SEARCH_MATCH_ROW_IDS: ReadonlySet<string> = new Set();
 const CLOSED_SEARCH_STATE: TimelineSearchState = { matchRowIds: EMPTY_SEARCH_MATCH_ROW_IDS };
 const TimelineSearchCtx = createContext<TimelineSearchState>(CLOSED_SEARCH_STATE);
+
+/** Rows a live text selection spans, pinned so their containers survive recycling. */
+const TimelineSelectionPinCtx = createContext<readonly string[]>([]);
 
 interface WorkGroupViewState {
   scrollPositions: Map<string, WorkGroupScrollAnchor>;
@@ -671,6 +675,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     timelineHostRef.current = element;
     setTimelineViewportElement(element);
   }, []);
+  const selectionPinnedRowKeys = useSelectionPinnedRowKeys(timelineViewportElement);
+  // Citation pins mount a navigation target; selection pins hold the rows a
+  // live selection points into.
+  const alwaysRender = useMemo(() => {
+    if (selectionPinnedRowKeys.length === 0) return citationAlwaysRender;
+    return {
+      ...citationAlwaysRender,
+      keys: [...(citationAlwaysRender?.keys ?? []), ...selectionPinnedRowKeys],
+    };
+  }, [citationAlwaysRender, selectionPinnedRowKeys]);
   const handleAnchorReady = useCallback(
     (info: { anchorIndex: number | undefined }) => {
       if (anchorMessageId !== null && info.anchorIndex !== undefined) {
@@ -819,7 +833,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   // from TimelineRowCtx, which propagates through LegendList's memo.
   const renderItem = useCallback(
     ({ item }: { item: MessagesTimelineRow }) => (
-      <div className="mx-auto w-full min-w-0 max-w-3xl overflow-x-clip" data-timeline-root="true">
+      <div
+        className="mx-auto w-full min-w-0 max-w-3xl overflow-x-clip"
+        data-timeline-root="true"
+        {...virtualRowKeyProps(item.id)}
+      >
         <TimelineRowContent row={item} />
       </div>
     ),
@@ -857,80 +875,82 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     <TimelineRowCtx value={sharedState}>
       <TimelineRowActivityCtx value={activityState}>
         <TimelineSearchCtx value={searchState}>
-          <div
-            ref={setTimelineHostElement}
-            className="relative h-full min-h-0"
-            data-assistant-citation-viewport="true"
-          >
-            {searchBar}
-            {onCiteAssistantText && citationThreadRef ? (
-              <AssistantSelectionToolbar
-                viewport={timelineViewportElement}
-                threadRef={citationThreadRef}
-                onCite={onCiteAssistantText}
+          <TimelineSelectionPinCtx value={selectionPinnedRowKeys}>
+            <div
+              ref={setTimelineHostElement}
+              className="relative h-full min-h-0"
+              data-assistant-citation-viewport="true"
+            >
+              {searchBar}
+              {onCiteAssistantText && citationThreadRef ? (
+                <AssistantSelectionToolbar
+                  viewport={timelineViewportElement}
+                  threadRef={citationThreadRef}
+                  onCite={onCiteAssistantText}
+                />
+              ) : null}
+              <LegendList<MessagesTimelineRow>
+                ref={listRef}
+                data={rows}
+                keyExtractor={keyExtractor}
+                getItemType={getItemType}
+                renderItem={renderItem}
+                estimatedItemSize={90}
+                initialScrollAtEnd={citationRequest === null}
+                // Legend needs a data refresh to mount new pins without a scroll event.
+                {...(readyCitationRequest ? { dataVersion: readyCitationRequest.key } : {})}
+                {...(alwaysRender ? { alwaysRender } : {})}
+                onLoad={onCitationListLoad}
+                {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
+                contentInsetEndAdjustment={contentInsetEndAdjustment}
+                maintainScrollAtEnd={
+                  citationPositioning ||
+                  anchoredEndSpace ||
+                  !liveFollowEnabled ||
+                  disclosureToggleSettling
+                    ? false
+                    : TIMELINE_MAINTAIN_SCROLL_AT_END
+                }
+                maintainVisibleContentPosition={
+                  citationPositioning ? false : maintainVisibleContentPosition
+                }
+                onScroll={handleScroll}
+                className={cn(
+                  "scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain px-3 [overflow-anchor:none] sm:px-5",
+                  topFadeEnabled && "topbar-scroll-fade",
+                )}
+                ListHeaderComponent={
+                  loadEarlier !== null ? (
+                    <TimelineLoadEarlierHeader
+                      loading={loadEarlier.loading}
+                      onLoadEarlier={loadEarlier.onLoadEarlier}
+                      fade={topFadeEnabled}
+                    />
+                  ) : topFadeEnabled ? (
+                    TIMELINE_LIST_FADE_HEADER
+                  ) : (
+                    TIMELINE_LIST_HEADER
+                  )
+                }
+                ListFooterComponent={TIMELINE_LIST_FOOTER}
+                data-chat-scroll-container="true"
               />
-            ) : null}
-            <LegendList<MessagesTimelineRow>
-              ref={listRef}
-              data={rows}
-              keyExtractor={keyExtractor}
-              getItemType={getItemType}
-              renderItem={renderItem}
-              estimatedItemSize={90}
-              initialScrollAtEnd={citationRequest === null}
-              // Legend needs a data refresh to mount new pins without a scroll event.
-              {...(readyCitationRequest ? { dataVersion: readyCitationRequest.key } : {})}
-              {...(citationAlwaysRender ? { alwaysRender: citationAlwaysRender } : {})}
-              onLoad={onCitationListLoad}
-              {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
-              contentInsetEndAdjustment={contentInsetEndAdjustment}
-              maintainScrollAtEnd={
-                citationPositioning ||
-                anchoredEndSpace ||
-                !liveFollowEnabled ||
-                disclosureToggleSettling
-                  ? false
-                  : TIMELINE_MAINTAIN_SCROLL_AT_END
-              }
-              maintainVisibleContentPosition={
-                citationPositioning ? false : maintainVisibleContentPosition
-              }
-              onScroll={handleScroll}
-              className={cn(
-                "scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain px-3 [overflow-anchor:none] sm:px-5",
-                topFadeEnabled && "topbar-scroll-fade",
-              )}
-              ListHeaderComponent={
-                loadEarlier !== null ? (
-                  <TimelineLoadEarlierHeader
-                    loading={loadEarlier.loading}
-                    onLoadEarlier={loadEarlier.onLoadEarlier}
-                    fade={topFadeEnabled}
-                  />
-                ) : topFadeEnabled ? (
-                  TIMELINE_LIST_FADE_HEADER
-                ) : (
-                  TIMELINE_LIST_HEADER
-                )
-              }
-              ListFooterComponent={TIMELINE_LIST_FOOTER}
-              data-chat-scroll-container="true"
-            />
-            <TimelineMinimap
-              items={minimapItems}
-              hasPersistentGutter={minimapHasPersistentGutter}
-              hitStripWidth={minimapHitStripWidth}
-              stripMap={minimapStripMap}
-              onSelect={(item) => {
-                onManualNavigation();
-                void listRef.current?.scrollToIndex({
-                  index: item.rowIndex,
-                  animated: true,
-                  viewOffset: 24,
-                });
-              }}
-            />
-          </div>
+              <TimelineMinimap
+                items={minimapItems}
+                hasPersistentGutter={minimapHasPersistentGutter}
+                hitStripWidth={minimapHitStripWidth}
+                stripMap={minimapStripMap}
+                onSelect={(item) => {
+                  onManualNavigation();
+                  void listRef.current?.scrollToIndex({
+                    index: item.rowIndex,
+                    animated: true,
+                    viewOffset: 24,
+                  });
+                }}
+              />
+            </div>
+          </TimelineSelectionPinCtx>
         </TimelineSearchCtx>
       </TimelineRowActivityCtx>
     </TimelineRowCtx>
@@ -1791,6 +1811,7 @@ function ExpandedWorkGroupEntries({
   workspaceRoot: string | undefined;
 }) {
   const { workGroupViewState: viewState, onToggleWorkEntry } = use(TimelineRowCtx);
+  const selectionPinnedRowKeys = use(TimelineSelectionPinCtx);
   const [initialScrollIndex] = useState(() =>
     resolveWorkGroupScrollIndex(entries, viewState.scrollPositions.get(anchorKey)),
   );
@@ -1870,15 +1891,29 @@ function ExpandedWorkGroupEntries({
 
   const renderEntry = useCallback(
     ({ item }: { item: TimelineWorkEntry }) => (
-      <SimpleWorkEntryRow
-        key={item.id}
-        workEntry={item}
-        workspaceRoot={workspaceRoot}
-        isExpandedToolGroupEntry
-      />
+      <div {...virtualRowKeyProps(item.id)}>
+        <SimpleWorkEntryRow
+          key={item.id}
+          workEntry={item}
+          workspaceRoot={workspaceRoot}
+          isExpandedToolGroupEntry
+        />
+      </div>
     ),
     [workspaceRoot],
   );
+
+  // Measure the restored row even when an intra-row offset puts its estimated
+  // bounds outside the list's small bootstrap render window, and hold any row
+  // the user has text selected in so recycling cannot drop that selection.
+  const alwaysRender = useMemo(() => {
+    const indices = restoringPosition && initialScrollIndex ? [initialScrollIndex.index] : [];
+    if (indices.length === 0 && selectionPinnedRowKeys.length === 0) return undefined;
+    return {
+      ...(indices.length > 0 ? { indices } : {}),
+      ...(selectionPinnedRowKeys.length > 0 ? { keys: [...selectionPinnedRowKeys] } : {}),
+    };
+  }, [initialScrollIndex, restoringPosition, selectionPinnedRowKeys]);
 
   return (
     <WorkGroupViewCtx value={groupView}>
@@ -1896,11 +1931,7 @@ function ExpandedWorkGroupEntries({
           appendState.follow ? { animated: false, on: { dataChange: true } } : false
         }
         maintainScrollAtEndThreshold={1 / Math.max(1, fades.viewportHeight)}
-        // Measure the restored row even when an intra-row offset puts its
-        // estimated bounds outside the list's small bootstrap render window.
-        {...(restoringPosition && initialScrollIndex
-          ? { alwaysRender: { indices: [initialScrollIndex.index] } }
-          : {})}
+        {...(alwaysRender ? { alwaysRender } : {})}
         maintainVisibleContentPosition
         onLoad={handleLoad}
         onScroll={handleScroll}
