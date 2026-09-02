@@ -116,7 +116,7 @@ import { openInEditorMenuLabel } from "../editorLabels";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
 import { fnv1a32 } from "../lib/diffRendering";
 import { LRUCache } from "../lib/lruCache";
-import { getSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
+import { getOptionalSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
 import { RenderErrorBoundary } from "./RenderErrorBoundary";
 import { useTheme } from "../hooks/useTheme";
 import { getClientSettings } from "../hooks/useSettings";
@@ -1028,6 +1028,8 @@ interface SuspenseShikiCodeBlockProps {
   themeName: DiffThemeName;
   isStreaming: boolean;
   shouldDeferAsyncHighlight: () => boolean;
+  /** Unhighlighted rendering of this fence, shown until highlighting can land. */
+  plain: ReactNode;
 }
 
 function SuspenseShikiCodeBlock({
@@ -1036,6 +1038,7 @@ function SuspenseShikiCodeBlock({
   themeName,
   isStreaming,
   shouldDeferAsyncHighlight,
+  plain,
 }: SuspenseShikiCodeBlockProps) {
   const language = extractFenceLanguage(className);
   const cacheKey = createHighlightCacheKey(code, language, themeName);
@@ -1058,6 +1061,7 @@ function SuspenseShikiCodeBlock({
       cacheKey={cacheKey}
       isStreaming={isStreaming}
       shouldDeferAsyncHighlight={shouldDeferAsyncHighlight}
+      plain={plain}
     />
   );
 }
@@ -1069,6 +1073,7 @@ interface UncachedShikiCodeBlockProps {
   cacheKey: string;
   isStreaming: boolean;
   shouldDeferAsyncHighlight: () => boolean;
+  plain: ReactNode;
 }
 
 function UncachedShikiCodeBlock({
@@ -1078,9 +1083,13 @@ function UncachedShikiCodeBlock({
   cacheKey,
   isStreaming,
   shouldDeferAsyncHighlight,
+  plain,
 }: UncachedShikiCodeBlockProps) {
-  const highlighter = use(getSyntaxHighlighterPromise(language));
+  // Resolves to null rather than rejecting: a rejection during render reaches
+  // the enclosing boundary, and every catch replaces this block's live DOM.
+  const highlighter = use(getOptionalSyntaxHighlighterPromise(language));
   const highlightedHtml = useMemo(() => {
+    if (highlighter === null) return null;
     try {
       return highlighter.codeToHtml(code, { lang: language, theme: themeName });
     } catch (error) {
@@ -1094,13 +1103,26 @@ function UncachedShikiCodeBlock({
     }
   }, [code, highlighter, language, themeName]);
 
-  if (shouldDeferAsyncHighlight()) {
-    // Keep the plain-code Suspense fallback mounted while the user is selecting text.
-    use(waitForSelectionOutsideElement(shouldDeferAsyncHighlight));
-  }
+  // Replacing this block's markup destroys any selection inside it, so the swap
+  // waits for the selection to leave. Waiting cannot suspend: a boundary that
+  // falls back hides the very nodes the selection points at, which is the loss
+  // the wait exists to prevent.
+  const [shownHtml, setShownHtml] = useState(() =>
+    shouldDeferAsyncHighlight() ? null : highlightedHtml,
+  );
+  useEffect(() => {
+    if (shownHtml === highlightedHtml) return;
+    let cancelled = false;
+    void waitForSelectionOutsideElement(shouldDeferAsyncHighlight).then(() => {
+      if (!cancelled) setShownHtml(highlightedHtml);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [highlightedHtml, shouldDeferAsyncHighlight, shownHtml]);
 
   useEffect(() => {
-    if (!isStreaming) {
+    if (!isStreaming && highlightedHtml !== null) {
       highlightedCodeCache.set(
         cacheKey,
         highlightedHtml,
@@ -1109,9 +1131,8 @@ function UncachedShikiCodeBlock({
     }
   }, [cacheKey, code, highlightedHtml, isStreaming]);
 
-  return (
-    <div className="chat-markdown-shiki" dangerouslySetInnerHTML={{ __html: highlightedHtml }} />
-  );
+  if (shownHtml === null) return plain;
+  return <div className="chat-markdown-shiki" dangerouslySetInnerHTML={{ __html: shownHtml }} />;
 }
 
 interface MarkdownFileLinkProps {
@@ -2827,6 +2848,7 @@ function ChatMarkdown({
                   themeName={diffThemeName}
                   isStreaming={isStreaming}
                   shouldDeferAsyncHighlight={shouldDeferAsyncHighlight}
+                  plain={<pre {...props}>{children}</pre>}
                 />
               </Suspense>
             </RenderErrorBoundary>
