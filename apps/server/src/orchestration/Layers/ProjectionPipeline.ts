@@ -1,6 +1,7 @@
 import {
   ApprovalRequestId,
   ChatAttachment,
+  ExternalThreadReference,
   ModelSelection,
   type OrchestrationEvent,
   type OrchestrationSessionStatus,
@@ -118,6 +119,9 @@ const encodeQueuedPromptAttachmentsJson = Schema.encodeSync(
 );
 const encodeQueuedPromptModelSelectionJson = Schema.encodeSync(
   Schema.fromJsonString(ModelSelection),
+);
+const encodeQueuedPromptThreadReferencesJson = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Array(ExternalThreadReference)),
 );
 
 function extractActivityRequestId(payload: unknown): ApprovalRequestId | null {
@@ -1145,6 +1149,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               interaction_mode,
               source_proposed_plan_thread_id,
               source_proposed_plan_id,
+              thread_references_json,
               created_at
             )
             VALUES (
@@ -1162,6 +1167,11 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               ${prompt.interactionMode},
               ${prompt.sourceProposedPlan?.threadId ?? null},
               ${prompt.sourceProposedPlan?.planId ?? null},
+              ${
+                prompt.threadReferences !== undefined
+                  ? encodeQueuedPromptThreadReferencesJson(prompt.threadReferences)
+                  : null
+              },
               ${prompt.createdAt}
             )
             ON CONFLICT (message_id)
@@ -1173,6 +1183,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               title_seed = excluded.title_seed,
               runtime_mode = excluded.runtime_mode,
               interaction_mode = excluded.interaction_mode,
+              thread_references_json = excluded.thread_references_json,
               source_proposed_plan_thread_id = excluded.source_proposed_plan_thread_id,
               source_proposed_plan_id = excluded.source_proposed_plan_id,
               created_at = excluded.created_at

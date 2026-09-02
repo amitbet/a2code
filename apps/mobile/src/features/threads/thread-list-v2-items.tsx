@@ -29,6 +29,7 @@ import {
   resolveThreadListV2SwipeActions,
   type ThreadListV2Status,
 } from "./threadListV2";
+import { activeThreadAnchorTimestamp } from "@t3tools/client-runtime/state/thread-sort";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
 
 /**
@@ -56,8 +57,12 @@ const STATUS_LABEL_BY_STATUS: Partial<
   failed: { label: "Failed", className: "text-adaptive-red-700-300" },
 };
 
+// Reads "how long ago did I last prompt this", matching the row's sort key:
+// both go through activeThreadAnchorTimestamp so label and order can't
+// disagree. updatedAt is the final net for a thread whose anchor stamps are
+// all missing or malformed.
 function threadTimeLabel(thread: EnvironmentThreadShell): string {
-  return relativeTime(thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt);
+  return relativeTime(activeThreadAnchorTimestamp(thread) ?? thread.updatedAt ?? thread.createdAt);
 }
 
 // Menus keep lifecycle and title regeneration together. Archive keeps its
@@ -892,7 +897,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           >
             {snoozedRow && props.snoozeWakeLabelText !== undefined
               ? props.snoozeWakeLabelText
-              : relativeTime(thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt)}
+              : threadTimeLabel(thread)}
           </Text>
         </View>
       </Pressable>

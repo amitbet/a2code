@@ -70,22 +70,54 @@ export function getThreadSortTimestamp(
   return getLatestUserMessageTimestamp(thread);
 }
 
-/**
- * Sort anchor for the active thread list: creation time, re-anchored to
- * unsettledAt when the thread last re-entered the active list (an explicit
- * un-settle, or a settled thread waking on activity). The list stays static
- * between lifecycle transitions, but an un-settled thread surfaces at the
- * top instead of sinking back to its creation-order slot. Shared by web and
- * mobile so both render the same order. Malformed timestamps sink to 0.
- */
-export function activeThreadAnchorTimestampMs(thread: {
+export interface ActiveThreadAnchorInput {
   readonly createdAt: string;
   readonly unsettledAt?: string | null | undefined;
-}): number {
+  readonly latestUserMessageAt?: string | null | undefined;
+}
+
+/**
+ * Sort anchor for the active thread list: the newest of creation time, the
+ * last prompt the user sent, and the moment the thread last re-entered the
+ * active list (an explicit un-settle, or a settled thread waking on
+ * activity). The latest ISO string wins rather than a fixed precedence,
+ * because any of the three can be the most recent: a never-prompted thread
+ * anchors on creation, and an un-settle lifts a row that nobody has
+ * prompted since.
+ *
+ * Only a USER message moves this. Agent output, tool calls, streaming
+ * deltas, and approvals all leave it alone (the server derives
+ * latestUserMessageAt from `role === "user"` messages only), so rows do not
+ * churn underneath a working agent — the list moves when a human acts.
+ *
+ * Shared by web and mobile so both render the same order, and paired with
+ * activeThreadAnchorTimestamp so the row's time label can never disagree
+ * with the row's position. Malformed timestamps sink to 0.
+ */
+export function activeThreadAnchorTimestampMs(thread: ActiveThreadAnchorInput): number {
   return Math.max(
     toSortableTimestamp(thread.createdAt) ?? 0,
     toSortableTimestamp(thread.unsettledAt ?? undefined) ?? 0,
+    toSortableTimestamp(thread.latestUserMessageAt ?? undefined) ?? 0,
   );
+}
+
+/**
+ * String twin of activeThreadAnchorTimestampMs, for the relative-time label
+ * on an active row. Sharing one resolver is the point: the label reads the
+ * same instant the row sorts by, so "6h" can never sit above "2d". Null
+ * when every candidate is missing or malformed.
+ */
+export function activeThreadAnchorTimestamp(thread: ActiveThreadAnchorInput): string | null {
+  let anchor: string | null = null;
+  let anchorMs = Number.NEGATIVE_INFINITY;
+  for (const candidate of [thread.createdAt, thread.unsettledAt, thread.latestUserMessageAt]) {
+    const parsed = toSortableTimestamp(candidate ?? undefined);
+    if (parsed === null || parsed <= anchorMs) continue;
+    anchor = candidate!;
+    anchorMs = parsed;
+  }
+  return anchor;
 }
 
 export function sortThreads<T extends { readonly id: string } & ThreadSortInput>(

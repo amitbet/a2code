@@ -138,7 +138,10 @@ describe("registerComposerInlineTokenPaste", () => {
   it("preserves pasted thread references as literal prompt text", () => {
     vi.stubGlobal("ClipboardEvent", TestClipboardEvent);
     const editor = createEditor();
-    const threadReference = formatThreadReference("9017ec25-7cc5-4a90-8767-e6de24321fa8");
+    const threadReference = formatThreadReference({
+      environmentId: "8b1e4a52-6d0f-4c73-9a21-1f6b0c9d2e77",
+      threadId: "9017ec25-7cc5-4a90-8767-e6de24321fa8",
+    });
     const plainTextFallback = vi.fn(() => {
       const selection = $getSelection();
       if (!$isRangeSelection(selection)) return false;

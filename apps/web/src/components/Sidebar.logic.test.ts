@@ -22,6 +22,8 @@ import {
   resolveProjectStatusIndicator,
   resolveThreadRowClassName,
   resolveSidebarThreadStatus,
+  activeThreadAnchorTimestamp,
+  activeThreadAnchorTimestampMs,
   resolveThreadStatusPill,
   resolveWorkingStartedAt,
   searchSidebarThreadsByTitle,
@@ -831,7 +833,7 @@ describe("sortThreadsForSidebar", () => {
     createdAt: input.createdAt,
   });
 
-  it("orders by creation time, newest first, ignoring activity", () => {
+  it("falls back to creation time, newest first, when nothing has been prompted", () => {
     const sorted = sortThreadsForSidebar([
       sortable({ id: "oldest", createdAt: "2026-03-09T08:00:00.000Z" }),
       sortable({ id: "newest", createdAt: "2026-03-09T12:00:00.000Z" }),
@@ -875,6 +877,86 @@ describe("sortThreadsForSidebar", () => {
     ]);
 
     expect(sorted.map((thread) => thread.id)).toEqual(["newest", "stale-stamp"]);
+  });
+
+  it("lifts an old thread that was just prompted above newer untouched ones", () => {
+    const sorted = sortThreadsForSidebar([
+      sortable({ id: "created-yesterday", createdAt: "2026-03-08T12:00:00.000Z" }),
+      sortable({ id: "created-today", createdAt: "2026-03-09T12:00:00.000Z" }),
+      {
+        id: "old-but-just-prompted",
+        createdAt: "2026-03-06T08:00:00.000Z",
+        latestUserMessageAt: "2026-03-09T13:00:00.000Z",
+      },
+    ]);
+
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      "old-but-just-prompted",
+      "created-today",
+      "created-yesterday",
+    ]);
+  });
+
+  it("ignores a prompt stamp older than a newer re-entry stamp", () => {
+    const sorted = sortThreadsForSidebar([
+      {
+        id: "unsettled-after-prompt",
+        createdAt: "2026-03-09T08:00:00.000Z",
+        latestUserMessageAt: "2026-03-09T09:00:00.000Z",
+        unsettledAt: "2026-03-09T13:00:00.000Z",
+      },
+      sortable({ id: "newest", createdAt: "2026-03-09T12:00:00.000Z" }),
+    ]);
+
+    expect(sorted.map((thread) => thread.id)).toEqual(["unsettled-after-prompt", "newest"]);
+  });
+
+  it("falls through a malformed prompt stamp to the creation time", () => {
+    const sorted = sortThreadsForSidebar([
+      {
+        id: "malformed",
+        createdAt: "2026-03-09T12:00:00.000Z",
+        latestUserMessageAt: "not-a-timestamp",
+      },
+      sortable({ id: "older", createdAt: "2026-03-09T10:00:00.000Z" }),
+    ]);
+
+    expect(sorted.map((thread) => thread.id)).toEqual(["malformed", "older"]);
+  });
+});
+
+describe("activeThreadAnchorTimestamp", () => {
+  it("returns the same instant the row sorts by, so label and order agree", () => {
+    const thread = {
+      createdAt: "2026-03-06T08:00:00.000Z",
+      latestUserMessageAt: "2026-03-09T13:00:00.000Z",
+    };
+
+    expect(activeThreadAnchorTimestamp(thread)).toBe("2026-03-09T13:00:00.000Z");
+    expect(Date.parse(activeThreadAnchorTimestamp(thread)!)).toBe(
+      activeThreadAnchorTimestampMs(thread),
+    );
+  });
+
+  it("labels a never-prompted thread by its creation time", () => {
+    expect(activeThreadAnchorTimestamp({ createdAt: "2026-03-09T12:00:00.000Z" })).toBe(
+      "2026-03-09T12:00:00.000Z",
+    );
+  });
+
+  it("skips a malformed stamp rather than labelling by it", () => {
+    expect(
+      activeThreadAnchorTimestamp({
+        createdAt: "2026-03-09T12:00:00.000Z",
+        latestUserMessageAt: "not-a-timestamp",
+      }),
+    ).toBe("2026-03-09T12:00:00.000Z");
+  });
+
+  it("returns null when every candidate is unusable", () => {
+    expect(
+      activeThreadAnchorTimestamp({ createdAt: "nope", latestUserMessageAt: "also-nope" }),
+    ).toBeNull();
   });
 });
 

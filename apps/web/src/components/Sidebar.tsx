@@ -127,6 +127,7 @@ import type { SidebarThreadSummary } from "../types";
 import { cn } from "~/lib/utils";
 import { buildThreadActionMenuItems } from "./threadActionMenu.logic";
 import {
+  activeThreadAnchorTimestamp,
   animatePinnedLayoutChanges,
   buildBulkTitleRegenerationContextMenuItem,
   filterSidebarProjectScopeItems,
@@ -225,8 +226,12 @@ function compactSidebarTimeLabel(label: string): string {
   return label.endsWith(" ago") ? label.slice(0, -4) : label;
 }
 
+// Active rows read "how long ago did I last prompt this", matching their
+// sort key: both go through activeThreadAnchorTimestamp so label and order
+// can't disagree. Labelling by updatedAt instead would let agent activity
+// move the number without moving the row.
 function threadTimeLabel(thread: SidebarThreadSummary): string {
-  const timestamp = thread.latestUserMessageAt ?? thread.updatedAt;
+  const timestamp = activeThreadAnchorTimestamp(thread) ?? thread.updatedAt;
   return compactSidebarTimeLabel(formatRelativeTimeLabel(timestamp));
 }
 
@@ -3298,7 +3303,13 @@ export default function Sidebar() {
             return;
           }
           case "copy-thread-ref": {
-            const threadRefToken = formatThreadReference(thread.id);
+            // Always environment-qualified: copy happens before the paste
+            // target is known, so an unqualified token only resolves by luck
+            // once more than one machine is connected.
+            const threadRefToken = formatThreadReference({
+              environmentId: threadRef.environmentId,
+              threadId: thread.id,
+            });
             copyThreadRefToClipboard(threadRefToken, { threadRef: threadRefToken });
             return;
           }

@@ -1,5 +1,6 @@
 import {
   ChatAttachment,
+  ExternalThreadReference,
   CheckpointRef,
   IsoDateTime,
   MessageId,
@@ -97,6 +98,7 @@ const ProjectionQueuedPromptDbRowSchema = OrchestrationQueuedPrompt.mapFields(
   Struct.assign({
     threadId: ThreadId,
     attachments: Schema.fromJsonString(Schema.Array(ChatAttachment)),
+    threadReferences: Schema.NullOr(Schema.fromJsonString(Schema.Array(ExternalThreadReference))),
     modelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
     titleSeed: Schema.NullOr(Schema.String),
     sourceProposedPlanThreadId: Schema.NullOr(ThreadId),
@@ -133,6 +135,7 @@ function mapQueuedPromptRow(
     messageId: row.messageId,
     text: row.text,
     attachments: row.attachments,
+    ...(row.threadReferences !== null ? { threadReferences: row.threadReferences } : {}),
     ...(row.modelSelection !== null ? { modelSelection: row.modelSelection } : {}),
     ...(row.titleSeed !== null ? { titleSeed: row.titleSeed } : {}),
     runtimeMode: row.runtimeMode,
@@ -638,6 +641,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           thread_id AS "threadId",
           text,
           attachments_json AS "attachments",
+          thread_references_json AS "threadReferences",
           model_selection_json AS "modelSelection",
           title_seed AS "titleSeed",
           runtime_mode AS "runtimeMode",
@@ -1122,6 +1126,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           thread_id AS "threadId",
           text,
           attachments_json AS "attachments",
+          thread_references_json AS "threadReferences",
           model_selection_json AS "modelSelection",
           title_seed AS "titleSeed",
           runtime_mode AS "runtimeMode",

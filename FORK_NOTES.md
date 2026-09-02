@@ -1084,6 +1084,62 @@ the next merge; the per-feature sections below were updated to match.
   `entities.ts`. Preserve both, and keep `primaryEnvironmentId` in `Sidebar.tsx` as the
   `??` fallback rather than the raw machine scope.
 
+### Active thread list sorts by last prompt (label and order share one resolver)
+
+- **What it is.** Upstream's active thread list sorts by **creation time**
+  (`activeThreadAnchorTimestampMs` = `max(createdAt, unsettledAt)`) while each row's time
+  label reads **last activity** (`latestUserMessageAt ?? updatedAt`). The two disagree, so
+  the list renders orders like `1d, 1d, 6h, 1d, 2d, 2d` and a thread prompted minutes ago
+  sits thirteenth between genuinely two-day-old rows. Worse for a row awaiting input: it
+  swaps the timestamp for an `Input` badge, so nothing on screen hints that it is the most
+  recently active thread in the list. The fork adds `latestUserMessageAt` to the anchor, so
+  **the last prompt the user sent decides position**, and points both the sort and the label
+  at one resolver.
+- **Why this does not reintroduce the churn upstream's comment defends against.** The
+  server derives `latestUserMessageAt` from `role === "user"` messages only
+  (`ProjectionPipeline.ts`), so agent output, tool calls, streaming deltas and approvals
+  never move it. Rows still hold their positions under a working agent; the list moves when
+  a **human** acts, in the thread that human is already looking at. Do not "simplify" the
+  anchor to `updatedAt` — that stamp bumps on every session transition and would restore
+  exactly the reflow-under-a-working-agent behaviour upstream was avoiding.
+- **The load-bearing rule: one resolver feeds both position and label.**
+  `activeThreadAnchorTimestamp` (ISO string) is the twin of
+  `activeThreadAnchorTimestampMs` (epoch ms) over the same three candidates, so a row can
+  never label itself `6h` while sorting above a `2d` neighbour. This mirrors what upstream
+  already does for the settled shelf, where `settledTimeLabel` and
+  `sortSettledThreadsForSidebar` both route through `resolveSettledTimestamp` "so label and
+  order can't disagree". **If a merge splits these apart again, the bug is back.**
+- **Newest candidate wins, not a fixed precedence.** Any of the three can be most recent: a
+  never-prompted thread anchors on `createdAt`, and an un-settle lifts a row nobody has
+  prompted since. Malformed stamps fall through rather than sinking a row to the epoch.
+- **Covers Overview.** Overview renders `Sidebar.tsx` (see the Overview note above), so this
+  is the sort the cross-machine view uses. Note that Overview merges machines, which makes
+  the one remaining unprompted jump more visible: a queued prompt lands as a user message at
+  **drain** time (`decider.ts`, `thread.turn.start`), so a thread can rise minutes after it
+  was queued, as can a prompt sent from another device.
+- **Not covered: the project-tree sidebar.** `LegacySidebar.tsx` already sorted by last user
+  message — its `sidebarThreadSortOrder` setting defaults to `"updated_at"`, which
+  `getThreadSortTimestamp` maps to `getLatestUserMessageTimestamp`. This change is what
+  brings the flat sidebar in line with it, not a divergence from it.
+- Files:
+  - `packages/client-runtime/src/state/threadSort.ts` — **modified**: `latestUserMessageAt`
+    added to `activeThreadAnchorTimestampMs`, new `activeThreadAnchorTimestamp` twin and
+    `ActiveThreadAnchorInput` type. Shared by web and mobile.
+  - `apps/web/src/components/Sidebar.logic.ts` (+ test) — **modified**:
+    `sortThreadsForSidebar` accepts `latestUserMessageAt`; re-exports both anchor helpers.
+  - `apps/web/src/components/Sidebar.tsx` — **modified**: `threadTimeLabel` uses the shared
+    resolver instead of `latestUserMessageAt ?? updatedAt`.
+  - `apps/web/src/lib/threadSort.ts` — **modified**: re-export.
+  - `apps/mobile/src/features/threads/threadListV2.ts` (+ test) — **modified**:
+    `sortThreadsForListV2` accepts `latestUserMessageAt` (pinned block still outranks it).
+  - `apps/mobile/src/features/threads/thread-list-v2-items.tsx` — **modified**: both
+    `threadTimeLabel` call sites use the shared resolver.
+- **Merge seam.** Upstream owns every file here, and its comments in `Sidebar.logic.ts` /
+  `threadListV2.ts` state the _opposite_ intent ("activity NEVER reorders the list"), so an
+  upstream edit near those comments will conflict and will read as if the fork is the
+  mistake. Keep the fork's version: reverting the anchor silently restores a list whose
+  labels contradict its order.
+
 ### Desktop/backend reliability safeguards
 
 - Adds operational hardening found while debugging a local installed-app crash
@@ -1422,24 +1478,75 @@ RootStackType` in `src/Stack.tsx`) is unstable near its complexity limit
     and flips with unrelated byte-level changes. Trust `vp run typecheck`
     (which uses the package script); do not switch mobile to tsgo.
 
-### Thread references (`@thread_ref:<id>`)
+### Thread references (`@thread_ref:<environmentId>/<id>`)
 
 - A second consumer of the thread-artifact primitive: an inline
-  `@thread_ref:<id>` token in a message pulls the referenced thread's transcript
+  `@thread_ref:` token in a message pulls the referenced thread's transcript
   in as context, reusing `createThreadContextArtifact`. The full transcript is
   stored on disk and only a mandatory read/search instruction plus its absolute
   path is sent to the provider; no transcript preview is inlined. Works across
   models/providers. **Copy thread ref** in the sidebar thread context menu copies
   the token.
+- **The token is environment-qualified** (`@thread_ref:<environmentId>/<threadId>`);
+  the bare `@thread_ref:<threadId>` form still parses and means "the environment
+  this message is sent to". Copy always emits the qualified form because copy
+  happens before the paste target is known. Resolution splits by owner —
+  `partitionThreadReferences` is shared so client and server agree on the split:
+  - same-environment references stay server-resolved out of the read model;
+  - cross-environment references are resolved **by the client**, which is the
+    only party connected to both machines (known environments are client-local,
+    so no server holds another environment's endpoint or credential). It reads
+    the thread from its owner, renders the transcript with the shared
+    serializer, uploads it to the target environment through the ordinary
+    pending-attachment channel, and carries it on the turn as
+    `threadReferences`. See `docs/internals/remote.md`.
+- **Unresolvable references now fail the turn** instead of being silently
+  skipped — on the client (`ThreadReferencesUnresolvedError`, blocking the send)
+  and on the server (`ThreadReferenceUnresolvedError`, failing turn start with
+  the token named). The _implicit fork_ reference stays lenient: nobody typed
+  it, so a fork whose source was deleted still takes its turn.
 - Files:
   - `packages/shared/src/threadReference.ts` (+ `./threadReference` export in
     `package.json`, + `threadReference.test.ts`) — **fork-added**: pure token
-    format/parse (`formatThreadReference`, `parseThreadReferenceIds`).
+    format/parse (`formatThreadReference`, `parseThreadReferences`,
+    `partitionThreadReferences`, `threadReferenceKey`) and the shared
+    `THREAD_REFERENCE_INTRO` transcript header.
+  - `packages/contracts/src/orchestration.ts` — **modified**:
+    `ExternalThreadReference` plus optional `threadReferences` on the
+    `thread.turn.start` / `thread.prompt.queue` commands (client and canonical),
+    on `ThreadTurnStartRequestedPayload`, and on `OrchestrationQueuedPrompt`.
+    Turn input, deliberately not message content.
+  - `packages/client-runtime/src/state/externalThreadReferences.ts` (+ subpath
+    export, + test) — **fork-added**: client-side resolution, split into a
+    capability-injected core and the real registry/loader/HTTP wiring.
+  - `packages/client-runtime/src/state/threadCommands.ts` — **modified**:
+    `startTurn`/`queuePrompt` are `createRuntimeCommand`s (not
+    `createEnvironmentCommand`s) so resolution runs in the ambient runtime,
+    which can reach every connected machine, before `runInEnvironment` dispatches
+    to the target. **Reverting them to `createEnvironmentCommand` silently drops
+    cross-machine references for every client.**
+  - `apps/server/src/orchestration/Normalizer.ts` — **modified**: the pending
+    attachment claim is extracted as `claimUploadedAttachment` and reused for
+    reference transcripts (and released with them in
+    `cleanupFailedUploadedAttachments`).
+  - `apps/server/src/orchestration/decider.ts`,
+    `Layers/ProjectionPipeline.ts`, `Layers/ProjectionSnapshotQuery.ts`,
+    migration `048_ProjectionQueuedPromptThreadReferences` — **modified**: carry
+    `threadReferences` through the queued-prompt projection. The command read
+    model is hydrated from SQL on boot, so without the column a queued prompt
+    would lose its references across a restart.
+  - `apps/server/src/threadContextArtifact.ts` — **modified**:
+    `resolveThreadContextArtifact` describes an already-uploaded transcript so
+    local and cross-environment references reach the provider through one path.
+  - `apps/server/src/environment/ServerEnvironment.ts` — **modified**:
+    `identityLayerTest` for harnesses that only need "which machine am I".
   - `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts` —
     **modified**: `buildSendTurnRequestForThread` parses `@thread_ref` tokens
-    from the message text, resolves each thread (skips self/unknown, caps at
-    `MAX_THREAD_REFERENCES`), persists a complete transcript artifact per
-    reference, and appends their path-only instructions to the provider prompt.
+    from the message text, splits them against `ServerEnvironmentIdentity`'s
+    environment id, resolves same-machine threads (skips self, caps at
+    `MAX_THREAD_REFERENCES` across both kinds), pairs cross-machine ones with
+    the client-supplied transcripts, and appends their path-only instructions to
+    the provider prompt.
   - `apps/web/src/components/threadActionMenu.logic.ts` — **modified**:
     `copy-thread-ref` id + item — since 2026-08-26 a **child of upstream's `copy`
     submenu**; handled in `Sidebar.tsx` and `useThreadActionMenu.ts`, each with their own
@@ -1457,7 +1564,10 @@ RootStackType` in `src/Stack.tsx`) is unstable near its complexity limit
 - **Merge guard:** `ProviderCommandReactor.test.ts` has a regression test
   ("stores and path-references a thread transcript when a message contains
   thread_ref:<id>") alongside fork tests for the same-provider,
-  cross-provider, and queued-prompt paths. All four assert the same
+  cross-provider, and queued-prompt paths, plus four for the cross-machine
+  split (client-supplied transcript, a reference naming this machine resolving
+  locally, an unresolved cross-environment reference failing the turn, and a
+  fork whose source was deleted still starting). All four original assert the same
   `referenced-thread-<id>.md` artifact pipeline, and fail if an upstream merge
   drops or splits the reactor wiring. The pure serializer/token helpers also
   have unit tests in `packages/shared` (fork-added files, so merge-safe).

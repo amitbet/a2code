@@ -2,6 +2,7 @@ import {
   type ChatAttachment,
   CommandId,
   EventId,
+  type ExternalThreadReference,
   type ModelSelection,
   type OrchestrationEvent,
   ProviderDriverKind,
@@ -14,7 +15,13 @@ import {
 } from "@t3tools/contracts";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
-import { parseThreadReferenceIds } from "@t3tools/shared/threadReference";
+import {
+  formatThreadReference,
+  parseThreadReferences,
+  partitionThreadReferences,
+  THREAD_REFERENCE_INTRO,
+  threadReferenceKey,
+} from "@t3tools/shared/threadReference";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
@@ -52,8 +59,10 @@ import {
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import { ServerConfig } from "../../config.ts";
+import { ServerEnvironmentIdentity } from "../../environment/ServerEnvironment.ts";
 import {
   createThreadContextArtifact,
+  resolveThreadContextArtifact,
   type ThreadContextArtifact,
 } from "../../threadContextArtifact.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
@@ -225,14 +234,47 @@ function formatThreadTitleContext(messages: ReadonlyArray<ThreadTitleMessage>): 
   };
 }
 
-// Fork sources and inline `thread_ref:<id>` references share this context path:
-// persist the referenced thread's transcript, then tell the provider to read it.
-const THREAD_REFERENCE_INTRO =
-  "The user referenced another thread. The Markdown below is that thread's transcript — " +
-  "treat it as background context for the request that follows.";
 // Cap how many referenced threads a single message can pull in, to bound the
-// artifact fan-out of one turn.
+// artifact fan-out of one turn. Counted across same- and cross-environment
+// references together: the provider pays the same price either way.
 const MAX_THREAD_REFERENCES = 5;
+
+/**
+ * One reference a turn asked for, before it becomes an artifact. `local` and
+ * `implicit-fork` are resolved from this environment's read model; `external`
+ * carries a transcript the client uploaded for a thread on another machine;
+ * `unresolved` is a cross-environment reference the client could not read.
+ */
+type RequestedThreadReference =
+  | { readonly kind: "implicit-fork"; readonly threadId: string }
+  | { readonly kind: "local"; readonly threadId: string }
+  | { readonly kind: "external"; readonly reference: ExternalThreadReference }
+  | {
+      readonly kind: "unresolved";
+      readonly reference: { readonly environmentId: string; readonly threadId: string };
+    };
+
+/**
+ * A `@thread_ref:` the user asked for that could not be turned into a
+ * transcript. Fails the turn instead of running it a context short: the user
+ * asked for that thread's history, and an agent answering without it answers
+ * confidently from a hole.
+ *
+ * The implicit fork reference is exempt — nobody typed it, and a fork whose
+ * source was deleted should still be able to take a turn.
+ */
+export class ThreadReferenceUnresolvedError extends Schema.TaggedErrorClass<ThreadReferenceUnresolvedError>()(
+  "ThreadReferenceUnresolvedError",
+  {
+    reference: Schema.String,
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}
+const isThreadReferenceUnresolvedError = Schema.is(ThreadReferenceUnresolvedError);
 
 function formatThreadContextPathInstructions(
   artifacts: ReadonlyArray<ThreadContextArtifact>,
@@ -351,6 +393,8 @@ const make = Effect.gen(function* () {
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
+  // Which `@thread_ref:<environmentId>/<threadId>` tokens name this machine.
+  const environmentId = yield* (yield* ServerEnvironmentIdentity).getEnvironmentId;
   const serverCommandId = (tag: string) =>
     crypto.randomUUIDv4.pipe(Effect.map((uuid) => CommandId.make(`server:${tag}:${uuid}`)));
   const serverEventId = () => crypto.randomUUIDv4.pipe(Effect.map(EventId.make));
@@ -411,6 +455,9 @@ const make = Effect.gen(function* () {
 
   const formatFailureDetail = (cause: Cause.Cause<unknown>): string => {
     const failReason = cause.reasons.find(Cause.isFailReason);
+    if (isThreadReferenceUnresolvedError(failReason?.error)) {
+      return failReason.error.detail;
+    }
     const providerError = isProviderAdapterRequestError(failReason?.error)
       ? failReason.error
       : undefined;
@@ -822,6 +869,8 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly messageText: string;
     readonly attachments?: ReadonlyArray<ChatAttachment>;
+    /** Transcripts the client resolved for cross-environment references. */
+    readonly threadReferences?: ReadonlyArray<ExternalThreadReference>;
     readonly modelSelection?: ModelSelection;
     readonly interactionMode?: "default" | "plan";
     readonly createdAt: string;
@@ -845,23 +894,93 @@ const make = Effect.gen(function* () {
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
-    // Forks and explicit `@thread_ref:<id>` tokens use one reference pipeline.
-    // Put the implicit fork reference first so it survives the per-turn cap,
-    // and de-duplicate it when the prompt also references the source explicitly.
-    const referencedThreadIds = [
-      ...(isFirstUserMessageTurn && forkedFromId !== undefined ? [forkedFromId] : []),
-      ...parseThreadReferenceIds(input.messageText),
-    ]
-      .filter(
-        (referencedId, index, all) =>
-          referencedId !== input.threadId && all.indexOf(referencedId) === index,
-      )
-      .slice(0, MAX_THREAD_REFERENCES);
-    const referenceArtifacts: ThreadContextArtifact[] = [];
-    for (const referencedId of referencedThreadIds) {
-      const referenced = yield* resolveThread(ThreadId.make(referencedId));
-      if (!referenced) {
+    // Forks and explicit `@thread_ref:` tokens use one reference pipeline.
+    // Same-environment references are read out of the read model here;
+    // cross-environment ones arrive as transcripts the client already uploaded,
+    // because only the client is connected to the other machine.
+    const parsedReferences = partitionThreadReferences(
+      parseThreadReferences(input.messageText),
+      environmentId,
+    );
+    const suppliedReferences = new Map(
+      (input.threadReferences ?? []).map((reference) => [threadReferenceKey(reference), reference]),
+    );
+    // The implicit fork reference goes first so it survives the per-turn cap
+    // and de-duplicates against an explicit reference to the same source.
+    const requestedReferences: ReadonlyArray<RequestedThreadReference> = [
+      ...(isFirstUserMessageTurn && forkedFromId !== undefined
+        ? [{ kind: "implicit-fork" as const, threadId: forkedFromId }]
+        : []),
+      ...parsedReferences.local.map(
+        (reference): RequestedThreadReference => ({
+          kind: "local",
+          threadId: reference.threadId,
+        }),
+      ),
+      ...parsedReferences.foreign.map((reference): RequestedThreadReference => {
+        const supplied = suppliedReferences.get(threadReferenceKey(reference));
+        // No transcript means the client could not read the other machine.
+        return supplied === undefined
+          ? { kind: "unresolved", reference }
+          : { kind: "external", reference: supplied };
+      }),
+    ];
+
+    const orderedReferences: RequestedThreadReference[] = [];
+    const seenReferenceKeys = new Set<string>();
+    for (const entry of requestedReferences) {
+      if (entry.kind !== "external" && entry.kind !== "unresolved") {
+        if (entry.threadId === input.threadId) {
+          continue;
+        }
+      }
+      const key =
+        entry.kind === "external" || entry.kind === "unresolved"
+          ? threadReferenceKey(entry.reference)
+          : threadReferenceKey({ threadId: entry.threadId });
+      if (seenReferenceKeys.has(key)) {
         continue;
+      }
+      seenReferenceKeys.add(key);
+      orderedReferences.push(entry);
+    }
+
+    // Cap first, then insist the survivors resolve: a reference the cap drops
+    // was never going to reach the provider, so failing the turn over it would
+    // be noise.
+    const referenceArtifacts: ThreadContextArtifact[] = [];
+    for (const entry of orderedReferences.slice(0, MAX_THREAD_REFERENCES)) {
+      if (entry.kind === "unresolved") {
+        return yield* new ThreadReferenceUnresolvedError({
+          reference: formatThreadReference(entry.reference),
+          detail: `Could not read the referenced thread on machine ${entry.reference.environmentId}: it is not reachable from this client, or the thread no longer exists.`,
+        });
+      }
+      if (entry.kind === "external") {
+        const referenceArtifact = yield* resolveThreadContextArtifact({
+          attachmentsDir: serverConfig.attachmentsDir,
+          attachment: entry.reference.attachment,
+          fileSystem,
+        });
+        if (referenceArtifact === undefined) {
+          return yield* new ThreadReferenceUnresolvedError({
+            reference: formatThreadReference(entry.reference),
+            detail: `The transcript uploaded for the referenced thread on ${entry.reference.environmentId} is missing; send the message again.`,
+          });
+        }
+        referenceArtifacts.push(referenceArtifact);
+        continue;
+      }
+
+      const referenced = yield* resolveThread(ThreadId.make(entry.threadId));
+      if (!referenced) {
+        if (entry.kind === "implicit-fork") {
+          continue;
+        }
+        return yield* new ThreadReferenceUnresolvedError({
+          reference: formatThreadReference({ threadId: entry.threadId }),
+          detail: `Referenced thread '${entry.threadId}' does not exist on this machine.`,
+        });
       }
       const referenceArtifact = yield* createThreadContextArtifact({
         attachmentsDir: serverConfig.attachmentsDir,
@@ -869,7 +988,7 @@ const make = Effect.gen(function* () {
         messages: referenced.messages,
         activities: referenced.activities,
         latestTurn: referenced.latestTurn,
-        fileName: `referenced-thread-${referencedId}.md`,
+        fileName: `referenced-thread-${entry.threadId}.md`,
         sourceTitle: referenced.title,
         intro: THREAD_REFERENCE_INTRO,
         fileSystem,
@@ -878,14 +997,21 @@ const make = Effect.gen(function* () {
         Effect.catchCause((cause) =>
           Effect.logWarning("provider command reactor failed to build thread reference artifact", {
             threadId: input.threadId,
-            referencedThreadId: referencedId,
+            referencedThreadId: entry.threadId,
             cause: Cause.pretty(cause),
           }).pipe(Effect.as(undefined)),
         ),
       );
-      if (referenceArtifact !== undefined) {
-        referenceArtifacts.push(referenceArtifact);
+      if (referenceArtifact === undefined) {
+        if (entry.kind === "implicit-fork") {
+          continue;
+        }
+        return yield* new ThreadReferenceUnresolvedError({
+          reference: formatThreadReference({ threadId: entry.threadId }),
+          detail: `Could not build a transcript for referenced thread '${entry.threadId}'.`,
+        });
       }
+      referenceArtifacts.push(referenceArtifact);
     }
     const contextPathInstructions = formatThreadContextPathInstructions(referenceArtifacts);
     const normalizedInput = toNonEmptyProviderInput(
@@ -1314,6 +1440,9 @@ const make = Effect.gen(function* () {
       threadId: event.payload.threadId,
       messageText: message.text,
       ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+      ...(event.payload.threadReferences !== undefined
+        ? { threadReferences: event.payload.threadReferences }
+        : {}),
       ...(event.payload.modelSelection !== undefined
         ? { modelSelection: event.payload.modelSelection }
         : {}),
@@ -1346,6 +1475,9 @@ const make = Effect.gen(function* () {
         text: event.payload.prompt.text,
         attachments: [...event.payload.prompt.attachments],
       },
+      ...(event.payload.prompt.threadReferences !== undefined
+        ? { threadReferences: event.payload.prompt.threadReferences }
+        : {}),
       ...(event.payload.prompt.modelSelection !== undefined
         ? { modelSelection: event.payload.prompt.modelSelection }
         : {}),

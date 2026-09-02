@@ -79,6 +79,10 @@
       "types": "./src/state/assets.ts",
       "default": "./src/state/assets.ts"
     },
+    "./state/external-thread-references": {
+      "types": "./src/state/externalThreadReferences.ts",
+      "default": "./src/state/externalThreadReferences.ts"
+    },
     "./state/attachments": {
       "types": "./src/state/attachments.ts",
       "default": "./src/state/attachments.ts"

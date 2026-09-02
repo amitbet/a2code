@@ -133,6 +133,32 @@ and correlation only, never for routing. `Project` remains environment-local: a 
 remote clone are different projects that may share a `RepositoryIdentity`, and threads bind to one
 project in one environment.
 
+### Cross-environment thread references
+
+`@thread_ref:` is the one feature that spans two environments, and it does so without breaking the
+one-runtime-boundary rule: the client resolves the half a server cannot.
+
+The token is environment-qualified — `@thread_ref:<environmentId>/<threadId>`
+([`threadReference.ts`](../../packages/shared/src/threadReference.ts)); the bare
+`@thread_ref:<threadId>` form still parses and means "this environment".
+`partitionThreadReferences` splits a message's references against the target environment's id, and
+both sides call it so they agree on who owns what:
+
+- **Same environment.** `ProviderCommandReactor` reads the thread out of its own read model and
+  writes a transcript artifact, then hands the provider the path. Nothing crosses the wire.
+- **Another environment.** The server has no endpoint or credential for that machine — known
+  environments are client-local — so the client resolves it before dispatch
+  ([`externalThreadReferences.ts`](../../packages/client-runtime/src/state/externalThreadReferences.ts)):
+  read the thread from its owner over `GET /api/orchestration/threads/:threadId`, render the
+  transcript with the shared serializer, upload it to the target environment through the ordinary
+  pending-attachment channel, and carry the resulting attachment on the turn as
+  `threadReferences`. The server claims that attachment like any other (`Normalizer`) and
+  path-references it exactly as it would a local transcript.
+
+Resolution lives in the thread commands, not in a client's send path, so every client and entry
+point gets it. An unresolvable reference fails the send with the token named: both sides refuse to
+run a turn missing context the user attached, rather than letting the agent answer from a hole.
+
 ## Access methods
 
 Access answers one question: how does the client speak WebSocket to a T3 server? It does not answer

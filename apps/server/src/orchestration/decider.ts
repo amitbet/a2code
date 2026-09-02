@@ -1054,6 +1054,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           messageId: command.message.messageId,
+          ...(command.threadReferences !== undefined
+            ? { threadReferences: command.threadReferences }
+            : {}),
           ...(command.modelSelection !== undefined
             ? { modelSelection: command.modelSelection }
             : {}),
@@ -1125,6 +1128,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             messageId: command.message.messageId,
             text: command.message.text,
             attachments: command.message.attachments,
+            ...(command.threadReferences !== undefined
+              ? { threadReferences: command.threadReferences }
+              : {}),
             ...(command.modelSelection !== undefined
               ? { modelSelection: command.modelSelection }
               : {}),
@@ -1237,6 +1243,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
               text: prompt.text,
               attachments: [...prompt.attachments],
             },
+            ...(prompt.threadReferences !== undefined
+              ? { threadReferences: prompt.threadReferences }
+              : {}),
             ...(prompt.modelSelection !== undefined
               ? { modelSelection: prompt.modelSelection }
               : {}),

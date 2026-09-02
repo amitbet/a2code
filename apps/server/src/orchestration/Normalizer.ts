@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import {
+  type ChatAttachment,
   type ClientOrchestrationCommand,
   type IsoDateTime,
   type OrchestrationCommand,
@@ -139,68 +140,83 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
     }
 
     const claimedAttachmentPaths: string[] = [];
+
+    /**
+     * Move an already-uploaded attachment from the pending namespace into this
+     * thread's, validating that the bytes exist and match what the client
+     * claimed. Shared by user attachments and cross-environment thread
+     * reference transcripts: both arrive through the upload channel, so both
+     * have to be claimed the same way or a reference could point at a pending
+     * file that the sweeper is free to delete.
+     */
+    const claimUploadedAttachment = Effect.fnUntraced(function* <A extends ChatAttachment>(
+      attachment: A,
+    ) {
+      const claim = planAttachmentClaim({
+        attachmentsDir: serverConfig.attachmentsDir,
+        threadId: canonicalCommand.threadId,
+        attachmentId: attachment.id,
+      });
+      if (!claim.ok) {
+        return yield* new OrchestrationDispatchCommandError({
+          message: `Attachment '${attachment.name}' cannot be sent: ${claim.reason}.`,
+        });
+      }
+
+      const info = yield* fileSystem.stat(claim.currentPath).pipe(
+        Effect.mapError(
+          (cause) =>
+            new OrchestrationDispatchCommandError({
+              message: `Attachment '${attachment.name}' cannot be sent: attachment not found.`,
+              cause,
+            }),
+        ),
+      );
+      if (Number(info.size) !== attachment.sizeBytes) {
+        return yield* new OrchestrationDispatchCommandError({
+          message: `Attachment '${attachment.name}' cannot be sent: stored size does not match.`,
+        });
+      }
+
+      const normalizedAttachment = {
+        ...attachment,
+        id: claim.finalId,
+        mimeType: attachment.mimeType.toLowerCase(),
+      };
+      const expectedPath = resolveAttachmentPath({
+        attachmentsDir: serverConfig.attachmentsDir,
+        attachment: normalizedAttachment,
+      });
+      if (expectedPath !== claim.finalPath) {
+        return yield* new OrchestrationDispatchCommandError({
+          message: `Attachment '${attachment.name}' cannot be sent: attachment type does not match the upload.`,
+        });
+      }
+
+      // Keep the pending copy until the turn succeeds. A failed thread
+      // bootstrap can then retry with a fresh thread id. A copy, not a
+      // hard link: an agent editing the delivered file in place must not
+      // mutate the retry source.
+      yield* fileSystem.copyFile(claim.currentPath, claim.finalPath).pipe(
+        Effect.mapError(
+          (cause) =>
+            new OrchestrationDispatchCommandError({
+              message: `Failed to claim attachment '${attachment.name}' for this thread.`,
+              cause,
+            }),
+        ),
+      );
+      claimedAttachmentPaths.push(claim.finalPath);
+
+      return normalizedAttachment;
+    });
+
     const normalizedAttachments = yield* Effect.forEach(
       canonicalCommand.message.attachments,
       (attachment) =>
         Effect.gen(function* () {
           if (!("dataUrl" in attachment)) {
-            const claim = planAttachmentClaim({
-              attachmentsDir: serverConfig.attachmentsDir,
-              threadId: canonicalCommand.threadId,
-              attachmentId: attachment.id,
-            });
-            if (!claim.ok) {
-              return yield* new OrchestrationDispatchCommandError({
-                message: `Attachment '${attachment.name}' cannot be sent: ${claim.reason}.`,
-              });
-            }
-
-            const info = yield* fileSystem.stat(claim.currentPath).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new OrchestrationDispatchCommandError({
-                    message: `Attachment '${attachment.name}' cannot be sent: attachment not found.`,
-                    cause,
-                  }),
-              ),
-            );
-            if (Number(info.size) !== attachment.sizeBytes) {
-              return yield* new OrchestrationDispatchCommandError({
-                message: `Attachment '${attachment.name}' cannot be sent: stored size does not match.`,
-              });
-            }
-
-            const normalizedAttachment = {
-              ...attachment,
-              id: claim.finalId,
-              mimeType: attachment.mimeType.toLowerCase(),
-            };
-            const expectedPath = resolveAttachmentPath({
-              attachmentsDir: serverConfig.attachmentsDir,
-              attachment: normalizedAttachment,
-            });
-            if (expectedPath !== claim.finalPath) {
-              return yield* new OrchestrationDispatchCommandError({
-                message: `Attachment '${attachment.name}' cannot be sent: attachment type does not match the upload.`,
-              });
-            }
-
-            // Keep the pending copy until the turn succeeds. A failed thread
-            // bootstrap can then retry with a fresh thread id. A copy, not a
-            // hard link: an agent editing the delivered file in place must not
-            // mutate the retry source.
-            yield* fileSystem.copyFile(claim.currentPath, claim.finalPath).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new OrchestrationDispatchCommandError({
-                    message: `Failed to claim attachment '${attachment.name}' for this thread.`,
-                    cause,
-                  }),
-              ),
-            );
-            claimedAttachmentPaths.push(claim.finalPath);
-
-            return normalizedAttachment;
+            return yield* claimUploadedAttachment(attachment);
           }
 
           const parsed = parseBase64DataUrl(attachment.dataUrl);
@@ -274,12 +290,27 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
       { concurrency: 1 },
     ).pipe(Effect.tapError(() => removeClaimedAttachmentPaths(claimedAttachmentPaths)));
 
+    const normalizedThreadReferences =
+      canonicalCommand.threadReferences === undefined
+        ? undefined
+        : yield* Effect.forEach(
+            canonicalCommand.threadReferences,
+            (reference) =>
+              claimUploadedAttachment(reference.attachment).pipe(
+                Effect.map((attachment) => ({ ...reference, attachment })),
+              ),
+            { concurrency: 1 },
+          ).pipe(Effect.tapError(() => removeClaimedAttachmentPaths(claimedAttachmentPaths)));
+
     return {
       ...canonicalCommand,
       message: {
         ...canonicalCommand.message,
         attachments: normalizedAttachments,
       },
+      ...(normalizedThreadReferences === undefined
+        ? {}
+        : { threadReferences: normalizedThreadReferences }),
     } satisfies OrchestrationCommand;
   });
 
@@ -292,16 +323,16 @@ export const cleanupFailedUploadedAttachments = Effect.fn(
 
   const serverConfig = yield* ServerConfig;
   const claimedPaths: string[] = [];
-  for (const [index, attachment] of normalizedCommand.message.attachments.entries()) {
-    const original = command.message.attachments[index];
+  const collectClaimedPath = (
+    original: { readonly id: string } | undefined,
+    attachment: Parameters<typeof resolveAttachmentPath>[0]["attachment"],
+  ) => {
     if (
       !original ||
-      "dataUrl" in original ||
       parseThreadSegmentFromAttachmentId(original.id) !== PENDING_ATTACHMENT_THREAD_SEGMENT
     ) {
-      continue;
+      return;
     }
-
     const claimedPath = resolveAttachmentPath({
       attachmentsDir: serverConfig.attachmentsDir,
       attachment,
@@ -309,6 +340,18 @@ export const cleanupFailedUploadedAttachments = Effect.fn(
     if (claimedPath) {
       claimedPaths.push(claimedPath);
     }
+  };
+  for (const [index, attachment] of normalizedCommand.message.attachments.entries()) {
+    const original = command.message.attachments[index];
+    if (original && "dataUrl" in original) {
+      continue;
+    }
+    collectClaimedPath(original, attachment);
+  }
+  // Reference transcripts are claimed the same way, so a failed turn has to
+  // release their copies too or every retry leaks one.
+  for (const [index, reference] of (normalizedCommand.threadReferences ?? []).entries()) {
+    collectClaimedPath(command.threadReferences?.[index]?.attachment, reference.attachment);
   }
   yield* removeClaimedAttachmentPaths(claimedPaths);
 });

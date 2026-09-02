@@ -297,7 +297,13 @@ export function useThreadActionMenu(input: {
             return;
           }
           case "copy-thread-ref": {
-            const threadRefToken = formatThreadReference(thread.id);
+            // Always environment-qualified: copy happens before the paste
+            // target is known, so an unqualified token only resolves by luck
+            // once more than one machine is connected.
+            const threadRefToken = formatThreadReference({
+              environmentId: threadRef.environmentId,
+              threadId: thread.id,
+            });
             copyThreadRefToClipboard(threadRefToken, { threadRef: threadRefToken });
             return;
           }

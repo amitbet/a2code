@@ -35,6 +35,7 @@ import { it as effectIt } from "@effect/vitest";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { deriveServerPaths, ServerConfig } from "../../config.ts";
+import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import { TextGenerationError } from "@t3tools/contracts";
 import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
@@ -63,6 +64,10 @@ import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts"
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Clock from "effect/Clock";
 import { ServerSettingsService } from "../../serverSettings.ts";
+
+// This test server's identity, so `@thread_ref:<environmentId>/<threadId>`
+// tokens can name it (local) or another machine (cross-environment).
+const TEST_ENVIRONMENT_ID = "env-local";
 import { ServerActivation } from "../../serverActivation.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
@@ -463,6 +468,7 @@ describe("ProviderCommandReactor", () => {
         }),
       ),
       Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(ServerEnvironment.identityLayerTest(TEST_ENVIRONMENT_ID)),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
     );
@@ -2384,6 +2390,225 @@ describe("ProviderCommandReactor", () => {
     expect(transcript).toContain("Referenced billing reconciliation context.");
     expect(transcript).toContain("billing.csv (text/csv, 27 bytes)");
     expect(transcript).toContain(sourceAttachmentPath);
+  });
+
+  it("path-references a client-supplied transcript for a thread on another machine", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    // The client fetched the remote thread, rendered it, and uploaded it here;
+    // by the time the reactor runs, the transcript is just a file on disk.
+    const transcriptContents = "# Thread transcript\n\nThe staging cluster is us-east-2.\n";
+    const referenceAttachment = {
+      type: "file" as const,
+      id: "thread_ref_target_remote_transcript_md",
+      name: "referenced-thread-thread-remote.md",
+      mimeType: "text/markdown",
+      sizeBytes: Buffer.byteLength(transcriptContents),
+    };
+    const transcriptPath = NodePath.join(
+      harness.stateDir,
+      "attachments",
+      `${referenceAttachment.id}.md`,
+    );
+    NodeFS.mkdirSync(NodePath.dirname(transcriptPath), { recursive: true });
+    NodeFS.writeFileSync(transcriptPath, transcriptContents);
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-with-remote-ref"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-with-remote-ref"),
+          role: "user",
+          text: "See @thread_ref:env-remote/thread-remote for prior context.",
+          attachments: [],
+        },
+        threadReferences: [
+          {
+            environmentId: EnvironmentId.make("env-remote"),
+            threadId: ThreadId.make("thread-remote"),
+            sourceTitle: "Staging rollout",
+            attachment: referenceAttachment,
+          },
+        ],
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    const sendInput = harness.sendTurn.mock.calls[0]?.[0] as
+      | { input?: string; attachments?: ReadonlyArray<unknown> }
+      | undefined;
+    // Path-referenced, not inlined — same contract as a same-machine reference.
+    expect(sendInput?.attachments).toBeUndefined();
+    expect(sendInput?.input).toContain("Their contents are intentionally not inlined.");
+    expect(sendInput?.input).not.toContain("The staging cluster is us-east-2.");
+    expect(
+      contextArtifactPathFromInput(sendInput?.input, "referenced-thread-thread-remote.md"),
+    ).toBe(transcriptPath);
+  });
+
+  it("resolves a reference that names this machine out of the local read model", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-self-ref-source"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-self-ref-source"),
+          role: "user",
+          text: "The rollback window is 30 minutes.",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    harness.sendTurn.mockClear();
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-thread-create-self-ref"),
+        threadId: ThreadId.make("thread-self-ref-target"),
+        projectId: asProjectId("project-1"),
+        title: "Referencing thread",
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      }),
+    );
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-with-self-ref"),
+        threadId: ThreadId.make("thread-self-ref-target"),
+        message: {
+          messageId: asMessageId("user-message-with-self-ref"),
+          role: "user",
+          // Qualified with this server's own environment id: the client had no
+          // way to know where the token would be pasted.
+          text: `See @thread_ref:${TEST_ENVIRONMENT_ID}/thread-1 for prior context.`,
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    const sendInput = harness.sendTurn.mock.calls[0]?.[0] as { input?: string } | undefined;
+    const artifactPath = contextArtifactPathFromInput(
+      sendInput?.input,
+      "referenced-thread-thread-1.md",
+    );
+    expect(artifactPath).toBeTruthy();
+    expect(NodeFS.readFileSync(artifactPath!, "utf8")).toContain(
+      "The rollback window is 30 minutes.",
+    );
+  });
+
+  it("fails the turn when a cross-environment reference has no transcript", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-unresolved-ref"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-unresolved-ref"),
+          role: "user",
+          text: "See @thread_ref:env-unreachable/thread-remote for prior context.",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+      return (
+        thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ??
+        false
+      );
+    });
+
+    // The turn never reaches the provider: answering without the context the
+    // user asked for is worse than not answering.
+    expect(harness.sendTurn.mock.calls.length).toBe(0);
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(
+      thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
+    ).toMatchObject({
+      payload: {
+        detail: expect.stringContaining("env-unreachable"),
+      },
+    });
+  });
+
+  it("still starts a fork whose source thread was deleted", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.fork",
+        commandId: CommandId.make("cmd-thread-fork-orphan"),
+        threadId: ThreadId.make("thread-orphan-fork"),
+        sourceThreadId: ThreadId.make("thread-1"),
+        title: "Thread (fork)",
+        createdAt: now,
+      }),
+    );
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.delete",
+        commandId: CommandId.make("cmd-thread-delete-fork-source"),
+        threadId: ThreadId.make("thread-1"),
+      }),
+    );
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-orphan-fork"),
+        threadId: ThreadId.make("thread-orphan-fork"),
+        message: {
+          messageId: asMessageId("user-message-orphan-fork"),
+          role: "user",
+          text: "Carry on without the source.",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    // Nobody typed the implicit fork reference, so a missing source is not the
+    // user's problem: the turn runs without it instead of failing.
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const sendInput = harness.sendTurn.mock.calls[0]?.[0] as { input?: string } | undefined;
+    expect(sendInput?.input).toContain("Carry on without the source.");
+    expect(sendInput?.input).not.toContain("intentionally not inlined");
   });
 
   it("reuses the same provider session when runtime mode is unchanged", async () => {

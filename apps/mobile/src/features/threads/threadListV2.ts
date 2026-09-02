@@ -162,13 +162,12 @@ function firstValidTimestampMs(...candidates: ReadonlyArray<string | null | unde
 
 /**
  * v2 sort: an explicitly pinned block first (most recently pinned on top),
- * then static order, newest anchor on top. Within each block activity NEVER
- * reorders the list — a row holds its position between lifecycle transitions
- * (or an explicit pin/unpin). The anchor is creation time until an un-settle
- * re-anchors it (see activeThreadAnchorTimestampMs), so an un-settled thread
- * surfaces at the top of its block instead of sinking back to its
- * creation-order slot. Mirrors web's sortThreadsForSidebar plus the pin-aware
- * v1 pinned block.
+ * then newest anchor on top, where the anchor is the last prompt the user
+ * sent (falling back to creation, lifted by an un-settle — see
+ * activeThreadAnchorTimestampMs). Within each block AGENT activity never
+ * reorders the list; only a user message moves a row, so nothing shifts
+ * under a working agent. Mirrors web's sortThreadsForSidebar plus the
+ * pin-aware v1 pinned block.
  */
 export function sortThreadsForListV2<
   T extends {
@@ -176,6 +175,7 @@ export function sortThreadsForListV2<
     readonly createdAt: string;
     readonly pinnedAt?: string | null | undefined;
     readonly unsettledAt?: string | null | undefined;
+    readonly latestUserMessageAt?: string | null | undefined;
   },
 >(threads: readonly T[]): T[] {
   // .sort() on a copy, not .toSorted(): Hermes doesn't ship the ES2023

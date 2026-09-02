@@ -1,11 +1,16 @@
+import type { EnvironmentId, ExternalThreadReference } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
+import * as Effect from "effect/Effect";
 import { Atom } from "effect/unstable/reactivity";
+import type { HttpClient } from "effect/unstable/http";
 import { WS_METHODS } from "@t3tools/contracts";
 
 import {
   createAtomCommandScheduler,
   createEnvironmentCommand,
   createEnvironmentRpcCommand,
+  createRuntimeCommand,
+  runInEnvironment,
 } from "./runtime.ts";
 import {
   type ArchiveThreadInput,
@@ -60,6 +65,8 @@ import {
   updateThreadMetadata,
 } from "../operations/commands.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
+import { resolveExternalThreadReferences } from "./externalThreadReferences.ts";
+import { ThreadSnapshotLoader } from "./threadSnapshotHttp.ts";
 
 export type {
   ArchiveThreadInput,
@@ -89,8 +96,46 @@ export type {
   UpdateThreadMetadataInput,
 } from "../operations/commands.ts";
 
+/**
+ * Resolve the message's cross-environment `@thread_ref:` tokens, then dispatch
+ * to the target environment. Resolution runs in the ambient runtime, which can
+ * reach every connected machine, rather than inside the target environment,
+ * which cannot. Both send paths funnel through here — as does every client,
+ * entry point and keybinding above them — so an unresolvable reference fails
+ * the send instead of quietly dropping context.
+ */
+function withResolvedThreadReferences<
+  Input extends {
+    readonly message: { readonly text: string };
+    readonly threadReferences?: ReadonlyArray<ExternalThreadReference> | undefined;
+  },
+  A,
+  E,
+  R,
+>(
+  target: { readonly environmentId: EnvironmentId; readonly input: Input },
+  dispatch: (input: Input) => Effect.Effect<A, E, R>,
+) {
+  return resolveExternalThreadReferences({
+    text: target.input.message.text,
+    targetEnvironmentId: target.environmentId,
+  }).pipe(
+    Effect.flatMap((threadReferences) =>
+      runInEnvironment(
+        target.environmentId,
+        dispatch(
+          threadReferences.length === 0 ? target.input : { ...target.input, threadReferences },
+        ),
+      ),
+    ),
+  );
+}
+
 export function createThreadEnvironmentAtoms<R, E>(
-  runtime: Atom.AtomRuntime<EnvironmentRegistry | Crypto.Crypto | R, E>,
+  runtime: Atom.AtomRuntime<
+    EnvironmentRegistry | Crypto.Crypto | ThreadSnapshotLoader | HttpClient.HttpClient | R,
+    E
+  >,
 ) {
   const scheduler = createAtomCommandScheduler();
   const concurrency = {
@@ -195,15 +240,17 @@ export function createThreadEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
-    startTurn: createEnvironmentCommand(runtime, {
+    startTurn: createRuntimeCommand(runtime, {
       label: "environment-data:commands:thread:start-turn",
-      execute: (input: StartThreadTurnInput) => startThreadTurn(input),
+      execute: (target: { environmentId: EnvironmentId; input: StartThreadTurnInput }) =>
+        withResolvedThreadReferences(target, startThreadTurn),
       scheduler,
       concurrency,
     }),
-    queuePrompt: createEnvironmentCommand(runtime, {
+    queuePrompt: createRuntimeCommand(runtime, {
       label: "environment-data:commands:thread:queue-prompt",
-      execute: (input: QueueThreadPromptInput) => queueThreadPrompt(input),
+      execute: (target: { environmentId: EnvironmentId; input: QueueThreadPromptInput }) =>
+        withResolvedThreadReferences(target, queueThreadPrompt),
       scheduler,
       concurrency,
     }),

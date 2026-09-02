@@ -86,6 +86,19 @@ readable and T3 Code shows a warning.
 Mobile shows the full saved quote and its comment in sent messages. It does not offer
 **Cite in composer** or navigation to a quote's source.
 
+## Reference another thread
+
+Choose **Copy thread ref** from a thread's menu in the sidebar, then paste the token into any
+message. The agent is given that thread's full transcript as a file to read before it answers, so
+you can hand over earlier work without repeating it. The token stays visible in your message as
+plain text, and one message can reference up to five threads.
+
+References work across machines. Paste a ref copied on one machine into a thread on another and T3
+Code fetches the referenced transcript and hands it to the agent there — as long as this client is
+still connected to the machine that owns the thread. If it is not, the send is refused and T3 Code
+tells you which reference it could not read, rather than sending your message with the history
+missing.
+
 ## Images and videos in messages
 
 On web, desktop, and mobile, select a link to an image or video to open it inside T3 Code.

@@ -258,7 +258,7 @@ describe("resolveThreadListV2SnoozeGateExpiryMs", () => {
 });
 
 describe("sortThreadsForListV2", () => {
-  it("orders by creation time, newest first, ignoring activity", () => {
+  it("falls back to creation time, newest first, when nothing has been prompted", () => {
     const sorted = sortThreadsForListV2([
       { id: "oldest", createdAt: "2026-06-01T08:00:00.000Z" },
       { id: "newest", createdAt: "2026-06-01T12:00:00.000Z" },
@@ -301,6 +301,39 @@ describe("sortThreadsForListV2", () => {
       { id: "middle", createdAt: "2026-06-01T10:00:00.000Z" },
     ]);
     expect(sorted.map((thread) => thread.id)).toEqual(["old-unsettled", "newest", "middle"]);
+  });
+
+  it("lifts an old thread that was just prompted above newer untouched ones", () => {
+    const sorted = sortThreadsForListV2([
+      { id: "created-yesterday", createdAt: "2026-05-31T12:00:00.000Z" },
+      { id: "created-today", createdAt: "2026-06-01T12:00:00.000Z" },
+      {
+        id: "old-but-just-prompted",
+        createdAt: "2026-05-28T08:00:00.000Z",
+        latestUserMessageAt: "2026-06-01T13:00:00.000Z",
+      },
+    ]);
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      "old-but-just-prompted",
+      "created-today",
+      "created-yesterday",
+    ]);
+  });
+
+  it("keeps a prompted thread below the pinned block", () => {
+    const sorted = sortThreadsForListV2([
+      {
+        id: "just-prompted",
+        createdAt: "2026-05-28T08:00:00.000Z",
+        latestUserMessageAt: "2026-06-01T13:00:00.000Z",
+      },
+      {
+        id: "pinned-stale",
+        createdAt: "2026-05-20T08:00:00.000Z",
+        pinnedAt: "2026-05-21T08:00:00.000Z",
+      },
+    ]);
+    expect(sorted.map((thread) => thread.id)).toEqual(["pinned-stale", "just-prompted"]);
   });
 });
 

@@ -16,6 +16,7 @@
  * @module threadContextArtifact
  */
 import {
+  type ChatFileAttachment,
   type OrchestrationLatestTurn,
   type OrchestrationMessage,
   type OrchestrationThreadActivity,
@@ -135,3 +136,43 @@ export const createThreadContextArtifact = Effect.fn("createThreadContextArtifac
     absolutePath: attachmentPath,
   } satisfies ThreadContextArtifact;
 });
+
+/**
+ * Locate a transcript that was persisted elsewhere — a client-uploaded
+ * cross-environment thread reference — and describe it the same way
+ * {@link createThreadContextArtifact} describes one it just wrote, so both
+ * kinds of reference reach the provider through one code path.
+ *
+ * Returns `undefined` when the file is missing: the upload expired, the id was
+ * never claimed, or it does not belong to this environment's attachment store.
+ */
+export const resolveThreadContextArtifact = Effect.fn("resolveThreadContextArtifact")(
+  function* (input: {
+    readonly attachmentsDir: string;
+    readonly attachment: ChatFileAttachment;
+    readonly fileSystem: FileSystem.FileSystem;
+  }) {
+    const absolutePath = resolveAttachmentPath({
+      attachmentsDir: input.attachmentsDir,
+      attachment: input.attachment,
+    });
+    if (!absolutePath) {
+      return undefined;
+    }
+    const info = yield* input.fileSystem
+      .stat(absolutePath)
+      .pipe(Effect.orElseSucceed(() => undefined));
+    if (info === undefined || info.type !== "File") {
+      return undefined;
+    }
+    return {
+      id: input.attachment.id,
+      name: input.attachment.name,
+      mimeType: input.attachment.mimeType,
+      // Trust the file over the claim: the transcript the provider reads is the
+      // one on disk.
+      sizeBytes: Number(info.size),
+      absolutePath,
+    } satisfies ThreadContextArtifact;
+  },
+);

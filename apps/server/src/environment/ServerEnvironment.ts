@@ -262,6 +262,16 @@ export const make = Effect.gen(function* () {
 export const identityLayer = Layer.effect(ServerEnvironmentIdentity, makeIdentity);
 
 /**
+ * Fixed identity for tests and harnesses. The real identity is acquired from
+ * the state directory; anything that only needs "which machine am I" (thread
+ * reference resolution, for one) can take this instead of a filesystem.
+ */
+export const identityLayerTest = (environmentId = "test-environment") =>
+  Layer.succeed(ServerEnvironmentIdentity, {
+    getEnvironmentId: Effect.succeed(EnvironmentId.make(environmentId)),
+  });
+
+/**
  * ServerEnvironment is acquired from persisted filesystem and host-process
  * state. It intentionally has no fallback Layer.succeed value: callers must
  * provide the external platform services, a ServerConfig, and the

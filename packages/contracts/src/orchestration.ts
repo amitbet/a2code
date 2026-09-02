@@ -10,6 +10,7 @@ import {
   CheckpointRef,
   ClientSurface,
   CommandId,
+  EnvironmentId,
   EventId,
   IsoDateTime,
   MessageId,
@@ -304,6 +305,28 @@ export type OrchestrationProject = typeof OrchestrationProject.Type;
 export const OrchestrationMessageRole = Schema.Literals(["user", "assistant", "system"]);
 export type OrchestrationMessageRole = typeof OrchestrationMessageRole.Type;
 
+/**
+ * A cross-environment `@thread_ref:<environmentId>/<threadId>` that the client
+ * resolved before the turn: the referenced thread plus the transcript it
+ * uploaded to this environment. Only foreign references travel this way —
+ * same-environment references are read straight out of the read model, so
+ * putting their transcript on the wire would be wasted work.
+ */
+export const ExternalThreadReference = Schema.Struct({
+  /** Environment that owns the referenced thread; never this environment. */
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  /** Referenced thread's title at resolve time, for the transcript header. */
+  sourceTitle: Schema.optional(TrimmedNonEmptyString),
+  /**
+   * The rendered transcript, uploaded through the ordinary pending-attachment
+   * channel. Pending on a client command and claimed into the thread by the
+   * normalizer, exactly like a user file attachment.
+   */
+  attachment: ChatFileAttachment,
+});
+export type ExternalThreadReference = typeof ExternalThreadReference.Type;
+
 export const OrchestrationMessage = Schema.Struct({
   id: MessageId,
   role: OrchestrationMessageRole,
@@ -341,6 +364,8 @@ export const OrchestrationQueuedPrompt = Schema.Struct({
   messageId: MessageId,
   text: Schema.String,
   attachments: Schema.Array(ChatAttachment),
+  /** Carried to the turn this prompt eventually starts, like `modelSelection`. */
+  threadReferences: Schema.optional(Schema.Array(ExternalThreadReference)),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
@@ -949,6 +974,7 @@ export const ThreadTurnStartCommand = Schema.Struct({
     text: Schema.String,
     attachments: Schema.Array(ChatAttachment),
   }),
+  threadReferences: Schema.optional(Schema.Array(ExternalThreadReference)),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
@@ -970,6 +996,7 @@ const ThreadPromptQueueCommand = Schema.Struct({
     text: Schema.String,
     attachments: Schema.Array(ChatAttachment),
   }),
+  threadReferences: Schema.optional(Schema.Array(ExternalThreadReference)),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
@@ -992,6 +1019,7 @@ const ClientThreadPromptQueueCommand = Schema.Struct({
     // or already uploaded through the attachment upload channel.
     attachments: Schema.Array(Schema.Union([UploadChatAttachment, ChatAttachment])),
   }),
+  threadReferences: Schema.optional(Schema.Array(ExternalThreadReference)),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: RuntimeMode,
@@ -1038,6 +1066,7 @@ const ClientThreadTurnStartCommand = Schema.Struct({
     text: Schema.String,
     attachments: Schema.Array(Schema.Union([UploadChatAttachment, ChatAttachment])),
   }),
+  threadReferences: Schema.optional(Schema.Array(ExternalThreadReference)),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: RuntimeMode,
@@ -1450,6 +1479,13 @@ export const ThreadMessageSentPayload = Schema.Struct({
 export const ThreadTurnStartRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
+  /**
+   * Transcripts for the cross-environment `@thread_ref:` tokens in the user
+   * message, resolved by the client before dispatch. Turn input like
+   * `modelSelection`, not message content: the provider is handed their paths
+   * for this turn and the referenced threads own their own history.
+   */
+  threadReferences: Schema.optional(Schema.Array(ExternalThreadReference)),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
