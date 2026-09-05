@@ -123,6 +123,14 @@ jobs:
       - name: Align package versions to release version
         run: node scripts/update-release-package-versions.ts "${{ needs.preflight.outputs.version }}"
 
+      # Upstream's Linux browser-import helper (apps/desktop/scripts/build-browser-secret.mjs)
+      # compiles a small C binary against libsecret, and build:desktop runs it on Linux.
+      - name: Install Linux browser-import build dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-dev pkg-config
+
       # JS-only payload hot-update asset (server + web client). Arch-independent,
       # so it builds on a fast Linux runner and gates release creation instead of
       # the full desktop builds. The server bundle (apps/server/dist) it packages

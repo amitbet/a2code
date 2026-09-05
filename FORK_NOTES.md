@@ -131,9 +131,12 @@ rather than a `default`.
   window, so upstream's asset-based `<picture>` is the only working markup.
 - **`mobile/threadListV2.ts`**: `firstValidTimestampMs` was lost when upstream rewrote around it but
   the pinned-block sort still calls it; restored.
-- CI/workflows did not conflict beyond `ci.yml` + `release.yml`, both resolved to the fork's.
-  `git diff bb45eef81 HEAD -- .github/workflows` is empty. Upstream's `windows-tests.yml`,
-  `cursor-hygiene-webhook.yml` and `.github/actions/setup-apt-mirrors/` were dropped.
+- CI/workflows conflicted only in `ci.yml` + `release.yml`, both resolved to the fork's.
+  Upstream's `windows-tests.yml`, `cursor-hygiene-webhook.yml` and
+  `.github/actions/setup-apt-mirrors/` were dropped. **One follow-up was then required**: upstream's
+  new `build-browser-secret.mjs` needs `libsecret-1-dev` + `pkg-config` on Linux, which upstream
+  installs from the dropped workflows, so the fork's two Linux `build:desktop` jobs gained that
+  install step (see the CI seam below).
 - `vite-plus` moved 0.2.2 → 0.3.0; `pnpm-lock.yaml` was regenerated.
 - Fork package versions stay on `0.0.25-amit`.
 
@@ -2096,6 +2099,12 @@ build:desktop` → `vp run dist:payload:asset`, using the
   or typecheck, so CI does not gate on tests/typecheck. Run those locally before
   merging (see the Merge checklist below). If we ever want CI gating, add a
   dedicated workflow rather than re-adopting upstream's `ci.yml` test job.
+- Both `ci.yml` and `release.yml` install **`libsecret-1-dev` + `pkg-config`** before any
+  Linux job that runs `build:desktop` (`ci.yml`'s `build_linux_x64`, `release.yml`'s
+  `build_payload`). Upstream's `apps/desktop/scripts/build-browser-secret.mjs` compiles a C
+  helper against libsecret on Linux and hard-fails without the headers; upstream installs them
+  from workflows the fork does not carry. **Added 2026-09-05 after the first post-merge CI run
+  failed.** If upstream adds another native Linux build dependency, expect the same failure mode.
 - Both `ci.yml` and `release.yml` carry two fork-local additions to the desktop
   build jobs (see the macOS EMFILE note above for the full rationale):
   - a **"Cache Electron download"** `actions/cache@v4` step before every desktop
@@ -2105,8 +2114,10 @@ build:desktop` → `vp run dist:payload:asset`, using the
     — now a defensive safety net rather than the primary EMFILE fix (that moved into
     `asarUnpack` scoping in `build-desktop-artifact.ts`).
 - After resolving, confirm `git diff <fork-tip> HEAD -- .github/workflows` shows
-  **only** those cache + `ulimit` additions (nothing else changed) and that no
-  upstream-only workflow files were pulled in.
+  **only** those cache + `ulimit` + Linux-dependency additions (nothing else changed) and that no
+  upstream-only workflow files were pulled in. Note the fork's CI builds but never runs tests, so
+  a merge that compiles locally can still fail CI on a **native build dependency** — that is the
+  one class of breakage local `vp run typecheck` cannot catch.
 - 2026-06-24 merge note: upstream relay/deploy tests may assert release workflow
   relay tracing propagation (`relay-client-tracing-config`, `--github-env-file`
   env artifacts). Preserve the fork-trimmed `release.yml`; adjust those tests to

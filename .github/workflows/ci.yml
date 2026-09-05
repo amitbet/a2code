@@ -277,6 +277,14 @@ jobs:
       - name: Align package versions to release version
         run: node scripts/update-release-package-versions.ts "${{ needs.resolve_latest_release.outputs.version }}"
 
+      # Upstream's Linux browser-import helper (apps/desktop/scripts/build-browser-secret.mjs)
+      # compiles a small C binary against libsecret, and build:desktop runs it on Linux.
+      - name: Install Linux browser-import build dependencies
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libsecret-1-dev pkg-config
+
       - name: Install ImageMagick
         shell: bash
         run: |
