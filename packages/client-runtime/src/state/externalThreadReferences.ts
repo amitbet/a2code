@@ -300,14 +300,12 @@ export const resolveExternalThreadReferences = Effect.fnUntraced(function* (inpu
             ? Effect.succeed(Option.none<ReferencedThreadSnapshot>())
             : snapshotLoader.load(prepared.value, reference.threadId).pipe(
                 Effect.map(
-                  Option.map(
-                    (snapshot): ReferencedThreadSnapshot => ({
-                      title: snapshot.thread.title,
-                      messages: snapshot.thread.messages,
-                      activities: snapshot.thread.activities,
-                      latestTurn: snapshot.thread.latestTurn,
-                    }),
-                  ),
+                  Option.map((snapshot): ReferencedThreadSnapshot => ({
+                    title: snapshot.thread.title,
+                    messages: snapshot.thread.messages,
+                    activities: snapshot.thread.activities,
+                    latestTurn: snapshot.thread.latestTurn,
+                  })),
                 ),
               ),
         ),

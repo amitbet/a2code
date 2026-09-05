@@ -1,225 +1,54 @@
-import type {
-  OrchestrationThreadActivity,
-  ProviderRateLimitSnapshot,
-  ProviderRateLimitWindow,
-} from "@t3tools/contracts";
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-}
-
-function asFiniteNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-const WINDOW_KINDS = new Set(["five_hour", "weekly", "overage", "spend", "other"]);
-
-function parseWindow(value: unknown): ProviderRateLimitWindow | null {
-  const record = asRecord(value);
-  if (!record) {
-    return null;
-  }
-  const usedPercent = asFiniteNumber(record.usedPercent);
-  const resetsAt = asFiniteNumber(record.resetsAt);
-  // Keep a window if it has either a usage figure or a reset time to show.
-  if (usedPercent === null && resetsAt === null) {
-    return null;
-  }
-  const kind =
-    typeof record.kind === "string" && WINDOW_KINDS.has(record.kind)
-      ? (record.kind as ProviderRateLimitWindow["kind"])
-      : "other";
-  const label =
-    typeof record.label === "string" && record.label.trim().length > 0 ? record.label : "Limit";
-  const windowMinutes = asFiniteNumber(record.windowMinutes);
-  const detail =
-    typeof record.detail === "string" && record.detail.trim().length > 0
-      ? record.detail
-      : undefined;
-  return {
-    kind,
-    label,
-    ...(usedPercent !== null ? { usedPercent: Math.max(0, Math.min(100, usedPercent)) } : {}),
-    ...(resetsAt !== null ? { resetsAt } : {}),
-    ...(windowMinutes !== null ? { windowMinutes } : {}),
-    ...(detail !== undefined ? { detail } : {}),
-  };
-}
-
-export type RateLimitSnapshot = ProviderRateLimitSnapshot & {
-  readonly updatedAt: string;
-};
+import type { ServerProviderUsageLimits } from "@t3tools/contracts";
 
 /**
- * Return the most recent normalized rate-limit snapshot from a set of thread
- * activities, or null if the provider has not reported quota usage.
+ * Presentation helpers for the composer-footer quota meter.
  *
- * Rate limits describe an account/subscription, not a single conversation, so
- * callers may pass activities merged across multiple threads in the same
- * environment. Each provider event is a complete normalized snapshot, so the
- * newest usable event replaces older snapshots instead of retaining windows
- * that the provider has removed.
+ * The snapshot itself is server-authoritative: providers publish
+ * `usageLimits` on their `ServerProvider` snapshot (see
+ * `apps/server/src/provider/providerUsageLimits.ts`), so the client only
+ * formats what it is given. There is no client-side derivation, merging, or
+ * persistence — an earlier fork revision carried all three to work around
+ * quota arriving only over per-thread activity streams, which no longer
+ * happens.
  */
-export function deriveLatestRateLimitSnapshot(
-  activities: ReadonlyArray<OrchestrationThreadActivity>,
-): RateLimitSnapshot | null {
-  const rateLimitActivities = activities
-    .map((activity, index) => ({ activity, index }))
-    .filter((entry) => entry.activity?.kind === "account.rate-limits.updated")
-    .sort((a, b) =>
-      a.activity.createdAt < b.activity.createdAt
-        ? 1
-        : a.activity.createdAt > b.activity.createdAt
-          ? -1
-          : b.index - a.index,
-    );
 
-  for (const { activity } of rateLimitActivities) {
-    const payload = asRecord(activity.payload);
-    const snapshot = asRecord(payload?.snapshot);
-    if (!snapshot) {
-      continue;
-    }
-    const rawWindows = Array.isArray(snapshot.windows) ? snapshot.windows : [];
-    const windows = rawWindows
-      .map(parseWindow)
-      .filter((window): window is ProviderRateLimitWindow => window !== null);
-    if (windows.length === 0) {
-      continue;
-    }
-    const status =
-      snapshot.status === "allowed" ||
-      snapshot.status === "allowed_warning" ||
-      snapshot.status === "rejected"
-        ? snapshot.status
-        : undefined;
-    const planType = typeof snapshot.planType === "string" ? snapshot.planType : undefined;
-    return {
-      windows,
-      ...(status ? { status } : {}),
-      ...(planType ? { planType } : {}),
-      updatedAt: activity.createdAt,
-    };
-  }
-  return null;
-}
-
-/**
- * Validate an untrusted value (e.g. a snapshot restored from localStorage) into
- * a `RateLimitSnapshot`, or return null if it isn't usable. Windows are
- * re-parsed through the same normalization as live data so persisted state can
- * never inject shapes the renderer doesn't expect.
- */
-export function sanitizeRateLimitSnapshot(value: unknown): RateLimitSnapshot | null {
-  const record = asRecord(value);
-  if (!record) {
-    return null;
-  }
-  const updatedAt = record.updatedAt;
-  if (typeof updatedAt !== "string" || !Number.isFinite(Date.parse(updatedAt))) {
-    return null;
-  }
-  const rawWindows = Array.isArray(record.windows) ? record.windows : [];
-  const windows = rawWindows
-    .map(parseWindow)
-    .filter((window): window is ProviderRateLimitWindow => window !== null);
-  if (windows.length === 0) {
-    return null;
-  }
-  const status =
-    record.status === "allowed" ||
-    record.status === "allowed_warning" ||
-    record.status === "rejected"
-      ? record.status
-      : undefined;
-  const planType =
-    typeof record.planType === "string" && record.planType.trim().length > 0
-      ? record.planType
-      : undefined;
-  return {
-    windows,
-    ...(status ? { status } : {}),
-    ...(planType ? { planType } : {}),
-    updatedAt,
-  };
-}
-
-/**
- * Pick the most recently updated of two snapshots (by `updatedAt`), preferring
- * the first argument on ties. Used to reconcile the live in-store snapshot with
- * one restored from persistent browser storage.
- */
-export function freshestRateLimitSnapshot(
-  a: RateLimitSnapshot | null,
-  b: RateLimitSnapshot | null,
-): RateLimitSnapshot | null {
-  if (!a) return b;
-  if (!b) return a;
-  return Date.parse(b.updatedAt) > Date.parse(a.updatedAt) ? b : a;
-}
-
-/** Always show the meter once the provider has reported quota usage at least once. */
-export function shouldShowRateLimitMeter(snapshot: RateLimitSnapshot | null): boolean {
-  return snapshot !== null;
+/** Show the meter once the provider has reported at least one window. */
+export function shouldShowRateLimitMeter(
+  limits: ServerProviderUsageLimits | null | undefined,
+): limits is ServerProviderUsageLimits {
+  return limits != null && limits.windows.length > 0;
 }
 
 /** A snapshot is considered stale this long after its last update while idle. */
 export const RATE_LIMIT_STALE_AFTER_MS = 5 * 60_000;
 
 /**
- * Activation refreshes are intentionally much less frequent than the stale
- * visual state. Fetching a quota snapshot can make an agent re-open protected
- * provider data, so an idle session should not do that every few minutes.
- */
-export const RATE_LIMIT_REFRESH_AFTER_MS = 24 * 60 * 60_000;
-
-/**
- * Activation refreshes are intentionally rate-limited to a day. This keeps
- * focus/visibility churn from becoming repeated background provider probes;
- * live turns and provider events still publish fresher snapshots immediately.
- */
-export function shouldRefreshRateLimitsOnActivation(
-  snapshot: RateLimitSnapshot | null,
-  lastRequestedAtMs: number | null,
-  nowMs: number,
-): boolean {
-  if (!snapshot || !isRateLimitSnapshotStale(snapshot, false, nowMs)) {
-    return false;
-  }
-  const updatedMs = Date.parse(snapshot.updatedAt);
-  if (!Number.isFinite(updatedMs) || nowMs - updatedMs < RATE_LIMIT_REFRESH_AFTER_MS) {
-    return false;
-  }
-  return lastRequestedAtMs === null || nowMs - lastRequestedAtMs >= RATE_LIMIT_STALE_AFTER_MS;
-}
-
-/**
- * Whether the snapshot should render in a "stale" (greyed) state. Never stale
- * while the agent is running — usage is live then. Once idle, it goes stale
- * after RATE_LIMIT_STALE_AFTER_MS so the numbers visibly read as out of date.
+ * A running turn keeps publishing updates, so it is never stale; between
+ * turns the probe interval means figures can legitimately age, and the meter
+ * dims rather than lying about how current it is.
  */
 export function isRateLimitSnapshotStale(
-  snapshot: RateLimitSnapshot,
+  limits: ServerProviderUsageLimits,
   isRunning: boolean,
   nowMs: number,
 ): boolean {
   if (isRunning) {
     return false;
   }
-  const updatedMs = Date.parse(snapshot.updatedAt);
-  if (!Number.isFinite(updatedMs)) {
+  const checkedMs = Date.parse(limits.checkedAt);
+  if (!Number.isFinite(checkedMs)) {
     return false;
   }
-  return nowMs - updatedMs > RATE_LIMIT_STALE_AFTER_MS;
+  return nowMs - checkedMs > RATE_LIMIT_STALE_AFTER_MS;
 }
 
 /** Compact "updated Xm ago" label for the snapshot timestamp. */
-export function formatRateLimitUpdatedAgo(updatedAt: string, nowMs: number): string | null {
-  const updatedMs = Date.parse(updatedAt);
-  if (!Number.isFinite(updatedMs)) {
+export function formatRateLimitUpdatedAgo(checkedAt: string, nowMs: number): string | null {
+  const checkedMs = Date.parse(checkedAt);
+  if (!Number.isFinite(checkedMs)) {
     return null;
   }
-  const diffMs = nowMs - updatedMs;
+  const diffMs = nowMs - checkedMs;
   if (diffMs < 60_000) {
     return "updated just now";
   }
@@ -234,14 +63,20 @@ export function formatRateLimitUpdatedAgo(updatedAt: string, nowMs: number): str
   return `updated ${Math.floor(hours / 24)}d ago`;
 }
 
-/** Human-readable countdown to a reset, e.g. "resets in 2h 14m" / "resets in 3d". */
-export function formatRateLimitReset(resetsAt: number | undefined, nowMs: number): string | null {
-  if (resetsAt === undefined || !Number.isFinite(resetsAt)) {
+function resetDiffMs(resetsAt: string | undefined, nowMs: number): number | null {
+  if (resetsAt === undefined) {
     return null;
   }
-  // resetsAt is epoch seconds; tolerate accidental millisecond values.
-  const resetMs = resetsAt > 1e12 ? resetsAt : resetsAt * 1000;
-  const diffMs = resetMs - nowMs;
+  const resetMs = Date.parse(resetsAt);
+  return Number.isFinite(resetMs) ? resetMs - nowMs : null;
+}
+
+/** Human-readable countdown to a reset, e.g. "resets in 2h 14m" / "resets in 3d". */
+export function formatRateLimitReset(resetsAt: string | undefined, nowMs: number): string | null {
+  const diffMs = resetDiffMs(resetsAt, nowMs);
+  if (diffMs === null) {
+    return null;
+  }
   if (diffMs <= 0) {
     return "resets now";
   }
@@ -261,14 +96,13 @@ export function formatRateLimitReset(resetsAt: number | undefined, nowMs: number
 
 /** Compact reset label for inline display, e.g. "5d" / "2h" / "30m". */
 export function formatRateLimitResetShort(
-  resetsAt: number | undefined,
+  resetsAt: string | undefined,
   nowMs: number,
 ): string | null {
-  if (resetsAt === undefined || !Number.isFinite(resetsAt)) {
+  const diffMs = resetDiffMs(resetsAt, nowMs);
+  if (diffMs === null) {
     return null;
   }
-  const resetMs = resetsAt > 1e12 ? resetsAt : resetsAt * 1000;
-  const diffMs = resetMs - nowMs;
   if (diffMs <= 0) {
     return "now";
   }

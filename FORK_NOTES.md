@@ -3,6 +3,148 @@
 This file tracks fork-specific divergences that are likely to conflict when
 merging `upstream/main`.
 
+## 2026-09-05 upstream merge (upstream ships usage limits, ChatMarkdown hoisted) — migration notes
+
+Merged `upstream/main` through `e5a87e8b9` (351 commits). Large merge — 57 conflicts. Headline:
+**upstream built its own server-side usage-limits pipeline**, so the fork's live quota meter was
+rebuilt on top of it rather than re-applied.
+
+### Migration renumbering
+
+- Upstream added **three** migrations (its 045-047). The fork's 045-048 are taken, so they were
+  renumbered to **049** (`ProjectionProjectsAutoPull`), **050**
+  (`RepairAutomaticSettlementTimestamps`), **051** (`ProjectionProjectIcon`). Both renamed
+  `.test.ts` files had their `layer(...)` label and `toMigrationInclusive` bounds repointed
+  (45/46 → 49/50, and 46/47 → 50/51).
+- Fork's next free migration id is now **52**.
+
+### The quota meter moved onto upstream's usage-limits pipeline
+
+Upstream shipped `ServerProviderUsageLimits` published on each provider instance's `ServerProvider`
+snapshot, fed by a `get_usage` probe plus turn-time `rate_limit_event`s, with a Usage page,
+reset credits and `unavailable: { reason }`. It claims the same `account.rate-limits.updated`
+event the fork's meter used, so the two could not coexist without a duplicated payload.
+
+**Upstream's source is the same endpoint the fork hand-rolled.** The SDK's `get_usage` control
+request is documented as returning "plan rate-limit utilization windows from the claude.ai usage
+endpoint" — the same `five_hour` / `seven_day` / `seven_day_opus` / `seven_day_sonnet` /
+`extra_usage` fields `ClaudeUsageApi.ts` fetched, plus `seven_day_oauth_apps` and `currency`. It is
+a control request over the stdio pipe to the already-authenticated `claude` CLI, so no OAuth token
+is scraped, token refresh comes free, and it works off macOS. The fork's original objection — that
+`rate_limit_event` is coarse and only populated near the limit — still holds and is not what
+upstream relies on: `get_usage` establishes each row and `rate_limit_event` only patches it by
+window `id`.
+
+- **Deleted:** `ClaudeUsageApi.ts` + test, `normalizeCodexRateLimits` (superseded by upstream's
+  `codexUsageLimits.ts`, which also handles Free/Go monthly plans and reset credits), and the whole
+  client stack — `apps/web/src/state/rateLimits.ts`, `rateLimitSnapshotStore.ts` + test,
+  `lib/useAccountRateLimitSnapshot.ts`. `lib/rateLimits.ts` was cut from 284 lines to presentation
+  helpers only. **Do not re-introduce client-side derivation, merging, or persistence of quota** —
+  it existed only to work around quota arriving over evictable per-thread activity streams.
+- **Kept:** `CodexRateLimits.ts` now holds only `nextCodexRateLimitResetRefreshAt`, the
+  reset-deadline refresh scheduler, which upstream has no equivalent for.
+- **Two fork-owned fields were added to upstream's contract** (`packages/contracts/src/providerUsageLimits.ts`):
+  `ServerProviderUsageWindow.detail` (the Claude spend window's `$169.27 / $1,000.00`, which a
+  percentage cannot carry) and `ServerProviderUsageLimits.planType` (the meter's plan chip, from
+  `subscription_type` on the same response). Both are optional and forward-compatible.
+  `applyUsageLimitsUpdate` carries both across a sparse update and `usageWindowEquals` compares
+  `detail`, or a mid-turn event would blank the dollar figure a probe resolved. **This is a new
+  recurring seam: upstream owns this file.**
+- **`claudeUsageLimits.ts` gained `spendWindow`** (`extra_usage` → a `kind: "monthly"` window with
+  the dollar `detail`) and takes `planType`; `ClaudeProvider.ts` passes `capabilities.subscriptionType`.
+- **`CursorUsageApi.ts` kept its fetching and credential logic** — upstream has no Cursor usage at
+  all — but its normalizer now emits `ServerProviderUsageLimits` with ISO resets and stable window
+  ids (`cursor_models`, `api_models`, `total_usage`, `spend_limit`), all `kind: "monthly"`.
+- **`RateLimitMeter.tsx` is unchanged structurally** and stays in the composer footer. It now reads
+  `selectedProviderEntry.snapshot.usageLimits` directly — one line in `ChatComposer`, no hook. The
+  `shortLabel` map was repointed (`Session` → `5h`, `Spend` → `$`) and `resetsAt` parsing moved from
+  epoch seconds to ISO. The popover's `status` line ("Rate limit reached") is gone: upstream writes
+  a **timeline warning row** when a rejected window actually parks a turn, which is more visible.
+
+### ChatMarkdown: upstream hoisted the renderer map, superseding the fork's ref indirection
+
+The fork's `bb45eef81` stabilised react-markdown component identity behind a ref so a rebuilt
+renderer would not remount every message body and destroy text selections. Upstream solved the same
+problem better: `CHAT_MARKDOWN_COMPONENTS` is now a module-level `satisfies Components` map reading
+per-message state from `ChatMarkdownRendererContext`, so the component types are literally constant.
+Upstream's version was taken and the fork's _other_ markdown fix (`d41ca1616`) re-applied on top:
+`getOptionalSyntaxHighlighterPromise` (resolves `null` instead of rejecting into a boundary that
+would replace live DOM), the `plain` fallback prop, and the selection-deferred highlight swap.
+`shouldDeferAsyncHighlight` now rides on the renderer context and the root `<div>` carries `rootRef`.
+
+### Timeline: the fork's rows joined upstream's incremental projection
+
+Upstream added `deriveTimelineEntriesWithState`, which reuses ordered entries across stream updates
+by checking exact array prefixes. The fork's `userInputExchanges` is now a **fourth tracked
+collection** on `TimelineEntriesProjection` — added to both prefix checks, both append paths, and
+`timelineEntrySourceOrder` (as `3`). Leaving it out would have silently dropped user-input rows on
+every incremental update. `ChatView` passes it as the 5th argument.
+
+**Two new upstream row kinds broke `chatSearch.ts`'s exhaustive switch, as designed**:
+`context-compaction` (indexes `row.label`) and `assistant-meta` (returns `""` — it is the action
+footer for a message row already indexed, so matching it would double-count). Keep adding cases
+rather than a `default`.
+
+### Other notable resolutions
+
+- **`ProviderAdapterCapabilities`**: the fork's `nativeFork` sits beside upstream's new
+  `promptlessTurnContinuation` and `supportsConversationRollback`. Upstream's new
+  `AntigravityAdapter` needed `nativeFork: false` added, as did three
+  `serverRuntimeStartup.reconcile.test.ts` fixtures.
+- **`AcpSessionRuntime.prompt` was rebuilt on upstream's structure.** Upstream introduced
+  `promptDispatchSemaphore`, `AcpActivePrompt { fiber, completed }`, `Effect.acquireUseRelease` and
+  a `cancelBehavior` mode. The fork's **cancel-epoch guard is still required and was layered on
+  top**: `activePromptRef` alone cannot cover a prompt still parked on the serialization semaphore,
+  which has no fiber for `cancel` to interrupt. The epoch is taken before the semaphore, checked
+  again after the fiber is published, and claimed in the shared `cancel`. The dispatch block returns
+  `null` for an already-cancelled epoch and both later stages short-circuit on it.
+- **`ProviderCommandReactor`**: upstream split thread reads into `resolveThreadShell` /
+  `resolveThreadDetail`. All three fork call sites (the implicit-fork check, thread-reference
+  resolution, and the queued-prompt drain) need **`resolveThreadDetail`** — `messages`,
+  `forkedFromId` and `queuedPrompts` are all omitted from shell queries by design. The failure
+  detail chain keeps the fork's `isThreadReferenceUnresolvedError` branch ahead of upstream's three.
+- **`composerDraftStore`**: the fork's `selectedInstanceId ? instanceSelection : legacySelection`
+  was kept and upstream's antigravity-only guard on `legacySelection` dropped as unreachable — the
+  fork's rule already forbids _every_ custom instance from inheriting the legacy key.
+- **`ChatView`**: upstream inlined `ChatViewContent` back into `ChatView`, so the fork's wrapper was
+  orphaned and removed. The send path keeps the fork's `if (shouldQueuePrompt)` branch with
+  upstream's `sendInteractionMode` threaded through all three call sites. `onEnvironmentChange`
+  stays out (fork-removed picker); `availableEnvironments` and the resting-composer props are in.
+  Both scroll refs are live: the fork's `timelineScrollSampleRef` and upstream's
+  `timelineScrollIntentRef`.
+- **`AppSidebarLayout`**: the fork's `machineOverviewActive` gate rides inside upstream's
+  `PanelAnimationSuppressionProvider`. Upstream made `SettingsSidebarNav` a direct import, so the
+  fork's `Suspense` wrapper is gone.
+- **`ProviderInstanceCard` was taken wholesale again** — upstream replaced its tabs with
+  `SettingsSection`s. The fork's **Default traits** block was re-applied at the top of the Models
+  section. Redo it this way if it conflicts again.
+- **`SettingsPanels`**: upstream's new Legacy-features `legacy-sidebar` row was **dropped** — the
+  fork already surfaces the same setting as "Project tree sidebar" in General.
+- **Lint allowlists moved into `vite.config.ts`.** Both `no-mobile-uniwind-theme-escape-hatches` and
+  `no-manual-effect-runtime-in-tests` now take options from the lint config instead of in-rule
+  tables. The fork's only extra entry, `apps/mobile/src/components/MachineSwitcher.tsx`, was added
+  to the config's allowlist.
+- **`NodeSqliteClient` moved to `@t3tools/shared/nodeSqliteClient`**; two fork test files still
+  imported the old relative path.
+- **Marketing took upstream's structure** (fonts, `app-desktop.webp`, the rise/tilt hero) with the
+  fork's `A2 Code` branding re-applied. The fork's `public/updated-screenshot.webp` was deleted this
+  window, so upstream's asset-based `<picture>` is the only working markup.
+- **`mobile/threadListV2.ts`**: `firstValidTimestampMs` was lost when upstream rewrote around it but
+  the pinned-block sort still calls it; restored.
+- CI/workflows did not conflict beyond `ci.yml` + `release.yml`, both resolved to the fork's.
+  `git diff bb45eef81 HEAD -- .github/workflows` is empty. Upstream's `windows-tests.yml`,
+  `cursor-hygiene-webhook.yml` and `.github/actions/setup-apt-mirrors/` were dropped.
+- `vite-plus` moved 0.2.2 → 0.3.0; `pnpm-lock.yaml` was regenerated.
+- Fork package versions stay on `0.0.25-amit`.
+
+### Follow-up worth checking in a real client
+
+`ChatView`'s fork-side `serverAttachmentIds` memo — which also collected attachments from
+`serverQueuedPrompts` — was replaced by upstream's handoff-scoped `selectHandoffImageResources`,
+which walks `serverMessages` only. **Queued-prompt attachment previews may no longer resolve.**
+The conflict left the fork's block as an orphaned tail with its head already gone, so upstream's
+side was taken; this was not verified in a running client.
+
 ## 2026-09-02 upstream merge (remote desktop updates declined, Fable 5.1, model manifest) — migration notes
 
 Merged `upstream/main` through `5392c9bb9` (84 commits). Large merge — 48 conflicts. Headline:
@@ -1661,79 +1803,37 @@ httpBaseUrl, pathname)`; the pre-merge `resolveEnvironmentHttpUrl` helper was
 
 ### Live provider quota meter (5h / weekly bars + Claude spend bar)
 
-- Surfaces provider rate-limit / quota usage in the composer footer as a small
-  meter with progress bars: Claude session (5h), weekly (incl. Opus/Sonnet
-  splits), and a **spend bar** (`$used / $limit`, e.g. `$169.27 / $1,000.00`)
-  for accounts with a monthly extra-usage limit. Codex (GPT) 5h/weekly windows
-  flow through the same meter.
-- This feature has already been silently dropped twice by upstream merges
-  (most recently the 2026-06-17 `upstream/main` merge), because the wiring lives
-  in files upstream rewrites. **When resolving conflicts, re-apply all of the
-  pieces below — losing any one of them makes the bars disappear.**
-- Files:
-  - `apps/server/src/provider/Layers/ClaudeUsageApi.ts` — fork-added. Polls
-    Claude's `/api/oauth/usage` endpoint and normalizes it into a
-    `ProviderRateLimitSnapshot` (`five_hour`, `seven_day[_opus|_sonnet]`, and
-    `spendWindow(extra_usage)` → the `kind: "spend"` window). Resolves the OAuth
-    token like Claude Code (env → `.credentials.json` → macOS keychain).
-  - `apps/server/src/provider/Layers/ClaudeAdapter.ts` — **modified**: imports
-    `fetchClaudeUsageSnapshot`, defines `refreshClaudeUsage(context)` (fetches +
-    emits an `account.rate-limits.updated` event), and calls it in two places:
-    on **session start** (`runFork(refreshClaudeUsage(context))`) and **after
-    each turn** (`yield* Effect.forkDetach(refreshClaudeUsage(context))` right
-    after `completeTurn` in `handleResultMessage`). Without these call sites the
-    snapshot is never emitted and no Claude bars show (Codex still would).
-  - `packages/contracts/src/providerRuntime.ts` — **modified**: the
-    `ProviderRateLimitWindowKind` literal union must include `"spend"`.
-  - `apps/web/src/lib/rateLimits.ts` — **modified**: `WINDOW_KINDS` must include
-    `"spend"`; `deriveLatestRateLimitSnapshot` merges windows across activities
-    and is **order-independent** (it sorts rate-limit activities newest-first by
-    `createdAt`, later input position winning ties) so it can accept activities
-    merged across multiple threads; `shouldShowRateLimitMeter` gates visibility.
-    Also adds `sanitizeRateLimitSnapshot` (validates a persisted snapshot) and
-    `freshestRateLimitSnapshot` (picks the newer of two by `updatedAt`).
-  - `apps/web/src/state/rateLimits.ts` — fork-added (this replaced the deleted
-    `store.ts` selector in the 2026-06-20 atom rewrite; see those notes). The
-    `useLatestRateLimitActivitiesForInstance` hook returns the latest
-    `account.rate-limits.updated` activity for every thread bound to a provider
-    instance, across all environments. This is the account/subscription-wide
-    source for the meter — quota is an account property, not a per-conversation
-    one.
-  - `apps/web/src/rateLimitSnapshotStore.ts` — fork-added. A `persist`-backed
-    (localStorage, key `t3code:rate-limit-snapshots:v1`) zustand store mapping
-    `instanceId → RateLimitSnapshot`, recording only strictly-newer snapshots.
-    This survives reloads and the per-thread detail subscription being evicted
-    (the only channel that carries live rate-limit activities), so the meter
-    keeps the freshest figures we've ever seen for a subscription.
-  - `apps/web/src/lib/useAccountRateLimitSnapshot.ts` — fork-added. Hook that
-    wraps the selector (`useShallow`), derives the merged live snapshot, mirrors
-    the freshest into the persistent store, and returns
-    `freshestRateLimitSnapshot(live, persisted)` — so an idle/evicted/reloaded
-    conversation no longer drops to "no data" or pins a stale "updated 14h ago"
-    while another conversation on the same subscription reports fresher usage.
-  - `apps/web/src/components/chat/RateLimitMeter.tsx` — fork-added. Renders the
-    bars + popover (including the spend `detail` dollar string).
-  - `apps/web/src/components/chat/ChatComposer.tsx` — **modified**: imports
-    `RateLimitMeter` + `shouldShowRateLimitMeter` (+ the `RateLimitSnapshot`
-    type) and `useAccountRateLimitSnapshot`; derives `activeRateLimits =
-useAccountRateLimitSnapshot(selectedInstanceId)` (NOT a per-thread
-    `useMemo(deriveLatestRateLimitSnapshot(activeThreadActivities))` — that was
-    the old per-conversation wiring), passes it into
-    `ComposerFooterPrimaryActions`, and renders `<RateLimitMeter>`. This is the
-    wiring upstream merges keep clobbering — re-apply it on top of any upstream
-    composer-footer refactor.
-- Note: the Claude spend window only renders if the usage endpoint returns a
-  numeric `extra_usage.utilization` and `is_enabled !== false` (see
-  `spendWindow()` in `ClaudeUsageApi.ts`).
-- Data-availability note: live thread activities arrive over the per-thread
-  **detail** subscription (evicted when idle), so the cross-thread merge only
-  sees conversations loaded this session. The persistent snapshot store
-  (`rateLimitSnapshotStore.ts`) bridges the gap — it remembers the freshest
-  snapshot per subscription across reloads/evictions. The remaining limit:
-  figures can only be as fresh as the last time _some_ conversation on that
-  subscription streamed usage this client. A truly authoritative cross-client
-  source would require carrying the snapshot on the shell snapshot or a
-  dedicated account channel (server-side, not yet done).
+> **REBUILT 2026-09-05 on upstream's usage-limits pipeline.** The client-side stack described here
+> before (activity derivation, a localStorage snapshot store, a cross-thread merge hook) is
+> **deleted**. Quota is now server-authoritative.
+
+- Still a fork feature: the **meter in the composer footer**. Upstream renders its own usage data on
+  a separate Usage page and puts nothing in the composer.
+- **Where the data comes from now:** each provider publishes `usageLimits` on its `ServerProvider`
+  snapshot (`ServerProviderUsageLimits` in `packages/contracts/src/providerUsageLimits.ts`), built
+  by `apps/server/src/provider/providerUsageLimits.ts` from a `get_usage` probe and patched by
+  turn-time `account.rate-limits.updated` events through `ProviderUsageLimitsIngestion`.
+- **Files (fork-owned unless noted):**
+  - `apps/web/src/components/chat/RateLimitMeter.tsx` — the bars + popover. Reads
+    `ServerProviderUsageLimits` directly.
+  - `apps/web/src/lib/rateLimits.ts` — presentation helpers only (staleness, "updated Xm ago",
+    reset countdowns). **No derivation, merging, or persistence belongs here.**
+  - `apps/web/src/components/chat/ChatComposer.tsx` — **modified**: `activeRateLimits =
+selectedProviderEntry?.snapshot.usageLimits ?? null`, passed to `ComposerFooterPrimaryActions`.
+    One line; re-apply it on top of any upstream composer-footer refactor.
+  - `packages/contracts/src/providerUsageLimits.ts` — **upstream's file, two fork fields**:
+    `ServerProviderUsageWindow.detail` and `ServerProviderUsageLimits.planType`. Preserve both, and
+    keep `applyUsageLimitsUpdate` / `usageWindowEquals` carrying and comparing `detail`.
+  - `apps/server/src/provider/Layers/claudeUsageLimits.ts` — **upstream's file, fork's `spendWindow`**
+    (`extra_usage` → a `monthly` window with the dollar `detail`) and the `planType` passthrough.
+  - `apps/server/src/provider/Layers/CursorUsageApi.ts` — fork-added; upstream has no Cursor usage.
+    Fetching and credential resolution are the fork's; the normalizer emits upstream's shape.
+  - `apps/server/src/provider/Layers/CodexRateLimits.ts` — fork-added, now only
+    `nextCodexRateLimitResetRefreshAt` (schedules a re-read just after a window resets).
+- The Claude spend window renders only when `get_usage` returns a numeric `extra_usage.utilization`
+  with `is_enabled !== false`.
+- **Merge rule:** upstream owns the pipeline. Take its changes and re-apply the composer wiring plus
+  the two contract fields. Do not rebuild a client-side quota cache.
 
 ### Arbitrary file attachments (not just images)
 
@@ -2068,6 +2168,26 @@ build:desktop` → `vp run dist:payload:asset`, using the
   handling unless there is a deliberate product decision to diverge in the
   UI.
 
+### Provider usage limits (upstream-owned since 2026-09-05)
+
+- `packages/contracts/src/providerUsageLimits.ts`, `apps/server/src/provider/providerUsageLimits.ts`,
+  `Layers/{claudeUsageLimits,codexUsageLimits,ProviderUsageLimitsIngestion}.ts` are **upstream's**.
+- The fork carries exactly three things inside them: `ServerProviderUsageWindow.detail`,
+  `ServerProviderUsageLimits.planType`, and `claudeUsageLimits.spendWindow`. Everything else is
+  upstream's and should be taken wholesale.
+- The composer-footer meter is the fork's user-facing surface — see the quota-meter feature above.
+- `CursorUsageApi.ts` is fork-only; upstream reports no Cursor usage.
+
+### ChatMarkdown renderer identity (upstream-owned since 2026-09-05)
+
+- `CHAT_MARKDOWN_COMPONENTS` is a **module-level** map reading per-message state from
+  `ChatMarkdownRendererContext`. Constant component types are what keeps a re-render from
+  remounting message bodies and destroying the reader's text selection. **Never move a renderer
+  back inside the component or into a `useMemo`.**
+- The fork's additions there: `getOptionalSyntaxHighlighterPromise` (never reject into the error
+  boundary — a caught render replaces the block's live DOM), the `plain` fallback prop, and the
+  selection-deferred highlight swap driven by `shouldDeferAsyncHighlight` off the same context.
+
 ### Claude model catalog (manifest-driven since 2026-09-02)
 
 - Claude models live in `apps/server/src/provider/model-manifest.json` (plus a remote
@@ -2081,7 +2201,8 @@ build:desktop` → `vp run dist:payload:asset`, using the
   used tokens are clamped **only** for context-accurate readings. Upstream periodically
   adds tests asserting the always-emit/always-clamp behavior; those contradict
   `keeps oversized Claude result totals when no context-accurate usage exists` and should
-  be dropped, not adopted.
+  be dropped, not adopted. (This is the per-thread _context_ meter, and is unrelated to the
+  account _quota_ meter, which moved onto upstream's usage-limits pipeline on 2026-09-05.)
 
 ### Client-vs-transport snapshot projection
 
@@ -2160,8 +2281,8 @@ build:desktop` → `vp run dist:payload:asset`, using the
   it.
 - Migration seam: `033_ProjectionThreadsForkedFrom` is fork-added. Fork ids
   33-35 are frozen because existing fork DBs already recorded them. **The fork's
-  next free migration id is 48** (upstream's 044 became the fork's 047 in the
-  2026-09-02 merge) (see the
+  next free migration id is 52** (upstream's 045-047 became the fork's 049-051 in the
+  2026-09-05 merge) (see the
   2026-07-24 merge notes): when upstream adds a migration with id >= 33,
   renumber **upstream's** file/registry entry to the fork's next free id
   (upstream's 33/34 became the fork's 36/37; upstream's 35 became the fork's

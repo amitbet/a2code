@@ -4,8 +4,10 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeProcess from "node:process";
 
-import type { ProviderRateLimitSnapshot, ProviderRateLimitWindow } from "@t3tools/contracts";
+import type { ServerProviderUsageLimits, ServerProviderUsageWindow } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
   FetchHttpClient,
@@ -13,6 +15,7 @@ import {
   HttpClientRequest,
   HttpClientResponse,
 } from "effect/unstable/http";
+import { makeUsageLimits } from "../providerUsageLimits.ts";
 import { invalidateMacOSKeychainPassword, readMacOSKeychainPassword } from "./MacOSKeychain.ts";
 
 const DEFAULT_API_ENDPOINT = "https://api2.cursor.sh";
@@ -296,23 +299,34 @@ function spendDetail(
   return `${formatCents(usedValue)} / ${formatCents(limitValue)}`;
 }
 
+/** Cursor reports everything against one billing period. */
+const BILLING_PERIOD_MINS = 30 * 24 * 60;
+
+function isoFromEpochSeconds(value: number | undefined): string | undefined {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) return undefined;
+  const dt = DateTime.make(value * 1000);
+  return Option.isSome(dt) ? DateTime.formatIso(dt.value) : undefined;
+}
+
 function usageWindow(input: {
-  readonly kind: ProviderRateLimitWindow["kind"];
+  readonly id: string;
   readonly label: string;
   readonly explicitPercent: string | number | null | undefined;
   readonly used: string | number | null | undefined;
   readonly limit: string | number | null | undefined;
-  readonly resetsAt: number | undefined;
-}): ProviderRateLimitWindow | null {
+  readonly resetsAt: string | undefined;
+}): ServerProviderUsageWindow | null {
   const usedPercent = percentage(input.explicitPercent, input.used, input.limit);
   if (usedPercent === undefined) {
     return null;
   }
   const detail = spendDetail(input.used, input.limit);
   return {
-    kind: input.kind,
+    id: input.id,
+    kind: "monthly",
     label: input.label,
-    usedPercent,
+    windowDurationMins: BILLING_PERIOD_MINS,
+    usedPercent: Math.max(0, Math.min(100, usedPercent)),
     ...(input.resetsAt !== undefined ? { resetsAt: input.resetsAt } : {}),
     ...(detail !== undefined ? { detail } : {}),
   };
@@ -320,8 +334,8 @@ function usageWindow(input: {
 
 function spendLimitWindow(
   usage: CursorCurrentPeriodUsageResponse["spendLimitUsage"],
-  resetsAt: number | undefined,
-): ProviderRateLimitWindow | null {
+  resetsAt: string | undefined,
+): ServerProviderUsageWindow | null {
   if (!usage) {
     return null;
   }
@@ -329,7 +343,7 @@ function spendLimitWindow(
   const used = usage.individualUsed ?? usage.pooledUsed ?? usage.overallUsed;
   const limit = usage.individualLimit ?? usage.pooledLimit ?? usage.overallLimit;
   return usageWindow({
-    kind: "spend",
+    id: "spend_limit",
     label: "On-demand spend",
     explicitPercent: undefined,
     used,
@@ -338,14 +352,15 @@ function spendLimitWindow(
   });
 }
 
-/** Map Cursor's internal dashboard response into the shared quota snapshot. */
+/** Map Cursor's internal dashboard response into the shared usage limits. */
 export function normalizeCursorUsage(
   response: CursorCurrentPeriodUsageResponse,
-): ProviderRateLimitSnapshot | null {
-  const resetsAt = epochSeconds(response.billingCycleEnd);
+  checkedAt: string,
+): ServerProviderUsageLimits | null {
+  const resetsAt = isoFromEpochSeconds(epochSeconds(response.billingCycleEnd));
   const plan = response.planUsage;
   const cursorModelsWindow = usageWindow({
-    kind: "other",
+    id: "cursor_models",
     label: "Cursor models",
     explicitPercent: plan?.autoPercentUsed,
     used: plan?.autoSpend,
@@ -353,7 +368,7 @@ export function normalizeCursorUsage(
     resetsAt,
   });
   const apiModelsWindow = usageWindow({
-    kind: "other",
+    id: "api_models",
     label: "API models",
     explicitPercent: plan?.apiPercentUsed,
     used: plan?.apiSpend,
@@ -363,7 +378,7 @@ export function normalizeCursorUsage(
   const totalUsageWindow =
     plan && cursorModelsWindow === null && apiModelsWindow === null
       ? usageWindow({
-          kind: "other",
+          id: "total_usage",
           label: "Total usage",
           explicitPercent: plan.totalPercentUsed,
           used: plan.totalSpend,
@@ -376,9 +391,9 @@ export function normalizeCursorUsage(
     apiModelsWindow,
     totalUsageWindow,
     spendLimitWindow(response.spendLimitUsage, resetsAt),
-  ].filter((window): window is ProviderRateLimitWindow => window !== null);
+  ].filter((window): window is ServerProviderUsageWindow => window !== null);
 
-  return windows.length > 0 ? { windows } : null;
+  return windows.length > 0 ? makeUsageLimits({ checkedAt, windows }) : null;
 }
 
 /**
@@ -388,8 +403,9 @@ export function normalizeCursorUsage(
  */
 export const fetchCursorUsageSnapshot = (
   options: CursorUsageApiOptions = {},
-): Effect.Effect<ProviderRateLimitSnapshot | null> =>
+): Effect.Effect<ServerProviderUsageLimits | null> =>
   Effect.gen(function* () {
+    const checkedAt = DateTime.formatIso(yield* DateTime.now);
     const apiEndpoint = resolveApiEndpoint(options);
     const configuredAccessToken = explicitEnvValue(options.environment, "CURSOR_ACCESS_TOKEN");
     const configuredApiKey = explicitEnvValue(options.environment, "CURSOR_API_KEY");
@@ -414,7 +430,7 @@ export const fetchCursorUsageSnapshot = (
     if (directCredential) {
       const response = yield* fetchCurrentPeriodUsage(apiEndpoint, directCredential.value);
       if (response) {
-        return normalizeCursorUsage(response);
+        return normalizeCursorUsage(response, checkedAt);
       }
       if (directCredential.source === "keychain") {
         invalidateMacOSKeychainPassword({
@@ -444,5 +460,5 @@ export const fetchCursorUsageSnapshot = (
         service: KEYCHAIN_API_KEY_SERVICE,
       });
     }
-    return response ? normalizeCursorUsage(response) : null;
+    return response ? normalizeCursorUsage(response, checkedAt) : null;
   }).pipe(Effect.provide(FetchHttpClient.layer));

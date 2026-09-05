@@ -72,6 +72,11 @@ export function getRowSearchText(row: MessagesTimelineRow): string {
     }
     case "work-toggle":
       return row.summary ?? "";
+    case "context-compaction":
+      return row.label;
+    // The assistant-meta row is the copy/action footer for a message row that
+    // is already indexed; matching it too would double-count the same text.
+    case "assistant-meta":
     // Live status rows carry no user-visible text to match against.
     case "working":
     case "thinking":

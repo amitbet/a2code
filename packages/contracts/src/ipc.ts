@@ -88,6 +88,12 @@ import type {
   OrchestrationThreadStreamItem,
 } from "./orchestration.ts";
 import { EnvironmentId } from "./baseSchemas.ts";
+import { BrowserProfileId } from "./browserProfile.ts";
+import type {
+  BrowserImportResult,
+  BrowserImportSource,
+  BrowserImportSourceId,
+} from "./browserImport.ts";
 import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
@@ -1044,11 +1050,14 @@ export const PreviewAnnotationSubmissionSchema: Schema.Codec<PreviewAnnotationSu
 export interface PreviewAnnotationSubmissionResult {
   annotation: PreviewAnnotationPayload;
   submission: PreviewAnnotationSubmission;
+  /** The crop was requested but failed or timed out, so `annotation.screenshot` is null. */
+  screenshotFailed?: boolean;
 }
 export const PreviewAnnotationSubmissionResultSchema: Schema.Codec<PreviewAnnotationSubmissionResult> =
   Schema.Struct({
     annotation: PreviewAnnotationPayloadSchema,
     submission: PreviewAnnotationSubmissionSchema,
+    screenshotFailed: Schema.optionalKey(Schema.Boolean),
   });
 
 export const DesktopPreviewTabInputSchema = Schema.Struct({
@@ -1085,6 +1094,19 @@ export const DesktopPreviewNavigateInputSchema = Schema.Struct({
 
 export const DesktopPreviewConfigInputSchema = Schema.Struct({
   environmentId: EnvironmentId,
+  /**
+   * Browser profile the partition is derived from. Derivation stays in main:
+   * `will-attach-webview` only prefix-checks the partition string, so a
+   * renderer-supplied partition could attach to a session that never had the
+   * UA rewrite or permission handlers installed.
+   */
+  profileId: Schema.optional(BrowserProfileId),
+});
+
+export const DesktopPreviewClearDataInputSchema = Schema.Struct({
+  environmentId: EnvironmentId,
+  /** Omit to clear every profile; otherwise only this profile's partition. */
+  profileId: Schema.optional(BrowserProfileId),
 });
 
 export const DesktopPreviewSetColorSchemeInputSchema = Schema.Struct({
@@ -1141,6 +1163,13 @@ export const DesktopPreviewAutomationWaitForInputSchema = Schema.Struct({
   input: PreviewAutomationWaitForInput,
 });
 
+/**
+ * A System Settings pane the app can deep-link to. The identifier crosses IPC
+ * rather than a URL, so the renderer can only reach these known destinations.
+ */
+export const SystemSettingsPaneSchema = Schema.Literals(["full-disk-access"]);
+export type SystemSettingsPane = typeof SystemSettingsPaneSchema.Type;
+
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
   /** The desktop client's OS platform, read from Electron's preload process. */
@@ -1163,6 +1192,8 @@ export interface DesktopBridge {
   setConnectionCatalog?: (catalog: string) => Promise<boolean>;
   clearConnectionCatalog?: () => Promise<void>;
   discoverSshHosts: () => Promise<readonly DesktopDiscoveredSshHost[]>;
+  /** Resolves a suggested SSH alias before populating the connection form. */
+  resolveSshHost: (alias: string) => Promise<DesktopSshEnvironmentTarget>;
   ensureSshEnvironment: (
     target: DesktopSshEnvironmentTarget,
     options?: { issuePairingToken?: boolean },
@@ -1212,6 +1243,11 @@ export interface DesktopBridge {
     position?: { x: number; y: number },
   ) => Promise<T | null>;
   openExternal: (url: string) => Promise<boolean>;
+  /**
+   * Open a System Settings pane by identifier. Optional: older desktop builds
+   * lack it, and callers no-op when it is missing.
+   */
+  openSystemSettings?: (pane: SystemSettingsPane) => Promise<boolean>;
   /**
    * Probe this desktop machine for installed remote-capable editor CLIs
    * (used for remote open-in-editor deep links). Optional: older desktop
@@ -1275,16 +1311,27 @@ export interface DesktopPreviewBridge {
   /** Open the guest webview's DevTools (detached). */
   openDevTools: (tabId: string) => Promise<void>;
   /** Drop cookies + storage data for the preview partition (all tabs). */
-  clearCookies: () => Promise<void>;
+  clearCookies: (environmentId: EnvironmentId, profileId?: string) => Promise<void>;
   /** Drop the HTTP cache for the preview partition (all tabs). */
-  clearCache: () => Promise<void>;
+  clearCache: (environmentId: EnvironmentId, profileId?: string) => Promise<void>;
   /**
    * One-shot config for mounting a preview `<webview>`. Replaces three
    * earlier round-trip calls (`getBrowserPartition`, `getWebviewPreferences`,
    * `getPickPreloadPath`) so adding a new field here only requires touching
    * the contract + main, not the renderer's mount logic.
    */
-  getPreviewConfig: (environmentId: EnvironmentId) => Promise<DesktopPreviewWebviewConfig>;
+  getPreviewConfig: (
+    environmentId: EnvironmentId,
+    profileId?: string,
+  ) => Promise<DesktopPreviewWebviewConfig>;
+  /** Browsers on this machine whose cookies can be imported. */
+  listBrowserImportSources: () => Promise<ReadonlyArray<BrowserImportSource>>;
+  importBrowserCookies: (input: {
+    readonly environmentId: EnvironmentId;
+    readonly sourceId: BrowserImportSourceId;
+    readonly sourceProfileDirectory: string;
+    readonly targetProfileId: string;
+  }) => Promise<BrowserImportResult>;
   setAnnotationTheme: (theme: DesktopPreviewAnnotationTheme) => Promise<void>;
   /**
    * Activate the in-page element picker for the given tab. Resolves with
@@ -1357,6 +1404,8 @@ export interface LocalApi {
   };
   shell: {
     openExternal: (url: string) => Promise<void>;
+    /** Opens a known System Settings pane; no-ops outside the desktop app. */
+    openSystemSettings: (pane: SystemSettingsPane) => Promise<void>;
   };
   contextMenu: {
     show: <T extends string>(
