@@ -3,6 +3,116 @@
 This file tracks fork-specific divergences that are likely to conflict when
 merging `upstream/main`.
 
+## 2026-09-06 upstream merge (session importer vs. the thread cap, knip prunes exports) — migration notes
+
+Merged `upstream/main` through `e5d086c26` (196 commits). Small merge — 17 conflicts, most of them
+mechanical. Two things are worth carrying forward: **upstream now runs `knip` and deletes unused
+exports**, which silently breaks fork-only consumers, and **upstream's new session importer collides
+with the fork's per-project thread cap**.
+
+### No migrations arrived
+
+Upstream added none this window. The fork's 044-051 are untouched and the **next free id is still 52**.
+
+### The session importer vs. `MAX_UNARCHIVED_THREADS_PER_PROJECT` (resolved: imports are exempt)
+
+Upstream shipped a first-run welcome wizard that bulk-imports past Codex/Claude sessions (#5362). It
+creates ~100 threads in one project, which tripped the fork's `MAX_UNARCHIVED_THREADS_PER_PROJECT = 10`
+cap in `decider.ts` and archived 90 of them on create. Upstream's "which transcripts are already
+imported?" query (`listImportedAgentSessionSourceRows`) **excludes archived threads by design** — it has
+an explicit test for that — so the cap made the import never settle: every later scan re-read 92
+transcripts and skipped 90, forever.
+
+Resolution: **threads imported from provider history are exempt from the cap**, as both trigger and
+candidate. `thread.create` skips the cap when the command carries `historyImport: true`, and
+`listThreadsToArchiveBeforeCreate` filters imported threads out of its candidate list via the new
+`isImportedAgentSessionThreadId` helper (`packages/contracts/src/agentSessions.ts`, beside the existing
+`isImportedAgentSessionMessageId`). The cap still bounds threads the user actually starts, and upstream's
+bounded-import test passes unmodified.
+
+**Do not "fix" this by dropping `archived_at IS NULL` from that query** — it is upstream-owned and
+explicitly tested (`ProjectionSnapshotQuery.test.ts > requires active project threads, a binding, and an
+imported message`), and it is what lets a user re-import a thread they archived by hand.
+
+### New recurring seam: upstream runs knip and prunes unused exports
+
+Upstream added `knip:check` to CI and did a repo-wide unused-export sweep. Anything exported solely for a
+fork-only consumer looks unused **from upstream's side** and gets un-exported, which surfaces as
+`TS2459: declares 'X' locally, but it is not exported` after a merge. Re-exported this window:
+
+- `withEnvironmentCredentials` and `buildEnvironmentAuthHeaders` (`packages/client-runtime/src/state/environmentHttpAuth.ts`)
+  — consumed by the fork's `externalThreadReferences.ts` and `threadExportHttp.ts`.
+- `runInEnvironment` (`packages/client-runtime/src/state/runtime.ts`) — consumed by the fork's `threadCommands.ts`.
+
+Going the other way, upstream un-exported `providerErrorLabel` (`ProviderCommandReactor.ts`) and
+`WsServerUpdateProviderRpc` (`rpc.ts`); both were taken, since the fork's consumers use
+`providerErrorLabelFromInstanceHint` and the RPC group respectively. The fork's
+`WsServerRefreshProviderRateLimitsRpc` was made non-exported to match that convention.
+
+**Upstream's `knip:check` CI step was dropped from `ci.yml`.** The fork deliberately carries dead code
+(`apps/desktop/src/updates/releaseNotes.ts`) and fork-only exports that knip cannot see consumers for, so
+the step would fail. Re-evaluate only if the fork's dead code is cleaned up.
+
+### Load balancing came in; the environment picker stayed out
+
+Upstream added draft **environment load balancing** to `ChatView` (`loadBalancingEnabled`, default
+`false`). It is built on top of the environment picker the fork removed, and git aligned the whole
+126-line block against an empty fork side. The block was **taken**, minus the three picker-only helpers
+(`onAutoEnvironment`, `autoEnvironmentLabel`, `onEnvironmentChange`) and the `BranchToolbar` props that
+consume them — `BranchToolbar` gates its picker on `onEnvironmentChange` being passed, so leaving them
+out keeps the fork's removal intact. `needsLoadBalancing` / `loadBalancing` are live (the auto-assign
+effect and the toast both auto-merged in) and run from the setting, not the menu.
+
+### Other notable resolutions
+
+- **`useHandleNewThread`: upstream converged past the fork.** The fork read new-thread defaults from
+  `primaryServerSettings` because "the settings UI only ever edits the primary environment's
+  settings.json". That is no longer true — `ProjectSettingsPanel` now reads via
+  `useEnvironmentSettings(representative.environmentId)` and writes with
+  `updateServerSettings({ environmentId, ... })` per environment. Upstream's `targetServerSettings`
+  (for `defaultModelSelection` and `defaultThreadEnvMode`) was adopted and the fork's comment retired;
+  the fork's `machineEnvironmentId` scope guard stays. `newWorktreesStartFromOrigin` still comes from
+  the primary settings, as upstream has it.
+- **`ChatView` `lockedProvider` moved.** Upstream's declaration now takes a `providers` argument and sits
+  after `providerStatuses`; git left the fork's older copy in the conflict, which would have been a
+  duplicate declaration. The fork's read-watermark / `clearThreadUnread` effect above it was kept.
+- **`ChatView` send path**: upstream only added `clearUsageLimitsFor(routeThreadKey)` to the turn-start
+  success branch, but git aligned that whole branch against the fork's `bootstrap` /
+  `backgroundThreadRef` prelude. Kept the prelude, re-applied the one line where it belongs.
+- **`MessagesTimeline`**: the usual re-wrap conflict — upstream's viewport `<div>` + `LegendList` aligned
+  against the fork's `TimelineSearchCtx` / `TimelineSelectionPinCtx` opening. Fork wrappers kept,
+  upstream's duplicate discarded, and its one new prop (`onItemSizeChanged={reportContentOverflow}`)
+  carried onto the surviving list. Upstream also changed the tool-row chevron from `rotate-180` to
+  `rotate-90`; that was taken, on the fork's `effectiveExpanded`.
+- **`shouldShowDesktopUpdateButton` was deleted** with upstream. It was **already dead at the fork tip** —
+  only its own test consumed it — so no fork behavior was lost. The fork's
+  `resolveDesktopUpdateButtonAction` is byte-identical to upstream's and keeps the fork's installer
+  semantics, so upstream's new `status === "available" → "download"` expectation was reverted to `"none"`;
+  the affected tests now assert `isDesktopUpdateButtonDisabled` instead.
+- **`ElectronUpdater.{ts,test.ts}` stayed deleted** (modify/delete), and `DesktopUpdates.ts` kept the
+  fork's payload-only `DesktopUpdateSetChannelError` alias rather than upstream's union with
+  `DesktopUpdateActionInProgressError`, which the fork's facade does not define.
+- **`LegacySidebar`**: upstream dropped three lucide imports; `ListTodoIcon` and `PinIcon` are still used
+  by fork surfaces and were kept, `LoaderIcon` really was unused and stayed dropped.
+- **`ChatMarkdown`**: kept the fork's `getOptionalSyntaxHighlighterPromise` and added upstream's
+  `GitHubIcon` import (upstream's new `brandLinkIcon` needs it).
+- Test fixtures needed the other side's fields as always: `queuedPrompts: []` in upstream's
+  `AgentSessionImporter.test.ts` and `threads-atoms.test.ts` (which also took upstream's `"ModelA"`
+  model literal), and `ServerEnvironment.identityLayerTest()` on that importer test's reactor layer —
+  the fork's `ProviderCommandReactor` requires `ServerEnvironmentIdentity` for cross-environment thread
+  references and upstream's new test did not provide it.
+- `.github/workflows` still holds only `ci.yml` + `release.yml`; no upstream-only workflows arrived.
+- `effect` stayed on beta.103, so the fork patch did not need re-deriving. `pnpm-lock.yaml` was
+  regenerated (upstream added `knip`, dropped `@babel/plugin-transform-react-jsx` and `@oxlint/plugins`).
+- Fork package versions stay on `0.0.25-amit` (upstream is at `0.0.39`).
+
+### Known environment-only failure (not merge fallout)
+
+`apps/server/src/project/AgentSessionScanner.test.ts > excludes sandboxes reached through a symlink into
+the worktrees dir` fails on macOS, **verified failing identically on a pristine `upstream/main`
+worktree**. Same root cause as the long-standing `entrypoint.test.ts` case: `os.tmpdir()` returns
+`/var/...`, itself a symlink to `/private/var/...`.
+
 ## 2026-09-05 upstream merge (upstream ships usage limits, ChatMarkdown hoisted) — migration notes
 
 Merged `upstream/main` through `e5a87e8b9` (351 commits). Large merge — 57 conflicts. Headline:

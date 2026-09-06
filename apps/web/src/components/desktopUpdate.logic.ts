@@ -57,20 +57,6 @@ export function resolveDesktopUpdateButtonAction(
   return "none";
 }
 
-export function shouldShowDesktopUpdateButton(state: DesktopUpdateState | null): boolean {
-  if (!state || !state.enabled) {
-    return false;
-  }
-  // Show the pill while an update is actively being prepared so a manual check
-  // has visible feedback before the restart action becomes available.
-  if (state.status === "downloading" && state.availableVersion !== null) {
-    return true;
-  }
-  // Once preparation finishes, the pill remains only for actionable states: a
-  // downloaded update ready to apply, or a failed download/install to retry.
-  return resolveDesktopUpdateButtonAction(state) !== "none";
-}
-
 export function shouldShowArm64IntelBuildWarning(state: DesktopUpdateState | null): boolean {
   return state?.hostArch === "arm64" && state.appArch === "x64";
 }

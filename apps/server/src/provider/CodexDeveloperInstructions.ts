@@ -35,7 +35,7 @@ Treat what you find as history, not as current truth: it describes work as it wa
 const browserToolInstructions = (browserToolsAvailable: boolean): string =>
   browserToolsAvailable ? T3_CODE_BROWSER_TOOL_INSTRUCTIONS : "";
 
-export const codexPlanModeDeveloperInstructions = (
+const codexPlanModeDeveloperInstructions = (
   browserToolsAvailable: boolean,
 ): string => `<collaboration_mode># Plan Mode (Conversational)
 
@@ -168,7 +168,7 @@ If the user stays in Plan mode and asks for revisions after a prior \`<proposed_
 ${browserToolInstructions(browserToolsAvailable)}${T3_CODE_THREAD_HISTORY_INSTRUCTIONS}
 </collaboration_mode>`;
 
-export const codexDefaultModeDeveloperInstructions = (
+const codexDefaultModeDeveloperInstructions = (
   browserToolsAvailable: boolean,
 ): string => `<collaboration_mode># Collaboration Mode: Default
 
