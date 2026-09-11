@@ -1059,9 +1059,15 @@ export const make = (
                             : Effect.failCause(cause),
                         ),
                         // A reply that lost the race with a cancel is still a cancel.
+                        // An agent that already answered "cancelled" keeps its own
+                        // reply so its `_meta` (native-cancel markers) survives.
                         Effect.flatMap((response) =>
                           isCancelled.pipe(
-                            Effect.map((cancelled) => (cancelled ? cancelledResponse : response)),
+                            Effect.map((cancelled) =>
+                              cancelled && response.stopReason !== "cancelled"
+                                ? cancelledResponse
+                                : response,
+                            ),
                           ),
                         ),
                         Effect.tap(() =>

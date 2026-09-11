@@ -32,6 +32,7 @@ import { readLocalApi } from "../localApi";
 import {
   readEnvironmentSupportsPinning,
   readEnvironmentSupportsPinReorder,
+  readEnvironmentSupportsActiveReorder,
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
   readEnvironmentThreadRefs,
@@ -47,7 +48,7 @@ import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { useClientSettings } from "./useSettings";
 import { useAtomCommand } from "../state/use-atom-command";
 
-export class ThreadArchiveBlockedError extends Schema.TaggedErrorClass<ThreadArchiveBlockedError>()(
+export class ThreadArchiveBlockedError extends Schema.TaggedError<ThreadArchiveBlockedError>()(
   "ThreadArchiveBlockedError",
   {
     environmentId: EnvironmentId,
@@ -81,7 +82,7 @@ async function waitForServerThread(target: ScopedThreadRef, timeoutMs = 2_000): 
   });
 }
 
-export class ThreadSettlementUnsupportedError extends Schema.TaggedErrorClass<ThreadSettlementUnsupportedError>()(
+export class ThreadSettlementUnsupportedError extends Schema.TaggedError<ThreadSettlementUnsupportedError>()(
   "ThreadSettlementUnsupportedError",
   {
     environmentId: EnvironmentId,
@@ -93,7 +94,7 @@ export class ThreadSettlementUnsupportedError extends Schema.TaggedErrorClass<Th
   }
 }
 
-export class ThreadSnoozeUnsupportedError extends Schema.TaggedErrorClass<ThreadSnoozeUnsupportedError>()(
+export class ThreadSnoozeUnsupportedError extends Schema.TaggedError<ThreadSnoozeUnsupportedError>()(
   "ThreadSnoozeUnsupportedError",
   {
     environmentId: EnvironmentId,
@@ -105,7 +106,7 @@ export class ThreadSnoozeUnsupportedError extends Schema.TaggedErrorClass<Thread
   }
 }
 
-export class ThreadSnoozeBlockedError extends Schema.TaggedErrorClass<ThreadSnoozeBlockedError>()(
+export class ThreadSnoozeBlockedError extends Schema.TaggedError<ThreadSnoozeBlockedError>()(
   "ThreadSnoozeBlockedError",
   {
     environmentId: EnvironmentId,
@@ -129,7 +130,7 @@ function topOfPinnedRunOrderKey(): string | undefined {
   return pinOrderKeyBetween(null, firstKey) ?? undefined;
 }
 
-export class ThreadPinningUnsupportedError extends Schema.TaggedErrorClass<ThreadPinningUnsupportedError>()(
+export class ThreadPinningUnsupportedError extends Schema.TaggedError<ThreadPinningUnsupportedError>()(
   "ThreadPinningUnsupportedError",
   {
     environmentId: EnvironmentId,
@@ -141,7 +142,7 @@ export class ThreadPinningUnsupportedError extends Schema.TaggedErrorClass<Threa
   }
 }
 
-export class ThreadPinReorderUnsupportedError extends Schema.TaggedErrorClass<ThreadPinReorderUnsupportedError>()(
+export class ThreadPinReorderUnsupportedError extends Schema.TaggedError<ThreadPinReorderUnsupportedError>()(
   "ThreadPinReorderUnsupportedError",
   {
     environmentId: EnvironmentId,
@@ -150,6 +151,18 @@ export class ThreadPinReorderUnsupportedError extends Schema.TaggedErrorClass<Th
 ) {
   override get message(): string {
     return "This environment's server does not support reordering pinned threads yet. Update the server to reorder pins.";
+  }
+}
+
+export class ThreadActiveReorderUnsupportedError extends Schema.TaggedError<ThreadActiveReorderUnsupportedError>()(
+  "ThreadActiveReorderUnsupportedError",
+  {
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+  },
+) {
+  override get message(): string {
+    return "Update this environment's server to reorder active threads.";
   }
 }
 
@@ -219,6 +232,9 @@ export function useThreadActions() {
     reportFailure: false,
   });
   const reorderPinnedThreadMutation = useAtomCommand(threadEnvironment.reorderPin, {
+    reportFailure: false,
+  });
+  const reorderActiveThreadMutation = useAtomCommand(threadEnvironment.reorderActive, {
     reportFailure: false,
   });
   const snoozeThreadMutation = useAtomCommand(threadEnvironment.snooze, {
@@ -742,6 +758,26 @@ export function useThreadActions() {
     [reorderPinnedThreadMutation],
   );
 
+  const reorderActiveThread = useCallback(
+    async (target: ScopedThreadRef, orderKey: string) => {
+      if (!readEnvironmentSupportsActiveReorder(target.environmentId)) {
+        return AsyncResult.failure(
+          Cause.fail(
+            new ThreadActiveReorderUnsupportedError({
+              environmentId: target.environmentId,
+              threadId: target.threadId,
+            }),
+          ),
+        );
+      }
+      return reorderActiveThreadMutation({
+        environmentId: target.environmentId,
+        input: { threadId: target.threadId, orderKey },
+      });
+    },
+    [reorderActiveThreadMutation],
+  );
+
   const snoozeThread = useCallback(
     async (target: ScopedThreadRef, snoozedUntil: string) => {
       // Version skew: never send the command to a server that predates it.
@@ -843,6 +879,7 @@ export function useThreadActions() {
       unpinThread,
       confirmAndUnpinThread,
       reorderPinnedThread,
+      reorderActiveThread,
     }),
     [
       archiveThread,
@@ -854,6 +891,7 @@ export function useThreadActions() {
       pinThread,
       reorderPinnedThread,
       setThreadPinned,
+      reorderActiveThread,
       settleThread,
       snoozeThread,
       unarchiveThread,

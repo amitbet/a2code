@@ -10,7 +10,10 @@ import type {
   AgentSessionImportSource,
   ApprovalRequestId,
   CheckpointRef,
+  MessageId,
   OrchestrationCheckpointSummary,
+  OrchestrationMessage,
+  OrchestrationQueuedPrompt,
   OrchestrationProject,
   OrchestrationProjectShell,
   OrchestrationReadModel,
@@ -210,6 +213,42 @@ export interface ProjectionSnapshotQueryShape {
     Option.Option<Pick<OrchestrationThreadShell, "id" | "title" | "session">>,
     ProjectionRepositoryError
   >;
+
+  /**
+   * Read one requested message and whether another non-compaction user message exists.
+   * Newer queued messages count too, preserving first-turn title eligibility.
+   */
+  readonly getTurnStartMessage: (input: {
+    readonly threadId: ThreadId;
+    readonly messageId: MessageId;
+  }) => Effect.Effect<
+    Option.Option<{
+      readonly message: OrchestrationMessage;
+      readonly hasOtherUserMessages: boolean;
+    }>,
+    ProjectionRepositoryError
+  >;
+
+  /**
+   * Fork-owned: the facts a turn start needs about the thread itself without
+   * decoding any message body — which thread it was forked from (the implicit
+   * first-turn reference) and how many user messages it holds so far.
+   */
+  readonly getThreadForkContext: (threadId: ThreadId) => Effect.Effect<
+    Option.Option<{
+      readonly forkedFromId: ThreadId | null;
+      readonly userMessageCount: number;
+    }>,
+    ProjectionRepositoryError
+  >;
+
+  /**
+   * Fork-owned: the thread's queued prompts in FIFO order, read on their own so
+   * draining the queue does not load the conversation.
+   */
+  readonly getThreadQueuedPrompts: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ReadonlyArray<OrchestrationQueuedPrompt>, ProjectionRepositoryError>;
 
   /**
    * Read a single active thread detail snapshot by id.

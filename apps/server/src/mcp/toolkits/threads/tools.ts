@@ -35,7 +35,7 @@ const dependencies = [
   Path.Path,
 ];
 
-export class ThreadHistoryUnavailableError extends Schema.TaggedErrorClass<ThreadHistoryUnavailableError>()(
+export class ThreadHistoryUnavailableError extends Schema.TaggedError<ThreadHistoryUnavailableError>()(
   "ThreadHistoryUnavailableError",
   { reason: Schema.String },
 ) {
@@ -44,7 +44,7 @@ export class ThreadHistoryUnavailableError extends Schema.TaggedErrorClass<Threa
   }
 }
 
-export class ThreadNotFoundError extends Schema.TaggedErrorClass<ThreadNotFoundError>()(
+export class ThreadNotFoundError extends Schema.TaggedError<ThreadNotFoundError>()(
   "ThreadNotFoundError",
   { threadId: Schema.String },
 ) {
@@ -53,7 +53,7 @@ export class ThreadNotFoundError extends Schema.TaggedErrorClass<ThreadNotFoundE
   }
 }
 
-export class CrossProjectSearchDisabledError extends Schema.TaggedErrorClass<CrossProjectSearchDisabledError>()(
+export class CrossProjectSearchDisabledError extends Schema.TaggedError<CrossProjectSearchDisabledError>()(
   "CrossProjectSearchDisabledError",
   {},
 ) {

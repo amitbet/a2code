@@ -68,7 +68,7 @@ export type ThreadReferenceFailure = typeof ThreadReferenceFailure.Type;
  * attached that history on purpose, and an agent that never sees it answers
  * confidently from a hole.
  */
-export class ThreadReferencesUnresolvedError extends Schema.TaggedErrorClass<ThreadReferencesUnresolvedError>()(
+export class ThreadReferencesUnresolvedError extends Schema.TaggedError<ThreadReferencesUnresolvedError>()(
   "ThreadReferencesUnresolvedError",
   { failures: Schema.Array(ThreadReferenceFailure) },
 ) {
@@ -108,7 +108,7 @@ const preparedConnectionFor = (
     )
     .pipe(Effect.orElseSucceed(() => Option.none<PreparedConnection>()));
 
-class TranscriptUploadError extends Schema.TaggedErrorClass<TranscriptUploadError>()(
+class TranscriptUploadError extends Schema.TaggedError<TranscriptUploadError>()(
   "TranscriptUploadError",
   { detail: Schema.String, cause: Schema.optional(Schema.Defect()) },
 ) {

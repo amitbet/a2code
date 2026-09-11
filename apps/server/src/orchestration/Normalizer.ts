@@ -5,6 +5,8 @@ import * as Path from "effect/Path";
 import {
   type ChatAttachment,
   type ClientOrchestrationCommand,
+  type UserInputAttachments,
+  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   type IsoDateTime,
   type OrchestrationCommand,
   OrchestrationDispatchCommandError,
@@ -134,11 +136,24 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
 
     if (
       canonicalCommand.type !== "thread.turn.start" &&
-      canonicalCommand.type !== "thread.prompt.queue"
+      canonicalCommand.type !== "thread.prompt.queue" &&
+      canonicalCommand.type !== "thread.user-input.respond"
     ) {
       return canonicalCommand as OrchestrationCommand;
     }
 
+    const attachments =
+      canonicalCommand.type === "thread.user-input.respond"
+        ? Object.values(canonicalCommand.attachmentsByQuestionId ?? {}).flat()
+        : canonicalCommand.message.attachments;
+    if (
+      canonicalCommand.type === "thread.user-input.respond" &&
+      attachments.length > PROVIDER_SEND_TURN_MAX_ATTACHMENTS
+    ) {
+      return yield* new OrchestrationDispatchCommandError({
+        message: `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} files per question response.`,
+      });
+    }
     const claimedAttachmentPaths: string[] = [];
 
     /**
@@ -212,7 +227,7 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
     });
 
     const normalizedAttachments = yield* Effect.forEach(
-      canonicalCommand.message.attachments,
+      attachments,
       (attachment) =>
         Effect.gen(function* () {
           if (!("dataUrl" in attachment)) {
@@ -256,6 +271,7 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
             name: attachment.name,
             mimeType: parsed.mimeType.toLowerCase(),
             sizeBytes: bytes.byteLength,
+            ...(attachment.source ? { source: attachment.source } : {}),
           };
 
           const attachmentPath = resolveAttachmentPath({
@@ -290,6 +306,25 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
       { concurrency: 1 },
     ).pipe(Effect.tapError(() => removeClaimedAttachmentPaths(claimedAttachmentPaths)));
 
+    if (canonicalCommand.type === "thread.user-input.respond") {
+      let index = 0;
+      const attachmentsByQuestionId = Object.fromEntries(
+        Object.entries(canonicalCommand.attachmentsByQuestionId ?? {}).map(
+          ([questionId, original]) => {
+            const claimed = normalizedAttachments.slice(
+              index,
+              index + original.length,
+            ) as UserInputAttachments[string];
+            index += original.length;
+            return [questionId, claimed];
+          },
+        ),
+      );
+      return {
+        ...canonicalCommand,
+        ...(attachments.length > 0 ? { attachmentsByQuestionId } : {}),
+      };
+    }
     const normalizedThreadReferences =
       canonicalCommand.threadReferences === undefined
         ? undefined
@@ -317,9 +352,29 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
 export const cleanupFailedUploadedAttachments = Effect.fn(
   "Normalizer.cleanupFailedUploadedAttachments",
 )(function* (command: ClientOrchestrationCommand, normalizedCommand: OrchestrationCommand) {
-  if (command.type !== "thread.turn.start" || normalizedCommand.type !== "thread.turn.start") {
-    return;
-  }
+  const originalAttachments =
+    command.type === "thread.turn.start" || command.type === "thread.prompt.queue"
+      ? command.message.attachments
+      : command.type === "thread.user-input.respond"
+        ? Object.values(command.attachmentsByQuestionId ?? {}).flat()
+        : [];
+  const normalizedAttachments =
+    normalizedCommand.type === "thread.turn.start" ||
+    normalizedCommand.type === "thread.prompt.queue"
+      ? normalizedCommand.message.attachments
+      : normalizedCommand.type === "thread.user-input.respond"
+        ? Object.values(normalizedCommand.attachmentsByQuestionId ?? {}).flat()
+        : [];
+  const originalThreadReferences =
+    command.type === "thread.turn.start" || command.type === "thread.prompt.queue"
+      ? (command.threadReferences ?? [])
+      : [];
+  const normalizedThreadReferences =
+    normalizedCommand.type === "thread.turn.start" ||
+    normalizedCommand.type === "thread.prompt.queue"
+      ? (normalizedCommand.threadReferences ?? [])
+      : [];
+  if (normalizedAttachments.length === 0 && normalizedThreadReferences.length === 0) return;
 
   const serverConfig = yield* ServerConfig;
   const claimedPaths: string[] = [];
@@ -341,8 +396,8 @@ export const cleanupFailedUploadedAttachments = Effect.fn(
       claimedPaths.push(claimedPath);
     }
   };
-  for (const [index, attachment] of normalizedCommand.message.attachments.entries()) {
-    const original = command.message.attachments[index];
+  for (const [index, attachment] of normalizedAttachments.entries()) {
+    const original = originalAttachments[index];
     if (original && "dataUrl" in original) {
       continue;
     }
@@ -350,8 +405,8 @@ export const cleanupFailedUploadedAttachments = Effect.fn(
   }
   // Reference transcripts are claimed the same way, so a failed turn has to
   // release their copies too or every retry leaks one.
-  for (const [index, reference] of (normalizedCommand.threadReferences ?? []).entries()) {
-    collectClaimedPath(command.threadReferences?.[index]?.attachment, reference.attachment);
+  for (const [index, reference] of normalizedThreadReferences.entries()) {
+    collectClaimedPath(originalThreadReferences[index]?.attachment, reference.attachment);
   }
   yield* removeClaimedAttachmentPaths(claimedPaths);
 });

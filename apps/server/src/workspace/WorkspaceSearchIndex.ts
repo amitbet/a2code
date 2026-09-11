@@ -13,8 +13,8 @@ import type {
   SearchResult,
 } from "@ff-labs/fff-node";
 // @effect-diagnostics nodeBuiltinImport:off
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -30,6 +30,7 @@ import type {
   ProjectSearchEntriesResult,
 } from "@t3tools/contracts";
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 const WORKSPACE_INDEX_MAX_ENTRIES = 25_000;
 const WORKSPACE_INDEX_PAGE_SIZE = WORKSPACE_INDEX_MAX_ENTRIES + 2;
@@ -44,7 +45,7 @@ const CONTENT_SEARCH_MAX_MATCHES_PER_FILE = 100;
 // from that stable location instead of resolving it beside its own bin.mjs.
 const DESKTOP_FFF_NODE_MODULE_PATH = "T3CODE_DESKTOP_FFF_NODE_MODULE_PATH";
 
-export class WorkspaceSearchIndexCreateFailed extends Schema.TaggedErrorClass<WorkspaceSearchIndexCreateFailed>()(
+export class WorkspaceSearchIndexCreateFailed extends Schema.TaggedError<WorkspaceSearchIndexCreateFailed>()(
   "WorkspaceSearchIndexCreateFailed",
   {
     cwd: Schema.String,
@@ -57,7 +58,7 @@ export class WorkspaceSearchIndexCreateFailed extends Schema.TaggedErrorClass<Wo
   }
 }
 
-export class WorkspaceSearchIndexScanTimedOut extends Schema.TaggedErrorClass<WorkspaceSearchIndexScanTimedOut>()(
+export class WorkspaceSearchIndexScanTimedOut extends Schema.TaggedError<WorkspaceSearchIndexScanTimedOut>()(
   "WorkspaceSearchIndexScanTimedOut",
   {
     cwd: Schema.String,
@@ -69,7 +70,7 @@ export class WorkspaceSearchIndexScanTimedOut extends Schema.TaggedErrorClass<Wo
   }
 }
 
-export class WorkspaceSearchIndexSearchFailed extends Schema.TaggedErrorClass<WorkspaceSearchIndexSearchFailed>()(
+export class WorkspaceSearchIndexSearchFailed extends Schema.TaggedError<WorkspaceSearchIndexSearchFailed>()(
   "WorkspaceSearchIndexSearchFailed",
   {
     cwd: Schema.String,
@@ -84,7 +85,7 @@ export class WorkspaceSearchIndexSearchFailed extends Schema.TaggedErrorClass<Wo
   }
 }
 
-export class WorkspaceSearchIndexRefreshFailed extends Schema.TaggedErrorClass<WorkspaceSearchIndexRefreshFailed>()(
+export class WorkspaceSearchIndexRefreshFailed extends Schema.TaggedError<WorkspaceSearchIndexRefreshFailed>()(
   "WorkspaceSearchIndexRefreshFailed",
   {
     cwd: Schema.String,
@@ -97,7 +98,7 @@ export class WorkspaceSearchIndexRefreshFailed extends Schema.TaggedErrorClass<W
   }
 }
 
-export class WorkspaceSearchIndexDestroyFailed extends Schema.TaggedErrorClass<WorkspaceSearchIndexDestroyFailed>()(
+export class WorkspaceSearchIndexDestroyFailed extends Schema.TaggedError<WorkspaceSearchIndexDestroyFailed>()(
   "WorkspaceSearchIndexDestroyFailed",
   {
     cwd: Schema.String,
@@ -139,20 +140,28 @@ function toPosixPath(input: string): string {
   return input.replaceAll("\\", "/");
 }
 
-function bundledDesktopFffNodeModulePath(): string | undefined {
+function bundledDesktopFffNodeModulePath(platform: NodeJS.Platform): string | undefined {
   const resourcesPath = Reflect.get(process, "resourcesPath");
   if (process.env.ELECTRON_RUN_AS_NODE !== "1" || typeof resourcesPath !== "string") {
     return undefined;
   }
-  const serverArchive = process.platform === "win32" ? "server.asar" : "app.asar";
-  return join(resourcesPath, serverArchive, "node_modules/@ff-labs/fff-node/dist/src/index.js");
+  const serverArchive = platform === "win32" ? "server.asar" : "app.asar";
+  return NodePath.join(
+    resourcesPath,
+    serverArchive,
+    "node_modules/@ff-labs/fff-node/dist/src/index.js",
+  );
 }
 
-const loadFileFinderModule = (): Promise<typeof import("@ff-labs/fff-node")> => {
+const loadFileFinderModule = (
+  platform: NodeJS.Platform,
+): Promise<typeof import("@ff-labs/fff-node")> => {
   const desktopModulePath =
-    process.env[DESKTOP_FFF_NODE_MODULE_PATH] ?? bundledDesktopFffNodeModulePath();
+    process.env[DESKTOP_FFF_NODE_MODULE_PATH] ?? bundledDesktopFffNodeModulePath(platform);
   return desktopModulePath
-    ? (import(pathToFileURL(desktopModulePath).href) as Promise<typeof import("@ff-labs/fff-node")>)
+    ? (import(NodeURL.pathToFileURL(desktopModulePath).href) as Promise<
+        typeof import("@ff-labs/fff-node")
+      >)
     : import("@ff-labs/fff-node");
 };
 
@@ -329,8 +338,9 @@ const createFinder = Effect.fn("WorkspaceSearchIndex.createFinder")(function* (
   cwd: string,
   variant: WorkspaceSearchIndexVariant,
 ) {
+  const platform = yield* HostProcessPlatform;
   const fffNode = yield* Effect.tryPromise({
-    try: loadFileFinderModule,
+    try: () => loadFileFinderModule(platform),
     catch: (cause) =>
       new WorkspaceSearchIndexCreateFailed({
         cwd,
@@ -591,6 +601,8 @@ function parseWorkspaceSearchIndexKey(key: string): {
  * workspace root and variant. WorkspaceSearchIndexMap owns memoization and
  * idle cleanup; using a default cwd here would mix resources from different
  * workspaces.
+ *
+ * @public Service construction is part of the canonical Effect module API.
  */
 export const layer = (key: string) => {
   const { cwd, variant } = parseWorkspaceSearchIndexKey(key);

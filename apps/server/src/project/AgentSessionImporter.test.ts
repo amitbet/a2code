@@ -126,6 +126,7 @@ const makeProjectedThread = (input: {
     queuedPrompts: [],
     runtimeMode: "full-access",
     interactionMode: "default",
+    pullRequests: [],
     branch: null,
     worktreePath: null,
     latestTurn: null,

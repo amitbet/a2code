@@ -3,6 +3,110 @@
 This file tracks fork-specific divergences that are likely to conflict when
 merging `upstream/main`.
 
+## 2026-09-11 upstream merge (Effect rc.112, thread pull-request links, manual active ordering) — migration notes
+
+Merged `upstream/main` through `26894dda7b` (262 commits). Large merge — 73 conflicts. Three things
+matter going forward: **Effect moved beta.103 → rc.112 and renamed `Schema.TaggedErrorClass` to
+`Schema.TaggedError`**, **upstream now lets users arrange the active thread list by hand**, and
+**upstream shipped three migrations that had to be renumbered**.
+
+### Migrations: upstream 48-50 became the fork's 52-54 — next free id is 55
+
+Upstream added `048_ProjectionThreadBranchPullRequest`, `049_ProjectionThreadsActiveOrderKey` and
+`050_ProjectionThreadPullRequests`. All three collided with fork ids (048 is the fork's queued-prompt
+thread references, 049/050 are the fork's copies of upstream's earlier 045/046). They were renamed to
+**052/053/054** (files, registry entries in `Migrations.ts`, the `it.layer` names, and the
+`toMigrationInclusive` bounds in their tests). Fork ids 33-35, 43 and 48 stay frozen.
+
+### Effect rc.112: the fork's `effect` patch hunk is gone for good
+
+Upstream's rc.112 made `Schema.toArbitrary` lazy (it takes `fc` and no longer imports
+`testing/FastCheck` eagerly), which is exactly what the fork's extra patch hunk did by hand since
+`5a2ae9f79`. **`patches/effect@4.0.0-rc.112.patch` is upstream's file verbatim; do not re-derive the
+Schema hunk.** Verified `dist/Schema.js` has no runtime fast-check import. The earlier merge notes that
+say "expect to repeat this on every effect bump" are obsolete.
+
+The rename `Schema.TaggedErrorClass` → `Schema.TaggedError` had to be applied to fork-only files
+(`mcp/toolkits/threads/tools.ts`, `ProviderCommandReactor.ts`, `externalThreadReferences.ts`,
+`DesktopUpdates.ts`, `useThreadActions.ts`, `WorkspaceSearchIndex.ts`). Upstream also added oxlint
+rules (`t3code/namespace-node-imports`, `t3code/no-global-process-runtime`) that flagged the fork's
+lazy fff-node loader in `WorkspaceSearchIndex.ts`; it now reads the platform from
+`HostProcessPlatform` (a `Context.Reference`, so no layer requirement leaks).
+
+### Active thread ordering: upstream's manual arrangement wins once the user arranges
+
+Upstream added `activeOrderKey` (drag-to-reorder on web, Move up/down on mobile) and replaced
+`sortThreadsForSidebar` / `sortThreadsForListV2` with `sortActiveThreadsByOrderKey`
+(`packages/client-runtime/src/state/threadSort.ts`). The fork's "sort by last prompt" feature is
+kept as the ordering for **unkeyed** rows: `activeThreadAnchorTimestampMs` still includes
+`latestUserMessageAt`, and `sortActiveThreadsByOrderKey` uses it for every row without a saved key.
+Once a user arranges a section the keys are materialized and rows stop moving on prompts — that is
+upstream's explicit contract and the fork follows it. `Sidebar.logic.ts` and mobile `threadListV2.ts`
+are upstream's; the fork's `activeThreadAnchorTimestamp` label resolver is unchanged. The fork's
+mobile tests that asserted `sortThreadsForListV2` owned the pinned block were dropped (upstream now
+sections pinned rows separately via `getThreadListV2OrderedSection`).
+
+### Other notable resolutions
+
+- **Turn start no longer loads the thread detail.** Upstream added a test asserting that starting a
+  turn never decodes older message bodies (`unreadableHistory` harness). The fork's
+  `buildSendTurnRequestForThread` used to read the full detail for `forkedFromId` and the
+  first-user-turn check, and the queue drain read it for `queuedPrompts[0]`. Both now use two
+  fork-owned `ProjectionSnapshotQuery` methods, `getThreadForkContext` and `getThreadQueuedPrompts`
+  (`Services/ProjectionSnapshotQuery.ts` + `Layers/ProjectionSnapshotQuery.ts`). **Every test stub of
+  that interface needs both** (`() => Effect.die("unused")`), the same way upstream's
+  `getTurnStartMessage` does; there are ~14 such stubs.
+- **Test expectations re-aimed at fork behavior:** `McpSessionRegistry.test` (the fork always grants
+  `threads`), `ClaudeAdapter.test` "puts the command text last" (PDFs become `document` blocks here),
+  the fork's own inline-file test (upstream now places the user's text last), and
+  `AcpSessionRuntime` keeps an agent's own `cancelled` reply so upstream's `_meta.nativeCancel` test
+  passes.
+- **Question answers now render twice by design.** Upstream folds `AskUserQuestion` answers into the
+  tool row (`QuestionAnswerHistory`, visible only when the row is expanded). The fork's standalone
+  "Answered" timeline row (`deriveUserInputExchanges`) is kept. `derivePendingApprovals` /
+  `derivePendingUserInputs` moved upstream into `@t3tools/client-runtime/pending-requests` and the
+  fork's copies in `session-logic.ts` were deleted; `parseUserInputQuestions` stays because the
+  exchange derivation needs it. Consider retiring the fork row if the duplication bothers users.
+- **ChatMarkdown** merges upstream's incremental line-preserving highlighter (`preserveLines`,
+  `HighlightedCodeLines`) with the fork's selection-deferred swap: the wait for the selection to leave
+  applies only when the swap replaces markup wholesale (plain → highlighted, or HTML strings); once
+  keyed lines are mounted a newer line document lands immediately. `rootRef` was folded into
+  upstream's `markdownRef` (same element).
+- **Normalizer**: attachments are claimed for `thread.turn.start`, the fork's `thread.prompt.queue`,
+  and upstream's `thread.user-input.respond`; `cleanupFailedUploadedAttachments` mirrors that and still
+  releases fork thread-reference transcripts.
+- **Codex `openCodexThread`** takes upstream's resume-metadata decoding (`raw.request` +
+  `excludeTurns`) and keeps the fork's `thread/fork` branch; the client's `request` is generic over
+  `"thread/start" | "thread/fork"`, and upstream's new tests pass `forkFromThreadId: undefined`.
+- **MCP**: capabilities are `"preview" | "threads" | "device" | "pull-requests"`; the session registry
+  always grants `threads` (and upstream's `pull-requests`) and takes `preview`/`device` from the request.
+  Upstream's generic `requireMcpCapability` replaced the fork's preview-only narrowing.
+- **Mobile pending tasks**: upstream rewrote `usePendingNewTasks` around drafts; the fork's machine
+  scope is re-applied as a filter on `task.environmentId` (null scope = no filter).
+- **Linux desktop entry name** follows upstream's new reverse-DNS convention, rebranded:
+  `com.amitbet.A2Code[.Development].desktop` (`resolveLinuxDesktopEntryName`).
+- **Marketing download page** is upstream's redesign rebranded to A2 Code, minus the Mobile and
+  Terminal (`npx t3`) sections the fork does not ship.
+- `useHandleNewThread.test.ts` (upstream's) needed `../state/environments` mocked because the fork's
+  hook reaches the machine-scope hooks; the contracts mock spreads `importOriginal`.
+- CI: `ci.yml`/`release.yml` byte-identical to the fork tip; `deploy-relay.yml` and the other new
+  upstream workflows stayed out. Upstream's `.github/scripts/check-nightly-release.cjs` came in (not a
+  workflow, unused here).
+- Fork package versions stay on `0.0.25-amit` (upstream is at `0.0.40`).
+
+### Known environment-only failure (not merge fallout)
+
+`scripts/build-desktop-artifact.test.ts > skips the primary native probe for cross-architecture
+Windows payloads` fails on this macOS host, **verified failing identically on a pristine
+`upstream/main` worktree**. Likewise environment-only, all verified against pristine upstream on this
+host: `apps/server` `entrypoint`, `AgentSessionScanner` (symlinked tmpdir), `AntigravityInstallation`,
+`AntigravityAdapter` file roots, `providerMaintenance` / `CodexDriver` npm-prefix cases,
+`CodexTextGeneration` launch args (`node` not on the stub PATH), and `apps/desktop`
+`BrowserImport/Sources.test.ts` Firefox Snap cases (15s timeouts). Running `vp run test` for every
+package in parallel also gets OOM-killed (exit 137) here, and concurrent desktop runs can race the
+Electron binary install ("Electron failed to install correctly"); run the heavy packages (`apps/web`,
+`apps/server`, `apps/desktop`, `apps/mobile`) one at a time.
+
 ## 2026-09-06 upstream merge (session importer vs. the thread cap, knip prunes exports) — migration notes
 
 Merged `upstream/main` through `e5d086c26` (196 commits). Small merge — 17 conflicts, most of them
@@ -2402,8 +2506,8 @@ build:desktop` → `vp run dist:payload:asset`, using the
   it.
 - Migration seam: `033_ProjectionThreadsForkedFrom` is fork-added. Fork ids
   33-35 are frozen because existing fork DBs already recorded them. **The fork's
-  next free migration id is 52** (upstream's 045-047 became the fork's 049-051 in the
-  2026-09-05 merge) (see the
+  next free migration id is 55** (upstream's 048-050 became the fork's 052-054 in the
+  2026-09-11 merge; 045-047 became 049-051 on 2026-09-05) (see the
   2026-07-24 merge notes): when upstream adds a migration with id >= 33,
   renumber **upstream's** file/registry entry to the fork's next free id
   (upstream's 33/34 became the fork's 36/37; upstream's 35 became the fork's

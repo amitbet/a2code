@@ -35,7 +35,7 @@ import { payloadUpdateStateToDesktopUpdateState } from "./payloadUpdateState.ts"
 // arms the staged payload and reports `requiresRelaunch`, which the IPC layer
 // turns into an app relaunch.
 
-export class DesktopUpdateChannelPersistenceError extends Schema.TaggedErrorClass<DesktopUpdateChannelPersistenceError>()(
+export class DesktopUpdateChannelPersistenceError extends Schema.TaggedError<DesktopUpdateChannelPersistenceError>()(
   "DesktopUpdateChannelPersistenceError",
   {
     channel: DesktopUpdateChannelSchema,

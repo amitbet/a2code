@@ -1,3 +1,7 @@
+import type { ThreadPullRequestLink } from "@t3tools/contracts";
+
+import { resolveThreadCurrentPullRequestLink } from "./threadPullRequests.ts";
+
 /**
  * Inline reference to another thread's context: `@thread_ref:<threadId>` for a
  * thread on the same environment, `@thread_ref:<environmentId>/<threadId>` for
@@ -139,12 +143,14 @@ export function resolveThreadReferenceCopyTarget(input: {
   readonly threadId: string;
   /** Undefined means no PR panel; null means its URL is not available yet. */
   readonly openPanelPullRequestUrl?: string | null | undefined;
+  readonly pullRequests?: ReadonlyArray<ThreadPullRequestLink> | undefined;
   readonly linkedPullRequestUrl?: string | null;
-  readonly detectedPullRequestUrl?: string | null;
 }): ThreadReferenceCopyTarget | null {
   if (input.openPanelPullRequestUrl === null) return null;
   const pullRequestUrl =
-    input.openPanelPullRequestUrl ?? input.linkedPullRequestUrl ?? input.detectedPullRequestUrl;
+    input.openPanelPullRequestUrl ??
+    resolveThreadCurrentPullRequestLink(input.pullRequests ?? [])?.url ??
+    input.linkedPullRequestUrl;
   return pullRequestUrl
     ? {
         kind: "pull-request",

@@ -70,7 +70,10 @@ vi.mock("@t3tools/client-runtime/environment", () => ({
   scopeProjectRef: (environmentId: string, projectId: string) => ({ environmentId, projectId }),
   scopeThreadRef: (environmentId: string, threadId: string) => ({ environmentId, threadId }),
 }));
-vi.mock("@t3tools/contracts", () => ({
+// The fork's machine-scope hooks reach the connection catalog, whose schemas
+// need the real contract brands, so keep the actual module underneath.
+vi.mock("@t3tools/contracts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@t3tools/contracts")>()),
   DEFAULT_RUNTIME_MODE: "default",
   DEFAULT_SERVER_SETTINGS: {},
 }));
@@ -129,6 +132,11 @@ vi.mock("../state/entities", () => ({
   readThreadShell: () => null,
   useProjects: () => [],
   useThread: () => null,
+}));
+// A null machine scope is "no filter", so the fork's scope guards pass through.
+vi.mock("../state/environments", () => ({
+  isEnvironmentInMachineScope: () => true,
+  useMachineEnvironmentId: () => null,
 }));
 vi.mock("../state/server", () => ({
   environmentServerConfigsAtom: {},

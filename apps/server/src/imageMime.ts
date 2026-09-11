@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import Mime from "@effect/platform-node/Mime";
 
-export const IMAGE_EXTENSION_BY_MIME_TYPE: Record<string, string> = {
+const IMAGE_EXTENSION_BY_MIME_TYPE: Record<string, string> = {
   "image/avif": ".avif",
   "image/bmp": ".bmp",
   "image/gif": ".gif",

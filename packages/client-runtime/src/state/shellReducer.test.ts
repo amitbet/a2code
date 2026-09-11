@@ -39,6 +39,7 @@ const stubThread = {
   pinnedAt: null,
   settledOverride: null,
   settledAt: null,
+  pullRequests: [],
   latestUserMessageAt: null,
   hasPendingApprovals: false,
   hasPendingUserInput: false,

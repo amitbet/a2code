@@ -143,11 +143,14 @@ export function applyUsageLimitsUpdate(input: {
   if (!changed && previous !== undefined && previous.unavailable === undefined) {
     return previous;
   }
-  return makeUsageLimits({
-    checkedAt: input.checkedAt,
-    windows: merged.values(),
-    planType: previous?.planType,
-  });
+  return {
+    ...makeUsageLimits({
+      checkedAt: input.checkedAt,
+      windows: merged.values(),
+      planType: previous?.planType,
+    }),
+    ...(previous?.resetCredits !== undefined ? { resetCredits: previous.resetCredits } : {}),
+  };
 }
 
 function usageWindowEquals(a: ServerProviderUsageWindow, b: ServerProviderUsageWindow): boolean {

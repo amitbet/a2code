@@ -36,6 +36,7 @@ function makeReadModel(input: {
         interactionMode: "default",
         branch: null,
         worktreePath: null,
+        pullRequests: [],
         latestTurn: null,
         queuedPrompts: [],
         createdAt: NOW,

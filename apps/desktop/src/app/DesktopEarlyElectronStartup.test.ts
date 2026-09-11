@@ -81,7 +81,9 @@ describe("DesktopEarlyElectronStartup", () => {
     });
 
     assert.deepEqual(options, {
+      isDevelopment: true,
       linuxWmClass: "a2code-dev",
+      linuxDesktopEntryName: "com.amitbet.A2Code.Development.desktop",
       passwordStore: "gnome-libsecret",
     });
   });
