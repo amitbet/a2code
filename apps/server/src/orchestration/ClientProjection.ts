@@ -30,8 +30,9 @@ export function shouldSendThreadEventToClient(
 export function projectThreadSnapshotForClient(
   snapshot: OrchestrationThreadDetailSnapshot,
   deviceType: AuthClientMetadataDeviceType,
+  reasoningMessages = true,
 ): OrchestrationThreadDetailSnapshot {
-  const projected = projectThreadDetailSnapshot(snapshot);
+  const projected = projectThreadDetailSnapshot(snapshot, reasoningMessages);
   if (!isMobileClient(deviceType)) {
     return projected;
   }

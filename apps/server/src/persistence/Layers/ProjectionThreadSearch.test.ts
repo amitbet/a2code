@@ -16,7 +16,9 @@ const HOME_PROJECT = ProjectId.make("project-home");
 const OTHER_PROJECT = ProjectId.make("project-other");
 
 const layer = it.layer(
-  ProjectionThreadSearchRepositoryLive.pipe(Layer.provideMerge(NodeSqliteClient.layerMemory())),
+  ProjectionThreadSearchRepositoryLive.pipe(
+    Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" })),
+  ),
 );
 
 const seed = Effect.gen(function* () {

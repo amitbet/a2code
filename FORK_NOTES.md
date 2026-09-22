@@ -3,6 +3,109 @@
 This file tracks fork-specific divergences that are likely to conflict when
 merging `upstream/main`.
 
+## 2026-09-22 upstream merge (Tiptap composer, hoisted thread route, project settings) — migration notes
+
+Merged `upstream/main` through `7c2702d68a` (442 commits). 77 conflicts. The three that change how
+fork features are built: **upstream replaced the Lexical composer with Tiptap**, **both thread route
+views were hoisted into the `_chat` layout**, and **upstream now owns the sidebar thread header and
+the response-streaming setting**.
+
+### Migrations: upstream 51-53 became the fork's 55-57 — next free id is 58
+
+Upstream added `051_ProjectionThreadMessageContext`, `052_ProjectionThreadTitleState` and
+`053_PullRequestFilesViewed`, all colliding with fork ids. They were renamed to **055/056/057**
+(files, `Migrations.ts` registry, the `it.layer` name, and the `toMigrationInclusive` bounds in
+`055`'s test). Fork ids 33-35, 43 and 48 stay frozen.
+
+`NodeSqliteClient.layerMemory()` **was removed upstream**; every call site now uses
+`NodeSqliteClient.layer({ filename: ":memory:" })`. Four fork-owned tests were converted
+(`043`, `053`, `054`, `ProjectionThreadSearch.test.ts`).
+
+### The Lexical composer is gone; the thread-reference guarantee moved down a layer
+
+Upstream's Tiptap rewrite (#12160) deleted `ComposerPromptEditor`'s Lexical implementation, its
+864-line test, and `registerComposerInlineTokenPaste`. `composerInlineTokenPaste.ts` is now
+upstream's clipboard-context module and was taken wholesale; the fork's
+`ComposerPromptEditor.test.ts` was dropped with it.
+
+**The fork's "pasted `@thread_ref:` stays literal text" behavior is unaffected and still tested**:
+it lives in `packages/shared/src/composerInlineTokens.ts` (the guard against
+`THREAD_REFERENCE_PREFIX` in `collectMentionTokens`), which the Tiptap editor reaches through the
+same `collectComposerPromptInlineTokens`. The fork's test for it moved to
+`composerInlineTokens.test.ts`. Do not try to re-add a Lexical paste handler.
+
+### Thread routes render from the `_chat` layout now
+
+Upstream moved both `/draft/$draftId` and `/$environmentId/$threadId` into a single
+`ThreadRouteView` rendered by the `_chat` layout, so one ChatView survives draft promotion. Both
+leaf route files are now `component: () => null` stubs. **The fork's machine-scope guard was
+re-applied inside `ThreadRouteView`** (`outsideMachineScope` derived from the target's environment,
+guarding every effect and returning `null`). The fork's `DiffWorkerPoolProvider` still wraps the
+layout's outlet. If upstream moves this again, re-apply the scope guard rather than restoring the
+leaf components.
+
+### Upstream surfaces that superseded fork equivalents
+
+- **Response streaming.** `enableLegacyTokenStreaming` is gone from `ServerSettings`, replaced by
+  upstream's three-way `responseStreamingMode` (default `paragraph`) with its own settings control.
+  The fork's "Stream token by token (legacy)" row and its `settingsSearch` entry were **removed**.
+- **Sidebar thread header.** Upstream's `SidebarThreadHeader` component owns the header (project
+  scope, new project, new thread, search). The fork's header-level project-todo button was dropped;
+  the per-project todo button inside the `ComboboxItem` is the surviving entry point.
+- **Mobile home header.** Upstream deleted the custom Android header (332 lines to 15) in favour of
+  the native header. The fork's `MachineSwitcher` is re-applied as `createMachineHeaderItem()`
+  prepended to `unstable_headerRightItems`, so it now shows on both platforms.
+- **Codex attachments.** Upstream passes images by path (`type: "localImage"`) instead of base64.
+  The fork's PDF/text branches in `resolveAttachment` were **unreachable** — `sendTurn` already
+  filtered to `attachment.type === "image"` — so upstream's version was taken whole. The
+  `ClaudeAdapter` attachment `kind` switch is still fork-owned and still matters.
+
+### Other notable resolutions
+
+- **`nativeFork` and `supportsConversationRollback` coexist** on `ProviderAdapterCapabilities`;
+  `nativeFork` is required (fork), the other optional (upstream). Cursor and Grok declare both.
+- **`projectThreadSnapshotForClient` gained a third `reasoningMessages` parameter** and forwards it
+  to `projectThreadDetailSnapshot`. Both `ws.ts` and `http.ts` still go through the composed fork
+  entry point — keep it that way or the mobile activity filter is silently dropped.
+- **Normalizer** takes upstream's attachment-limit check (`getProviderAttachmentLimitError`),
+  duplicate-id rejection, and `finalAttachmentIdByClientId` context remap, while keeping the fork's
+  extracted `claimUploadedAttachment` helper so thread-reference transcripts claim the same way. The
+  command routing stays the fork's (`thread.prompt.queue` reads `message.attachments`), and
+  `message.context` is read only for `thread.turn.start`.
+- **`PROVIDER_SEND_TURN_MAX_ATTACHMENTS` is upstream's 100** now; the fork's
+  `PROVIDER_SEND_TURN_MAX_ATTACHMENT_BYTES` stays because the fork still accepts non-image files
+  inline as data URLs.
+- **`sortThreads`** takes upstream's precomputed-timestamp rewrite with the fork's pinned-first
+  ordering re-expressed in the same comparator. `getLatestThreadForProject` is upstream's and is no
+  longer pinned-aware — no fork test depended on that.
+- **`AcpSessionRuntime`** keeps the fork's cancellation-epoch mechanism and adds upstream's
+  `assistantUpdatesOpenRef` reset plus the `notificationSemaphore.withPermit` wrapper.
+- **`NodePtyAdapter`** merges upstream's `NodePtyModuleLoaderRef` injection with the fork's deferred
+  load, so a native load failure is still a recoverable `PtySpawnError` rather than a startup defect.
+  Its test was re-aimed at that.
+- **`WorkspaceSearchIndex`** keeps the fork's lazy fff-node loader (graceful degradation + desktop
+  payload path); only upstream's removal of the unused `WorkspaceSearchIndexError` union was taken.
+- **`DesktopUpdates`**: upstream reworked the electron updater and the merge tried to re-introduce
+  the whole machinery. **Declined again** — the fork stays a payload-only facade.
+- **`getPathForFile`** was added independently on both sides. One declaration survives on
+  `DesktopBridge` (the fork's required `(file: File) => string | null`), and
+  `resolveDroppedFolderPath` was widened to accept it.
+- Fork package versions stay on `0.0.25-amit` (upstream is at `0.0.42`).
+- CI: `ci.yml`/`release.yml` byte-identical to the fork tip. Upstream's new `release-desktop.yml`
+  and `desktop-macos-preview-publish.yml` stayed out, along with the previously-declined workflows.
+  `docs/operations/release.md` keeps describing the fork's trimmed release, not upstream's
+  `build_bundle` + six-artifact matrix.
+- Upstream deleted `.agents/skills/ios-debugger-agent` and `ios-simulator-browser` in favour of the
+  Device panel; the deletions were taken.
+
+### Known pre-existing failure (not merge fallout)
+
+`packages/shared` `composerContextLegacy.test.ts > does not replace terminal labels embedded in`
+an astral-plane character fails. Its whole reachable graph (`composerContextLegacy.ts`,
+`composerContextReferences.ts`, `contracts/composerContext.ts`, and the test itself) is
+**byte-identical to `upstream/main`**, and none of the fork's `packages/shared` divergences are
+imported by it — this is an upstream bug in astral-character handling, not a merge artifact.
+
 ## 2026-09-11 upstream merge (Effect rc.112, thread pull-request links, manual active ordering) — migration notes
 
 Merged `upstream/main` through `26894dda7b` (262 commits). Large merge — 73 conflicts. Three things
@@ -2438,7 +2541,8 @@ build:desktop` → `vp run dist:payload:asset`, using the
   receives. It runs upstream's transport-wide `projectThreadDetailSnapshot`
   (`ActivityPayloadProjection.ts`) and then the fork's mobile trimming (mobile
   clients do not receive `account.rate-limits.updated` activities; the matching
-  event filter is `shouldSendThreadEventToClient`).
+  event filter is `shouldSendThreadEventToClient`). It takes upstream's
+  `reasoningMessages` flag as a third parameter and forwards it.
 - **Merge seam:** upstream calls `projectThreadDetailSnapshot` directly at both
   snapshot sites. On conflict, keep the composed fork entry point rather than
   nesting the two calls per site — that is what keeps the mobile filter from
@@ -2462,6 +2566,10 @@ build:desktop` → `vp run dist:payload:asset`, using the
   per-project todo button lives inside the `ComboboxItem` (guarded by `project ?`, since an item can
   have no project) and closes the popup with
   `dispatchProjectScopeMenu({ type: "open-changed", open: false })`.
+- 2026-09-22: upstream's `sidebar/SidebarThreadHeader.tsx` now owns the header row (project scope
+  combobox, new project, new thread, search) and takes them as props. Fork additions belong inside
+  the `projectScope` slot, not beside it — the header-level project-todo button was dropped in that
+  merge and the `ComboboxItem` button is the entry point.
 - If upstream renames these again, redo the merge with `git merge-file` per the
   2026-08-14 notes rather than trusting git's rename detection.
 
@@ -2506,8 +2614,9 @@ build:desktop` → `vp run dist:payload:asset`, using the
   it.
 - Migration seam: `033_ProjectionThreadsForkedFrom` is fork-added. Fork ids
   33-35 are frozen because existing fork DBs already recorded them. **The fork's
-  next free migration id is 55** (upstream's 048-050 became the fork's 052-054 in the
-  2026-09-11 merge; 045-047 became 049-051 on 2026-09-05) (see the
+  next free migration id is 58** (upstream's 051-053 became the fork's 055-057 in the
+  2026-09-22 merge; 048-050 became 052-054 on 2026-09-11; 045-047 became 049-051 on
+  2026-09-05) (see the
   2026-07-24 merge notes): when upstream adds a migration with id >= 33,
   renumber **upstream's** file/registry entry to the fork's next free id
   (upstream's 33/34 became the fork's 36/37; upstream's 35 became the fork's

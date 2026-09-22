@@ -74,10 +74,30 @@ export function getRowSearchText(row: MessagesTimelineRow): string {
       return row.summary ?? "";
     case "context-compaction":
       return row.label;
+    case "queued-message":
+      return row.queuedMessage.prompt;
     // The assistant-meta row is the copy/action footer for a message row that
     // is already indexed; matching it too would double-count the same text.
+    case "activity-group": {
+      const parts: string[] = [];
+      for (const entry of row.entries) {
+        if (entry.kind === "message") {
+          parts.push(entry.message.text ?? "");
+          continue;
+        }
+        const work = entry.entry;
+        if (work.toolTitle) parts.push(work.toolTitle);
+        if (work.label) parts.push(work.label);
+        if (work.command) parts.push(work.command);
+        else if (work.rawCommand) parts.push(work.rawCommand);
+        if (work.detail) parts.push(work.detail);
+        if (work.changedFiles?.length) parts.push(work.changedFiles.join(" "));
+      }
+      return parts.join("\n");
+    }
     case "assistant-meta":
-    // Live status rows carry no user-visible text to match against.
+    // Live status and setup-progress rows carry no user-visible text to match.
+    case "worktree-setup":
     case "working":
     case "thinking":
       return "";

@@ -123,6 +123,10 @@ export interface CursorAdapterLiveOptions {
   readonly resolveSettings?: Effect.Effect<CursorSettings>;
   /** Optional test/embedding override for the best-effort account usage read. */
   readonly fetchUsageSnapshot?: () => Effect.Effect<ServerProviderUsageLimits | null>;
+  readonly onAvailableCommands?: (
+    commands: ReadonlyArray<EffectAcpSchema.AvailableCommand>,
+    cwd: string,
+  ) => Effect.Effect<void>;
 }
 
 interface PendingApproval {
@@ -876,6 +880,11 @@ export function makeCursorAdapter(
                     return;
                   case "ModeChanged":
                     return;
+                  case "AvailableCommandsUpdated":
+                    yield* (
+                      options?.onAvailableCommands?.(event.availableCommands, cwd) ?? Effect.void
+                    );
+                    return;
                   case "AssistantItemStarted":
                     ctx.assistantReply = new CursorTransportFailure();
                     yield* offerTurnOutputEvent(
@@ -939,6 +948,27 @@ export function makeCursorAdapter(
                         threadId: ctx.threadId,
                         turnId: ctx.activeTurnId,
                         toolCall,
+                        rawPayload: event.rawPayload,
+                      }),
+                    );
+                    return;
+                  case "ThoughtDelta":
+                    // Thoughts are narration, not the reply: they stay out of
+                    // `assistantReply` so a resumed turn replays only answers.
+                    yield* logNative(
+                      ctx.threadId,
+                      "session/update",
+                      event.rawPayload,
+                      "acp.jsonrpc",
+                    );
+                    yield* offerRuntimeEvent(
+                      makeAcpContentDeltaEvent({
+                        stamp: yield* makeEventStamp(),
+                        provider: PROVIDER,
+                        threadId: ctx.threadId,
+                        turnId: ctx.activeTurnId,
+                        streamKind: "reasoning_text",
+                        text: event.text,
                         rawPayload: event.rawPayload,
                       }),
                     );
@@ -1176,15 +1206,19 @@ export function makeCursorAdapter(
           const result = yield* Effect.raceFirst(
             ctx.acp
               // ACP has no system-message field; keep runtime context separate
-              // from the user's text.
+              // from the user's text. ACP commands parse the complete text, so
+              // an exact command gets no extra context: it would turn the
+              // command into an ordinary model prompt or change its arguments.
               .prompt({
-                prompt: [
-                  ...promptParts,
-                  {
-                    type: "text",
-                    text: buildRuntimeInstructions({ harness: "Cursor", model: resolvedModel }),
-                  },
-                ],
+                prompt: /^\/[^\s/]+(?:\s|$)/.test(rawPrompt)
+                  ? promptParts
+                  : [
+                      ...promptParts,
+                      {
+                        type: "text",
+                        text: buildRuntimeInstructions({ harness: "Cursor", model: resolvedModel }),
+                      },
+                    ],
               })
               .pipe(
                 Effect.mapError((error) =>
@@ -1324,7 +1358,7 @@ export function makeCursorAdapter(
 
     const rollbackThread: CursorAdapterShape["rollbackThread"] = (threadId, numTurns) =>
       Effect.gen(function* () {
-        const ctx = yield* requireSession(threadId);
+        yield* requireSession(threadId);
         if (!Number.isInteger(numTurns) || numTurns < 1) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
@@ -1332,9 +1366,11 @@ export function makeCursorAdapter(
             issue: "numTurns must be an integer >= 1.",
           });
         }
-        const nextLength = Math.max(0, ctx.turns.length - numTurns);
-        ctx.turns.splice(nextLength);
-        return { threadId, turns: ctx.turns };
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "thread/rollback",
+          detail: "Cursor ACP sessions do not support provider-side rollback.",
+        });
       });
 
     const stopSession: CursorAdapterShape["stopSession"] = (threadId) =>
@@ -1372,7 +1408,11 @@ export function makeCursorAdapter(
 
     return {
       provider: PROVIDER,
-      capabilities: { sessionModelSwitch: "in-session", nativeFork: false },
+      capabilities: {
+        sessionModelSwitch: "in-session",
+        nativeFork: false,
+        supportsConversationRollback: false,
+      },
       compaction: { type: "slash-command", command: "/compress" },
       startSession,
       sendTurn,

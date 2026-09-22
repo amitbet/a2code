@@ -117,7 +117,8 @@ export function useAddProjectFromPath(): (input: AddProjectFromPathInput) => Pro
           existing.id,
           sidebarThreadSortOrder,
         );
-        if (latestThread) {
+        // A settled thread is done; reopening it would resurrect finished work.
+        if (latestThread && latestThread.settledOverride !== "settled") {
           await navigate({
             to: "/$environmentId/$threadId",
             params: buildThreadRouteParams(

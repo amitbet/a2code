@@ -26,14 +26,7 @@ import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime"
 import { EnvironmentId, type EnvironmentId as EnvironmentIdType } from "@t3tools/contracts";
 
 import { Button } from "./ui/button";
-import {
-  Sheet,
-  SheetDescription,
-  SheetHeader,
-  SheetPanel,
-  SheetPopup,
-  SheetTitle,
-} from "./ui/sheet";
+import { Sheet, SheetDescription, SheetHeader, SheetPopup, SheetTitle } from "./ui/sheet";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { useProjectFileQuery } from "./files/projectFilesQueryState";
 import { projectEnvironment } from "../state/projects";
@@ -563,7 +556,7 @@ export function ProjectTodoSheet({ open, onOpenChange, project }: ProjectTodoShe
             </div>
           </div>
         </SheetHeader>
-        <SheetPanel className="h-full min-h-0 p-4">
+        <SheetPopup className="h-full min-h-0 p-4">
           {loadError ? (
             <div className="rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2 text-sm text-destructive">
               {loadError}
@@ -599,7 +592,7 @@ export function ProjectTodoSheet({ open, onOpenChange, project }: ProjectTodoShe
               spellCheck
             />
           </div>
-        </SheetPanel>
+        </SheetPopup>
       </SheetPopup>
     </Sheet>
   );

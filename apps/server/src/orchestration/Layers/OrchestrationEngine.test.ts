@@ -422,6 +422,7 @@ describe("OrchestrationEngine", () => {
       Layer.provide(
         Layer.succeed(ProjectionSnapshotQuery, {
           getUserInputActivity: () => Effect.die("unused"),
+          listActivitiesByKind: () => Effect.die("unused"),
           getCommandReadModel: () => Effect.succeed(commandReadModel),
           getSnapshot: () =>
             Effect.sync(() => {
@@ -435,6 +436,7 @@ describe("OrchestrationEngine", () => {
               threads: [],
               updatedAt: projectionSnapshot.updatedAt,
             }),
+          getDeletedWorktreeThreads: () => Effect.die("unused"),
           getArchivedShellSnapshot: () =>
             Effect.succeed({
               snapshotSequence: projectionSnapshot.snapshotSequence,
@@ -448,6 +450,7 @@ describe("OrchestrationEngine", () => {
           getEventReplayStats: () => Effect.die("unused"),
           getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
           getProjectShellById: () => Effect.succeed(Option.none()),
+          getProjectShells: () => Effect.succeed([]),
           getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
           getImportedAgentSessionSources: () => Effect.die("unused"),
           getThreadCheckpointContext: () => Effect.succeed(Option.none()),

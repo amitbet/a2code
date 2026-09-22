@@ -1,9 +1,4 @@
-import {
-  ArrowLeftIcon,
-  ChartNoAxesColumnIcon,
-  GitPullRequestIcon,
-  SettingsIcon,
-} from "lucide-react";
+import { ArrowLeftIcon, ChartNoAxesColumnIcon, SettingsIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { memo, useCallback } from "react";
 import { Link, useCanGoBack, useLocation, useNavigate } from "@tanstack/react-router";
@@ -31,9 +26,11 @@ import {
 } from "../ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { readPullRequestListPreferences } from "../pullRequest/pullRequestListPreferences";
+import { SidebarThreadUndoNotice } from "./SidebarThreadUndoNotice";
 import { SidebarProviderUpdatePill } from "./SidebarProviderUpdatePill";
 import { SidebarUpdateArchitectureWarning, SidebarUpdatePill } from "./SidebarUpdatePill";
 import { MachineSwitcher } from "./MachineSwitcher";
+import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 
 export const SidebarChromeHeader = memo(function SidebarChromeHeader({
   isElectron,
@@ -223,7 +220,7 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           />
           {pullRequestsSupported ? (
             <SidebarUtilityItem
-              icon={<GitPullRequestIcon />}
+              icon={<PullRequestGlyph.pullRequest />}
               label="Pull Requests"
               onClick={handlePullRequestsClick}
             />
@@ -242,7 +239,8 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
 
 export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   return (
-    <SidebarFooter className="p-[var(--sidebar-content-inset)]">
+    <SidebarFooter>
+      <SidebarThreadUndoNotice />
       <SidebarProviderUpdatePill />
       <SidebarUpdateArchitectureWarning />
       <SidebarUtilityMenu />
