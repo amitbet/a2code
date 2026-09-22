@@ -394,7 +394,12 @@ describe("settings search targets", () => {
     const streaming = getSettingsSearchTargetScope("response-streaming")!;
     expect(streaming.scope).toBe("project-defaults");
     expect(isSettingsSearchScopeAvailable(streaming.scope, "project")).toBe(true);
-    for (const id of ["legacy-plan-mode", "legacy-context-window-indicator", "legacy-sidebar"]) {
+    for (const id of [
+      "legacy-plan-mode",
+      "legacy-context-window-indicator",
+      // The fork keeps the project-tree sidebar as a first-class setting.
+      "project-tree-sidebar",
+    ]) {
       expect(getSettingsSearchTargetScope(id)!.scope).toBeNull();
     }
   });

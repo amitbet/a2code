@@ -97,11 +97,50 @@ leaf components.
   `build_bundle` + six-artifact matrix.
 - Upstream deleted `.agents/skills/ios-debugger-agent` and `ios-simulator-browser` in favour of the
   Device panel; the deletions were taken.
+- **`msgpackr-extract` was dropped from `apps/server`.** It was upstream's (added by #6169, removed
+  since), no fork source imports it, and keeping it re-broke
+  `scripts/lib/cli-external-packages.test.ts` — upstream pruned `detect-libc` from
+  `CLI_RUNTIME_EXTERNAL_PREFIXES` at the same time, so the fork's leftover pin left
+  `node-gyp-build-optional-packages -> detect-libc` outside the external closure. `fflate` stays;
+  the fork's thread export uses it. After removing it, `pnpm prune` is needed — a stale
+  `node_modules/.pnpm` entry keeps that test failing because it reads the store, not the lockfile.
+- **The fork's `sidebarAutoSettleAfterDays` / `sidebarAutoSettleOnMerge` copies were removed from
+  `ClientSettingsSchema`.** Auto-settlement is a `ServerSettings` key (now with project overrides),
+  and the stale client duplicates made upstream's new scoped-settings planner write them to client
+  storage too. `UnifiedSettings` still resolves both from the server, so the settings UI is
+  unchanged.
+- **Relay tests that assert things the fork does not ship were deleted**:
+  `infra/relay/scripts/deploy.test.ts` (upstream deleted it and its `deploy.ts` subject when the
+  relay moved to the Alchemy CLI) and `.github/scripts/relay-state-output.test.cjs` (it asserts a
+  relay-tracing step in `release.yml` that the fork's trimmed workflow deliberately has no).
 
-### Known pre-existing failure (not merge fallout)
+### Known failures on this host (not merge fallout)
+
+**The symlinked macOS tmpdir explains every server failure on this host — the suite is fully
+green without it.** `/var` is a symlink to `private/var` and `TMPDIR` lives under it, so any test
+comparing a path it created under `TMPDIR` against a realpath fails. Point `TMPDIR` at a real
+directory and `apps/server` goes from 50 failures to **344 files / 5281 tests, zero failures**:
+
+```bash
+mkdir -p ~/t3-tmp-nosymlink
+TMPDIR=~/t3-tmp-nosymlink bunx vp test run   # from apps/server
+```
+
+**Do this before investigating any server test failure on macOS.** All nine previously-recorded
+"environment-only" suites are this one root cause, not separate quirks: `entrypoint`,
+`AgentSessionScanner`, `AntigravityInstallation`, `AntigravityAdapter`, `CodexDriver`,
+`providerMaintenance`, `CursorProvider`, `UsageService`, and `ThreadSettlementReactor` (whose 37
+storage-cleanup failures all read `expected true to equal false` because cleanup matches no paths).
+Earlier merge notes that list them individually are superseded by this entry.
+
+`.github/scripts/check-nightly-release.test.cjs` and `thread-transfer-report.test.cjs` are
+`node:test` files, not vitest ones. They only "fail" when a root-level `vp test run scripts/`
+sweeps them up (`No test suite found`); run them with `node --test .github/scripts/*.test.cjs`,
+where both pass. `scripts/build-desktop-artifact.test.ts > skips the primary native probe for
+cross-architecture Windows payloads` stays environment-only on macOS.
 
 `packages/shared` `composerContextLegacy.test.ts > does not replace terminal labels embedded in`
-an astral-plane character fails. Its whole reachable graph (`composerContextLegacy.ts`,
+an astral-plane character also fails. Its whole reachable graph (`composerContextLegacy.ts`,
 `composerContextReferences.ts`, `contracts/composerContext.ts`, and the test itself) is
 **byte-identical to `upstream/main`**, and none of the fork's `packages/shared` divergences are
 imported by it — this is an upstream bug in astral-character handling, not a merge artifact.

@@ -555,11 +555,10 @@ describe("ClientSettings environment identification", () => {
 });
 
 describe("ClientSettings sidebar", () => {
-  it("defaults to the project-tree sidebar with automatic merge and inactivity settling", () => {
-    const settings = decodeClientSettings({});
-    expect(settings.legacySidebarEnabled).toBe(true);
-    expect(settings.sidebarAutoSettleAfterDays).toBe(3);
-    expect(settings.sidebarAutoSettleOnMerge).toBe(true);
+  // Auto-settlement is a server setting (with project overrides), not a client
+  // one, so only the sidebar layout default is asserted here.
+  it("defaults to the project-tree sidebar", () => {
+    expect(decodeClientSettings({}).legacySidebarEnabled).toBe(true);
   });
 
   it("drops the retired sidebar v2 beta keys, resetting everyone to the default", () => {
