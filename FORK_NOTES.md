@@ -59,6 +59,15 @@ leaf components.
   The fork's PDF/text branches in `resolveAttachment` were **unreachable** — `sendTurn` already
   filtered to `attachment.type === "image"` — so upstream's version was taken whole. The
   `ClaudeAdapter` attachment `kind` switch is still fork-owned and still matters.
+- **Follow-up queue (fork wins).** Upstream added an in-memory client queue
+  (`queuedMessageStore.ts`, timeline `queued-message` rows, delivery at tool boundaries). The merge
+  left both queues live, and upstream's Send now re-entered `onSend` straight into the fork's
+  `shouldQueuePrompt` branch, so the message jumped into the server queue. `ChatView.onSend` now
+  drops upstream's `enqueue` branch. `shouldQueuePrompt` takes over upstream's
+  `followUpBehavior` / alternate-intent rule, so "steer" sends a plain `thread.turn.start` into the
+  running turn. The `thread.steerQueuedMessage` shortcut falls back to the fork queue's first
+  confirmed prompt. The rest of upstream's queue code is still there but nothing fills it. Keep it
+  unused when merging rather than deleting it, so later conflicts stay small.
 
 ### Other notable resolutions
 

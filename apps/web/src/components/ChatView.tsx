@@ -7174,10 +7174,16 @@ export default function ChatView(props: ChatViewProps) {
         const message = activeThreadKey
           ? useQueuedMessageStore.getState().queuesByThreadKey[activeThreadKey]?.[0]
           : undefined;
-        if (!message) return;
+        const serverPrompt = displayedQueuedPrompts.find((prompt) => !prompt.pending);
+        if (!message && !serverPrompt) return;
         event.preventDefault();
         event.stopPropagation();
-        if (!event.repeat) queuedMessageActionsRef.current.steer(message.id);
+        if (event.repeat) return;
+        if (message) {
+          queuedMessageActionsRef.current.steer(message.id);
+        } else if (serverPrompt) {
+          void onSteerQueuedPrompt(serverPrompt.messageId);
+        }
         return;
       }
 
@@ -7226,6 +7232,8 @@ export default function ChatView(props: ChatViewProps) {
     handleUnsettleActiveThread,
     isServerThread,
     onInterrupt,
+    onSteerQueuedPrompt,
+    displayedQueuedPrompts,
     onToggleDiff,
     pinThread,
     settleThread,
@@ -7924,45 +7932,23 @@ export default function ChatView(props: ChatViewProps) {
       );
       return;
     }
-    if (
-      !queuedMessage &&
-      !directAnnotation &&
-      phase === "running" &&
-      activeThreadKey &&
-      (settings.followUpBehavior === "queue") !== (submissionIntent === "alternate")
-    ) {
-      if (composerRef.current?.validateProviderInput(promptForSend) === false) {
-        return;
-      }
-      useQueuedMessageStore.getState().enqueue(activeThreadKey, {
-        prompt: promptForSend,
-        images: [...composerImages],
-        files: [...composerFiles],
-        terminalContexts: [...composerTerminalContexts],
-        previewAnnotations: [...composerPreviewAnnotations],
-        reviewComments: [...composerReviewComments],
-        submissionIntent,
-        queuedAfterToolActivityId: latestCompletedToolActivityId(threadActivities),
-        createdAt: new Date().toISOString(),
-      });
-      promptRef.current = "";
-      // Attachments move with the message; their uploads stay pending. The
-      // refs clear now too, so a Stop before the composer's sync effect runs
-      // does not restore the moved attachments twice.
-      composerImagesRef.current = [];
-      composerFilesRef.current = [];
-      composerTerminalContextsRef.current = [];
-      clearComposerDraftContent(composerDraftTarget);
-      composerRef.current?.resetCursorState();
-      return;
-    }
     const threadIdForSend = activeThread.id;
     const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
     const baseBranchForWorktree =
       isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath
         ? activeThreadBranch
         : null;
-    const shouldQueuePrompt = phase === "running" && isServerThread && !isFirstMessage;
+    // Fork: follow-ups during a running turn go to the server-side prompt queue
+    // (persisted, with Edit/Fork/Steer), not upstream's in-memory client queue.
+    // `followUpBehavior` and the alternate intent still pick queue vs. steer,
+    // and a steer is a plain turn start into the running turn.
+    const shouldQueuePrompt =
+      !queuedMessage &&
+      !directAnnotation &&
+      phase === "running" &&
+      isServerThread &&
+      !isFirstMessage &&
+      (settings.followUpBehavior === "queue") !== (submissionIntent === "alternate");
 
     // In worktree mode, require an explicit base branch so we don't silently
     // fall back to local execution when branch selection is missing.
