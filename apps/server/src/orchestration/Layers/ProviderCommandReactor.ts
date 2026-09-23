@@ -2066,6 +2066,7 @@ const make = Effect.gen(function* () {
       case "thread.session-set":
         if (event.payload.session.status === "ready")
           yield* maybeRefineThreadTitle(event.payload.threadId);
+        yield* processSessionSet(event);
         return;
       case "thread.runtime-mode-set": {
         const thread = yield* resolveThreadShell(event.payload.threadId);
@@ -2104,9 +2105,6 @@ const make = Effect.gen(function* () {
         return;
       case "thread.session-stop-requested":
         yield* processSessionStopRequested(event);
-        return;
-      case "thread.session-set":
-        yield* processSessionSet(event);
         return;
       case "thread.settled": {
         const thread = yield* projectionSnapshotQuery.getThreadShellById(event.payload.threadId);

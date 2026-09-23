@@ -68,6 +68,13 @@ leaf components.
   running turn. The `thread.steerQueuedMessage` shortcut falls back to the fork queue's first
   confirmed prompt. The rest of upstream's queue code is still there but nothing fills it. Keep it
   unused when merging rather than deleting it, so later conflicts stay small.
+- **Queue drain lives in the reactor's `thread.session-set` case.** The merge left two
+  `case "thread.session-set":` branches in `ProviderCommandReactor.processDomainEvent`: upstream's
+  title refinement came first and returned, so the fork's `processSessionSet` (which steers the
+  first queued prompt once the session goes idle) never ran and queued prompts sat until steered
+  by hand. It is now one branch that does both. A duplicate `case` compiles cleanly, so check for
+  one in that switch after every merge. `starts the next queued prompt when the running turn ends`
+  covers it.
 
 ### Other notable resolutions
 

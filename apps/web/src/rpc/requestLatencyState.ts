@@ -28,9 +28,13 @@ interface PendingRpcAckRequest {
 }
 
 const pendingRpcAckRequests = new Map<string, PendingRpcAckRequest>();
+// Background activity reports fan out to every saved environment on the first
+// interaction after idle; nothing waits on them, so an unreachable remote
+// environment must not surface as a slow request.
 const untrackedRpcAckMethods = new Set<string>([
   WS_METHODS.previewAutomationConnect,
   WS_METHODS.serverGetUsageSummary,
+  WS_METHODS.serverReportClientActivity,
 ]);
 const longRunningRpcAckMethods = new Set<string>([
   WS_METHODS.serverUpdateProvider,

@@ -3259,6 +3259,69 @@ describe("ProviderCommandReactor", () => {
     }),
   );
 
+  effectIt.effect("starts the next queued prompt when the running turn ends", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() => createHarness());
+      const now = "2026-01-01T00:00:00.000Z";
+      const threadId = ThreadId.make("thread-1");
+
+      yield* harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-before-queue-drain"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-before-queue-drain"),
+          role: "user",
+          text: "First task.",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+      yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+
+      yield* harness.engine.dispatch({
+        type: "thread.prompt.queue",
+        commandId: CommandId.make("cmd-queue-prompt-for-drain"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-queued-for-drain"),
+          role: "user",
+          text: "Queued follow-up.",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      });
+      yield* harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-ready-for-queue-drain"),
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      });
+
+      yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 2));
+      const sendInput = harness.sendTurn.mock.calls[1]?.[0] as { input?: string } | undefined;
+      expect(sendInput?.input).toContain("Queued follow-up.");
+      const thread = (yield* Effect.promise(() => harness.readModel())).threads.find(
+        (entry) => entry.id === threadId,
+      );
+      expect(thread?.queuedPrompts).toEqual([]);
+    }),
+  );
+
   it("stores and path-references a thread transcript when a message contains thread_ref:<id>", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
