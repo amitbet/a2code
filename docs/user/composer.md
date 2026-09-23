@@ -50,6 +50,21 @@ the oldest queued message now. Change `thread.steerQueuedMessage` in
 **Settings → Keybindings** to use another shortcut. It leaves the current draft
 in the composer and waits if the agent needs an approval or an answer.
 
+## Ask a side question
+
+Start a message with `/btw` to ask about the thread without interrupting or steering its agent,
+for example `/btw why did it pick this library?`. The answer runs separately and can see what the
+agent is doing right now, including the turn in progress. On web and desktop it opens beside the
+conversation, and each side question shows as a chip above the composer. On mobile, tap the chip
+to open it.
+
+A side question reads files freely but asks before it edits anything or runs commands, because
+the main agent is usually working in the same checkout. Follow-ups stay in the same side
+question. **Keep as thread** turns it into a regular fork with the parent's permissions; dismissing
+it archives it. `/btw` on its own reopens the latest side question, and `Cmd+Alt+Enter` on macOS
+or `Ctrl+Alt+Enter` on Windows and Linux asks the composer text as a side question
+(`thread.askSideQuestion` in **Settings → Keybindings**). Side questions are text only.
+
 ## Queue messages offline on mobile
 
 Mobile keeps local copies of draft attachments, so you can preview them and queue

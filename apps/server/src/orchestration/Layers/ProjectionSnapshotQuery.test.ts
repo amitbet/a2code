@@ -460,6 +460,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
+          sideQuestionOf: null,
           pullRequests: expectedPullRequests,
           branchPullRequest,
           latestTurn: {
@@ -587,6 +588,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
+          sideQuestionOf: null,
           pullRequests: expectedPullRequests,
           branchPullRequest,
           latestTurn: {

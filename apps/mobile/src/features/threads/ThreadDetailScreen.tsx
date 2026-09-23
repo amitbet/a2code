@@ -1,6 +1,8 @@
 import type { WorktreeSetupCardProps } from "./worktree-setup-card";
 import type { ComposerTextPaste } from "../../native/T3ComposerEditor.types";
 import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import {
   appendCodexArtifactTemplateUsePrompt,
   type CodexArtifactTemplate,
@@ -65,6 +67,8 @@ import Animated, {
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useWorkspaceContentWidth } from "../layout/workspace-content-width";
+import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
+import { useSideQuestionShells } from "../../state/entities";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { collectProviderUsageLimits } from "@t3tools/shared/usageLimits";
 import type { ComposerEditorHandle } from "../../components/ComposerEditor";
@@ -107,6 +111,7 @@ import {
   ThreadComposer,
 } from "./ThreadComposer";
 import { ThreadFeed } from "./ThreadFeed";
+import { SideQuestionChips } from "./SideQuestionChips";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
 
@@ -164,6 +169,11 @@ export interface ThreadDetailScreenProps {
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
   readonly onSendMessage: () => Promise<MessageId | null>;
+  /** Forks the thread into a `/btw` side question; resolves true once accepted. */
+  readonly onAskSideQuestion: (
+    question: string,
+    modelSelection: ModelSelection,
+  ) => Promise<boolean>;
   readonly onReconnectEnvironment: () => void;
   readonly onUpdateThreadModelSelection: (modelSelection: ModelSelection) => void;
   readonly onUpdateThreadRuntimeMode: (runtimeMode: RuntimeMode) => void;
@@ -316,6 +326,23 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const navigationHeaderHeight = useContext(HeaderHeightContext) || insets.top + IOS_NAV_BAR_HEIGHT;
   const agentLabel = `${props.selectedThread.modelSelection.instanceId} agent`;
   const selectedThreadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
+  const sideQuestions = useSideQuestionShells(
+    scopeThreadRef(props.environmentId, props.selectedThread.id),
+  );
+  const { selectThread } = useAdaptiveWorkspaceLayout();
+  const openSideQuestion = useCallback(
+    (thread: EnvironmentThreadShell) => {
+      Keyboard.dismiss();
+      selectThread(thread);
+    },
+    [selectThread],
+  );
+  const openLatestSideQuestion = useCallback(() => {
+    const latest = sideQuestions.at(-1);
+    if (latest === undefined) return false;
+    openSideQuestion(latest);
+    return true;
+  }, [openSideQuestion, sideQuestions]);
   const composerEditorRef = useRef<ComposerEditorHandle>(null);
   const draftMessageRef = useRef(props.draftMessage);
   draftMessageRef.current = props.draftMessage;
@@ -1052,6 +1079,9 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                     : undefined
                 }
               >
+                <View className="w-full self-center" style={{ maxWidth: contentMaxWidth }}>
+                  <SideQuestionChips sideQuestions={sideQuestions} onOpen={openSideQuestion} />
+                </View>
                 <ThreadComposer
                   editorRef={composerEditorRef}
                   draftMessage={props.draftMessage}
@@ -1082,6 +1112,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   onStopThread={props.onStopThread}
                   onSendMessage={handleSendMessage}
                   onShowUsageLimits={showUsageLimits}
+                  onAskSideQuestion={props.onAskSideQuestion}
+                  onOpenLatestSideQuestion={openLatestSideQuestion}
                   onUpdateModelSelection={props.onUpdateThreadModelSelection}
                   onUpdateRuntimeMode={props.onUpdateThreadRuntimeMode}
                   onUpdateInteractionMode={props.onUpdateThreadInteractionMode}

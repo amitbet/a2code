@@ -21,6 +21,7 @@ import {
   effectiveSnoozed,
   threadWokeAt,
 } from "@t3tools/client-runtime/state/thread-settled";
+import { withoutNestedSideQuestions } from "@t3tools/client-runtime/state/side-questions";
 import { resolveSettledThreadTimestamp } from "@t3tools/client-runtime/state/thread-sort";
 import {
   threadSearchMatchKey,
@@ -2591,7 +2592,8 @@ export default function Sidebar() {
     // memo exactly at the next wake boundary.
     void snoozeWakeTick;
     const preciseNow = new Date().toISOString();
-    const visible = threads.filter(
+    // Side questions surface as chips on their parent thread, not as cards.
+    const visible = withoutNestedSideQuestions(threads).filter(
       (thread) =>
         thread.archivedAt === null &&
         (scopedProjectKeys === null ||

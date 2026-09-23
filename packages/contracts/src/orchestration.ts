@@ -846,6 +846,10 @@ export const OrchestrationThread = Schema.Struct({
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   // When this thread was created by forking another thread, the source thread id.
   forkedFromId: Schema.optional(Schema.NullOr(ThreadId)),
+  // Set while this thread is a `/btw` side question about the named parent.
+  // Clients nest it under the parent instead of listing it; promoting the side
+  // question to a regular fork clears it.
+  sideQuestionOf: Schema.optional(Schema.NullOr(ThreadId)),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   // Optional so payloads from pre-link servers still decode.
   pullRequests: Schema.Array(ThreadPullRequestLink).pipe(
@@ -936,6 +940,8 @@ export const OrchestrationThreadShell = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  // See OrchestrationThread.sideQuestionOf.
+  sideQuestionOf: Schema.optional(Schema.NullOr(ThreadId)),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   pullRequests: Schema.Array(ThreadPullRequestLink).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
@@ -1196,6 +1202,34 @@ const ThreadForkCommand = Schema.Struct({
   // the source context is carried over via transcript replay rather than a
   // provider-native fork.
   modelSelection: Schema.optional(ModelSelection),
+  // Marks the fork as a `/btw` side question nested under its source.
+  sideQuestion: Schema.optional(Schema.Boolean),
+  createdAt: IsoDateTime,
+});
+
+// Ask a `/btw` side question: fork the source (running or not) into a nested
+// thread that cannot edit without approval, and start the question as its
+// first turn. The source's in-flight turn is part of the side question's
+// context. Text-only: side questions are quick asides, not work orders.
+const ThreadSideQuestionAskCommand = Schema.Struct({
+  type: Schema.Literal("thread.side-question.ask"),
+  commandId: CommandId,
+  // The newly-created side-question thread id.
+  threadId: ThreadId,
+  sourceThreadId: ThreadId,
+  messageId: MessageId,
+  text: TrimmedNonEmptyString,
+  title: TrimmedNonEmptyString,
+  modelSelection: Schema.optional(ModelSelection),
+  createdAt: IsoDateTime,
+});
+
+// Turn a side question into a regular fork: it leaves its parent's nest and
+// takes the parent's runtime mode back.
+const ThreadSideQuestionPromoteCommand = Schema.Struct({
+  type: Schema.Literal("thread.side-question.promote"),
+  commandId: CommandId,
+  threadId: ThreadId,
   createdAt: IsoDateTime,
 });
 
@@ -1576,6 +1610,8 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadPromptRemoveCommand,
   ThreadPromptSteerCommand,
   ThreadPromptForkCommand,
+  ThreadSideQuestionAskCommand,
+  ThreadSideQuestionPromoteCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
@@ -1614,6 +1650,8 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadPromptRemoveCommand,
   ThreadPromptSteerCommand,
   ThreadPromptForkCommand,
+  ThreadSideQuestionAskCommand,
+  ThreadSideQuestionPromoteCommand,
   ThreadTurnInterruptCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
@@ -1909,6 +1947,7 @@ export const ThreadCreatedPayload = Schema.Struct({
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   // Set when this thread was created by forking another thread.
   forkedFromId: Schema.optional(Schema.NullOr(ThreadId)),
+  sideQuestionOf: Schema.optional(Schema.NullOr(ThreadId)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -2000,6 +2039,8 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   // thread.pull-request-linked still decode and replay into the link table.
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  /** Null when a side question is promoted to a regular fork. */
+  sideQuestionOf: Schema.optional(Schema.NullOr(ThreadId)),
   updatedAt: IsoDateTime,
 });
 

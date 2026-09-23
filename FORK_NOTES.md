@@ -17,6 +17,9 @@ Upstream added `051_ProjectionThreadMessageContext`, `052_ProjectionThreadTitleS
 (files, `Migrations.ts` registry, the `it.layer` name, and the `toMigrationInclusive` bounds in
 `055`'s test). Fork ids 33-35, 43 and 48 stay frozen.
 
+Since this merge the fork added **`058_ProjectionThreadSideQuestionOf`** (side questions), so the
+next free id is **59**.
+
 `NodeSqliteClient.layerMemory()` **was removed upstream**; every call site now uses
 `NodeSqliteClient.layer({ filename: ":memory:" })`. Four fork-owned tests were converted
 (`043`, `053`, `054`, `ProjectionThreadSearch.test.ts`).
@@ -1935,6 +1938,39 @@ activities)` pairs `user-input.requested` questions with the matching
   - `apps/web/src/components/chat/ChatComposer.tsx` +
     `apps/web/src/composer-logic.ts` — **modified**: `/fork` slash command
     (`"fork"` added to `ComposerSlashCommand`) and its handler.
+
+### Side questions (`/btw`)
+
+- `/btw <question>` (or **Thread: Ask Side Question**, `mod+alt+enter`, which sends the composer
+  text) forks the thread into a **nested side-question thread** and starts the question there
+  while the parent agent keeps running. A bare `/btw` reopens the latest side question. Built on
+  forks, not a second ephemeral protocol — upstream closed #8296 for exactly that reason, so
+  expect no upstream equivalent to merge against.
+- **Server:** `thread.side-question.ask` composes `thread.fork` (with `sideQuestion: true`) and
+  `thread.turn.start` in one decision. Side questions get `sideQuestionOf = parent`, runtime mode
+  **`approval-required`** (the parent usually edits the same checkout) and interaction mode
+  `default`. They are **exempt from `MAX_UNARCHIVED_THREADS_PER_PROJECT`** (asking one must not
+  archive a real thread); instead the parent keeps at most 5 unarchived side questions.
+  `thread.side-question.promote` clears `sideQuestionOf` via `thread.meta-updated` (optional
+  field, no new event type) and restores the parent's runtime mode.
+- **Context:** the side question's first turn replays the parent through the fork's implicit
+  reference, but with `includeRunningTurn` (`buildThreadTranscript` option) so it sees the
+  in-flight turn, a side-question transcript intro, and `SIDE_QUESTION_INSTRUCTIONS` (answer, do
+  not modify) in `ProviderCommandReactor`.
+- **Wire:** `sideQuestionOf` on `OrchestrationThread`, `OrchestrationThreadShell` (unlike
+  `forkedFromId`, the shell carries it — the sidebar needs it), `ThreadCreatedPayload`,
+  `ThreadMetaUpdatedPayload`; column `side_question_of` (migration 058). Capability
+  `threadSideQuestions` gates `/btw` on clients.
+- **Clients:** shared rules in `packages/client-runtime/src/state/sideQuestions.ts`
+  (`parseSideQuestionCommand`, `withoutNestedSideQuestions`, title); per-parent shells from
+  `sideQuestionShellsAtom` in `threadShell.ts` (grouped once per environment). Web: chips above the
+  composer and a `side-question` right-panel surface (`components/chat/SideQuestionPanel.tsx`,
+  `rightPanelStore.ts`), nested rows under the parent in `LegacySidebar.tsx`
+  (`SidebarSideQuestionRows.tsx`); the flat `Sidebar.tsx` only hides them. A provider's own `/btw`
+  (Claude Code publishes one) is dropped from the slash menu where T3 offers it. Mobile:
+  `ThreadComposer` handles `/btw`, `ThreadRouteScreen` dispatches it, `SideQuestionChips.tsx` sits
+  above the composer and opens the side question as a normal thread, and thread lists read
+  `useMachineListThreadShells` (entities.ts) instead of `useMachineThreadShells`.
 
 ### Pinned project threads
 

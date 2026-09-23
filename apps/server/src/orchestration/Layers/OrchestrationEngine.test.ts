@@ -1049,6 +1049,111 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
+  it("asks side questions outside the project cap and promotes them to forks", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const projectId = asProjectId("project-side-question");
+    const modelSelection = {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5-codex",
+    };
+    const parentThreadId = ThreadId.make("thread-side-parent");
+    const at = (second: number) => `2026-01-01T00:00:${String(second).padStart(2, "0")}.000Z`;
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-project-side-question"),
+        projectId,
+        title: "Side Questions",
+        workspaceRoot: "/tmp/project-side-question",
+        defaultModelSelection: modelSelection,
+        createdAt: at(0),
+      }),
+    );
+    // Fill the project to its cap so a side question counting toward it would
+    // archive a real thread.
+    for (let index = 0; index < 10; index += 1) {
+      await system.run(
+        engine.dispatch({
+          type: "thread.create",
+          commandId: CommandId.make(`cmd-side-question-thread-${index}`),
+          threadId: index === 9 ? parentThreadId : ThreadId.make(`thread-side-filler-${index}`),
+          projectId,
+          title: `Thread ${index}`,
+          modelSelection,
+          interactionMode: "plan",
+          runtimeMode: "full-access",
+          branch: "feature/side",
+          worktreePath: "/tmp/project-side-question-worktree",
+          createdAt: at(index + 1),
+        }),
+      );
+    }
+
+    const askSideQuestion = (index: number) =>
+      system.run(
+        engine.dispatch({
+          type: "thread.side-question.ask",
+          commandId: CommandId.make(`cmd-side-question-ask-${index}`),
+          threadId: ThreadId.make(`thread-side-question-${index}`),
+          sourceThreadId: parentThreadId,
+          messageId: asMessageId(`message-side-question-${index}`),
+          text: `Why is step ${index} slow?`,
+          title: `Why is step ${index} slow?`,
+          createdAt: at(20 + index),
+        }),
+      );
+
+    await askSideQuestion(0);
+    let threads = (await system.readModel()).threads;
+    expect(threads.filter((thread) => thread.archivedAt !== null)).toHaveLength(0);
+    const sideQuestion = threads.find((thread) => thread.id === "thread-side-question-0");
+    expect(sideQuestion).toMatchObject({
+      sideQuestionOf: parentThreadId,
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+      branch: "feature/side",
+      worktreePath: "/tmp/project-side-question-worktree",
+    });
+    expect(sideQuestion?.messages).toContainEqual(
+      expect.objectContaining({ role: "user", text: "Why is step 0 slow?" }),
+    );
+
+    for (let index = 1; index <= 5; index += 1) {
+      await askSideQuestion(index);
+    }
+    threads = (await system.readModel()).threads;
+    const unarchivedSideQuestions = threads.filter(
+      (thread) => thread.sideQuestionOf === parentThreadId && thread.archivedAt === null,
+    );
+    expect(unarchivedSideQuestions).toHaveLength(5);
+    expect(
+      threads.find((thread) => thread.id === "thread-side-question-0")?.archivedAt,
+    ).not.toBeNull();
+    expect(
+      threads.filter((thread) => thread.sideQuestionOf == null && thread.archivedAt !== null),
+    ).toHaveLength(0);
+
+    await system.run(
+      engine.dispatch({
+        type: "thread.side-question.promote",
+        commandId: CommandId.make("cmd-side-question-promote"),
+        threadId: ThreadId.make("thread-side-question-5"),
+        createdAt: at(40),
+      }),
+    );
+    const promoted = (await system.readModel()).threads.find(
+      (thread) => thread.id === "thread-side-question-5",
+    );
+    expect(promoted).toMatchObject({
+      sideQuestionOf: null,
+      runtimeMode: "full-access",
+    });
+
+    await system.dispose();
+  });
+
   it("replays append-only events from sequence", async () => {
     const system = await createOrchestrationSystem();
     const { engine } = system;

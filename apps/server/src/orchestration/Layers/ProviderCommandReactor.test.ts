@@ -3259,6 +3259,65 @@ describe("ProviderCommandReactor", () => {
     }),
   );
 
+  effectIt.effect(
+    "frames a side question's first turn as an aside over the parent transcript",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* Effect.promise(() => createHarness());
+        const now = "2026-01-01T00:00:00.000Z";
+
+        yield* harness.engine.dispatch({
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-turn-start-side-question-source"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: asMessageId("user-message-side-question-source"),
+            role: "user",
+            text: "Migrate the billing tables.",
+            attachments: [],
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          createdAt: now,
+        });
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+        harness.startSession.mockClear();
+        harness.sendTurn.mockClear();
+
+        yield* harness.engine.dispatch({
+          type: "thread.side-question.ask",
+          commandId: CommandId.make("cmd-side-question-ask"),
+          threadId: ThreadId.make("thread-side-question"),
+          sourceThreadId: ThreadId.make("thread-1"),
+          messageId: asMessageId("user-message-side-question"),
+          text: "Which tables does billing own?",
+          title: "Which tables does billing own?",
+          createdAt: now,
+        });
+
+        yield* Effect.promise(() => waitFor(() => harness.sendTurn.mock.calls.length === 1));
+        const startInput = harness.startSession.mock.calls[0]?.[1] as
+          | { runtimeMode?: string }
+          | undefined;
+        expect(startInput?.runtimeMode).toBe("approval-required");
+        const sendInput = harness.sendTurn.mock.calls[0]?.[0] as
+          | { input?: string; threadId?: ThreadId }
+          | undefined;
+        expect(sendInput?.threadId).toBe(ThreadId.make("thread-side-question"));
+        expect(sendInput?.input).toContain("Which tables does billing own?");
+        expect(sendInput?.input).toContain("This is a side question");
+
+        const artifactPath = contextArtifactPathFromInput(
+          sendInput?.input,
+          "referenced-thread-thread-1.md",
+        );
+        expect(artifactPath).toBeTruthy();
+        const transcript = NodeFS.readFileSync(artifactPath!, "utf8");
+        expect(transcript).toContain("The user asked a side question");
+        expect(transcript).toContain("Migrate the billing tables.");
+      }),
+  );
+
   effectIt.effect("starts the next queued prompt when the running turn ends", () =>
     Effect.gen(function* () {
       const harness = yield* Effect.promise(() => createHarness());

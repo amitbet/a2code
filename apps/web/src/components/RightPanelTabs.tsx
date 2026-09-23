@@ -21,6 +21,7 @@ import {
   ChevronRight,
   FileDiff,
   Files,
+  MessageCircleQuestion,
   Globe2,
   Plus,
   TerminalSquare,
@@ -75,6 +76,7 @@ import { PreviewPanelShell, type PreviewPanelMode } from "./preview/PreviewPanel
 import { FaviconImage } from "./preview/PreviewFaviconIcon";
 import { previewBridge } from "./preview/previewBridge";
 import { PierreEntryIcon } from "./chat/PierreEntryIcon";
+import { SideQuestionTabTitle } from "./chat/SideQuestionPanel";
 import { resolvePullRequestState } from "./pullRequest/pullRequestPresentation";
 import { PullRequestGlyph } from "~/components/pullRequest/pullRequestIcons";
 
@@ -634,6 +636,8 @@ function surfaceTitle(
       return "Pull requests";
     case "agents":
       return "Agents";
+    case "side-question":
+      return "Side question";
     case "device":
       return surface.title ?? surface.target?.name ?? "Device";
     case "preview": {
@@ -719,6 +723,8 @@ function SurfaceIcon({
       return <PullRequestGlyph.link className="size-3 shrink-0" />;
     case "agents":
       return <Bot className="size-3 shrink-0" />;
+    case "side-question":
+      return <MessageCircleQuestion className="size-3 shrink-0" />;
     case "device":
       return surface.target?.platform === "ios" ? (
         <AppleIcon className="size-3 shrink-0" />
@@ -1138,6 +1144,15 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
               const active = surface.id === props.activeSurfaceId;
               const pending = props.pendingSurfaceIds.has(surface.id);
               const title = surfaceTitle(surface, props.previewSessions, props.terminalLabelsById);
+              const tabLabel =
+                surface.kind === "side-question" && props.environmentId !== null ? (
+                  <SideQuestionTabTitle
+                    environmentId={props.environmentId}
+                    threadId={surface.threadId}
+                  />
+                ) : (
+                  title
+                );
               const previewTabId = previewTabIdOf(surface, props.previewSessions);
               // Desktop state is keyed by the session id, but desktop actions
               // must be addressed with the runtime id.
@@ -1244,11 +1259,11 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                             className="cursor-pointer flex min-w-0 items-center"
                             onClick={() => props.onActivate(surface)}
                           >
-                            <span className="truncate">{title}</span>
+                            <span className="truncate">{tabLabel}</span>
                           </button>
                         }
                       />
-                      <TooltipPopup>{title}</TooltipPopup>
+                      <TooltipPopup>{tabLabel}</TooltipPopup>
                     </Tooltip>
                   )}
                 </div>

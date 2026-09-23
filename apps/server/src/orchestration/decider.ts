@@ -176,6 +176,12 @@ type DecideOrchestrationCommandResult =
   | ReadonlyArray<PlannedOrchestrationEvent>;
 
 const MAX_UNARCHIVED_THREADS_PER_PROJECT = 10;
+// Side questions are nested under their parent and don't count toward the
+// project cap; asking another one archives the oldest past this many.
+const MAX_UNARCHIVED_SIDE_QUESTIONS_PER_THREAD = 5;
+// A side question may read freely but must ask before it edits or runs
+// commands: the parent agent is usually working in the same checkout.
+const SIDE_QUESTION_RUNTIME_MODE = "approval-required" as const;
 
 function compareOldestThread(
   left: OrchestrationReadModel["threads"][number],
@@ -206,6 +212,7 @@ function listThreadsToArchiveBeforeCreate(
       (thread) =>
         thread.deletedAt === null &&
         thread.archivedAt === null &&
+        (thread.sideQuestionOf ?? null) === null &&
         !isImportedAgentSessionThreadId(thread.id),
     )
     .sort(compareOldestThread);
@@ -214,6 +221,25 @@ function listThreadsToArchiveBeforeCreate(
     unarchivedThreads.length - MAX_UNARCHIVED_THREADS_PER_PROJECT + 1,
   );
   return unarchivedThreads.slice(0, archiveCount);
+}
+
+function listSideQuestionsToArchiveBeforeCreate(
+  readModel: OrchestrationReadModel,
+  parentThreadId: OrchestrationReadModel["threads"][number]["id"],
+): ReadonlyArray<OrchestrationReadModel["threads"][number]> {
+  const unarchivedSideQuestions = readModel.threads
+    .filter(
+      (thread) =>
+        thread.deletedAt === null &&
+        thread.archivedAt === null &&
+        thread.sideQuestionOf === parentThreadId,
+    )
+    .sort(compareOldestThread);
+  const archiveCount = Math.max(
+    0,
+    unarchivedSideQuestions.length - MAX_UNARCHIVED_SIDE_QUESTIONS_PER_THREAD + 1,
+  );
+  return unarchivedSideQuestions.slice(0, archiveCount);
 }
 
 const decideCommandSequence = Effect.fn("decideCommandSequence")(function* ({
@@ -482,7 +508,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
-      const threadsToArchive = listThreadsToArchiveBeforeCreate(readModel, sourceThread.projectId);
+      const sideQuestion = command.sideQuestion === true;
+      const threadsToArchive = sideQuestion
+        ? listSideQuestionsToArchiveBeforeCreate(readModel, sourceThread.id)
+        : listThreadsToArchiveBeforeCreate(readModel, sourceThread.projectId);
       if (threadsToArchive.length > 0) {
         return yield* decideCommandSequence({
           readModel,
@@ -511,12 +540,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           projectId: sourceThread.projectId,
           title: command.title,
           modelSelection: command.modelSelection ?? sourceThread.modelSelection,
-          runtimeMode: sourceThread.runtimeMode,
-          interactionMode: sourceThread.interactionMode,
+          runtimeMode: sideQuestion ? SIDE_QUESTION_RUNTIME_MODE : sourceThread.runtimeMode,
+          // A side question answers; it never drafts a plan for the parent.
+          interactionMode: sideQuestion ? "default" : sourceThread.interactionMode,
           // Fork stays in the same git environment as its source.
           branch: sourceThread.branch,
           worktreePath: sourceThread.worktreePath,
           forkedFromId: command.sourceThreadId,
+          ...(sideQuestion ? { sideQuestionOf: command.sourceThreadId } : {}),
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -1813,6 +1844,101 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           },
         ],
       });
+    }
+
+    case "thread.side-question.ask": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.sourceThreadId,
+      });
+      return yield* decideCommandSequence({
+        readModel,
+        commands: [
+          {
+            type: "thread.fork",
+            commandId: command.commandId,
+            threadId: command.threadId,
+            sourceThreadId: command.sourceThreadId,
+            title: command.title,
+            ...(command.modelSelection !== undefined
+              ? { modelSelection: command.modelSelection }
+              : {}),
+            sideQuestion: true,
+            createdAt: command.createdAt,
+          },
+          {
+            type: "thread.turn.start",
+            commandId: command.commandId,
+            threadId: command.threadId,
+            message: {
+              messageId: command.messageId,
+              role: "user",
+              text: command.text,
+              attachments: [],
+            },
+            ...(command.modelSelection !== undefined
+              ? { modelSelection: command.modelSelection }
+              : {}),
+            titleSeed: command.text,
+            runtimeMode: SIDE_QUESTION_RUNTIME_MODE,
+            interactionMode: "default",
+            createdAt: command.createdAt,
+          },
+        ],
+      });
+    }
+
+    case "thread.side-question.promote": {
+      const sideQuestion = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const parentThreadId = sideQuestion.sideQuestionOf ?? null;
+      if (parentThreadId === null) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' is not a side question.`,
+        });
+      }
+      const parent = readModel.threads.find(
+        (thread) => thread.id === parentThreadId && thread.deletedAt === null,
+      );
+      const metaUpdatedEvent: Omit<OrchestrationEvent, "sequence"> = {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.meta-updated",
+        payload: {
+          threadId: command.threadId,
+          sideQuestionOf: null,
+          updatedAt: command.createdAt,
+        },
+      };
+      if (parent === undefined || parent.runtimeMode === sideQuestion.runtimeMode) {
+        return metaUpdatedEvent;
+      }
+      return [
+        metaUpdatedEvent,
+        {
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.runtime-mode-set",
+          payload: {
+            threadId: command.threadId,
+            runtimeMode: parent.runtimeMode,
+            updatedAt: command.createdAt,
+          },
+        },
+      ];
     }
 
     case "thread.turn.interrupt": {

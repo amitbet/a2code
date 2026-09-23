@@ -28,7 +28,7 @@ import { MachineSwitcher } from "../../components/MachineSwitcher";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { scopedProjectKey, scopedThreadKey } from "../../lib/scopedEntities";
-import { useMachineProjects, useMachineThreadShells } from "../../state/entities";
+import { useMachineListThreadShells, useMachineProjects } from "../../state/entities";
 import { useMachineEnvironmentId } from "../../state/environments";
 import { useThreadSearch } from "../../state/queries";
 import { useThreadListV2Enabled } from "./use-thread-list-v2-enabled";
@@ -159,7 +159,7 @@ function ThreadNavigationSidebarPane(
 
   const insets = useSafeAreaInsets();
   const projects = useMachineProjects();
-  const threads = useMachineThreadShells();
+  const threads = useMachineListThreadShells();
   const machineEnvironmentId = useMachineEnvironmentId();
   const { environments: workspaceEnvironments, state: catalogState } =
     useWorkspaceState(machineEnvironmentId);

@@ -265,6 +265,7 @@ export interface ProjectionSnapshotQueryShape {
   readonly getThreadForkContext: (threadId: ThreadId) => Effect.Effect<
     Option.Option<{
       readonly forkedFromId: ThreadId | null;
+      readonly sideQuestionOf: ThreadId | null;
       readonly userMessageCount: number;
     }>,
     ProjectionRepositoryError

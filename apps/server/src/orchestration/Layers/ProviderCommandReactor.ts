@@ -179,6 +179,18 @@ export class ThreadReferenceUnresolvedError extends Schema.TaggedError<ThreadRef
 }
 const isThreadReferenceUnresolvedError = Schema.is(ThreadReferenceUnresolvedError);
 
+// A `/btw` side question sees the parent's transcript including the turn still
+// running there, and is told it is an aside: the parent agent keeps working in
+// the same checkout, so the side question must not change it.
+const SIDE_QUESTION_TRANSCRIPT_INTRO =
+  "The user asked a side question about another thread while its agent may still be working. " +
+  "The Markdown below is that thread's transcript, including any turn still in progress — " +
+  "treat it as background context for the question that follows.";
+const SIDE_QUESTION_INSTRUCTIONS = [
+  "This is a side question about the thread whose transcript is listed below. Its agent may still be working in the same checkout.",
+  "Answer the question directly and concisely. Read files if you need to, but do not modify files, run commands that change state, or continue that thread's task.",
+].join("\n");
+
 function formatThreadContextPathInstructions(
   artifacts: ReadonlyArray<ThreadContextArtifact>,
 ): string | undefined {
@@ -935,6 +947,8 @@ const make = Effect.gen(function* () {
       .pipe(Effect.map(Option.getOrUndefined));
     const isFirstUserMessageTurn = forkContext?.userMessageCount === 1;
     const forkedFromId = forkContext?.forkedFromId ?? undefined;
+    const isSideQuestionFirstTurn =
+      isFirstUserMessageTurn && (forkContext?.sideQuestionOf ?? null) !== null;
 
     yield* ensureSessionForThread(input.threadId, input.createdAt, {
       ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
@@ -1037,7 +1051,9 @@ const make = Effect.gen(function* () {
         latestTurn: referenced.latestTurn,
         fileName: `referenced-thread-${entry.threadId}.md`,
         sourceTitle: referenced.title,
-        intro: THREAD_REFERENCE_INTRO,
+        ...(entry.kind === "implicit-fork" && isSideQuestionFirstTurn
+          ? { intro: SIDE_QUESTION_TRANSCRIPT_INTRO, includeRunningTurn: true }
+          : { intro: THREAD_REFERENCE_INTRO }),
         fileSystem,
         path,
       }).pipe(
@@ -1060,7 +1076,10 @@ const make = Effect.gen(function* () {
       }
       referenceArtifacts.push(referenceArtifact);
     }
-    const contextPathInstructions = formatThreadContextPathInstructions(referenceArtifacts);
+    const transcriptInstructions = formatThreadContextPathInstructions(referenceArtifacts);
+    const contextPathInstructions = isSideQuestionFirstTurn
+      ? [SIDE_QUESTION_INSTRUCTIONS, transcriptInstructions].filter(Boolean).join("\n\n")
+      : transcriptInstructions;
     const normalizedInput = toNonEmptyProviderInput(
       contextPathInstructions === undefined
         ? input.messageText

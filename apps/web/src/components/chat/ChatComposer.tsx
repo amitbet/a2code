@@ -1422,6 +1422,8 @@ export interface ChatComposerProps {
   // Context window
   activeContextWindow: ContextWindowSnapshot | null;
   compactThreadUnavailable: boolean;
+  /** The thread's server understands `/btw` side questions. */
+  sideQuestionsSupported: boolean;
   compactDisabled: boolean;
   compactDisabledReason: string | null;
 
@@ -1549,6 +1551,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeThreadModelSelection,
     activeContextWindow,
     compactThreadUnavailable,
+    sideQuestionsSupported,
     compactDisabled,
     compactDisabledReason,
     resolvedTheme,
@@ -2417,6 +2420,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         label: "/fork",
         description: "Fork this thread into a new thread with the same context",
       };
+      const sideQuestionSlashCommandItem = {
+        id: "slash:btw",
+        type: "slash-command" as const,
+        command: "btw" as const,
+        label: "/btw",
+        description: "Ask a side question without interrupting the agent",
+      };
       const slashMenuSkills = getProviderSkillsForSlashMenu(
         selectedProviderSkills,
         settings.showSkillsInSlashMenu,
@@ -2445,12 +2455,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           (skill.scope ? `${skill.scope} skill` : ""),
       }));
       const visibleProviderSlashCommandItems = providerSlashCommandItems.filter(
-        (item) => item.command.name !== "compact" || compactSlashCommandAvailable,
+        (item) =>
+          (item.command.name !== "compact" || compactSlashCommandAvailable) &&
+          // The composer answers `/btw` itself, so a provider's own `/btw`
+          // (Claude Code has one) would never run.
+          (item.command.name !== "btw" || !sideQuestionsSupported),
       );
       const slashCommandItems = slashCommandItemsForPromptPosition(
         [
           ...builtInSlashCommandItems,
-          ...(typeof composerDraftTarget === "string" ? [] : [forkSlashCommandItem]),
+          ...(typeof composerDraftTarget === "string"
+            ? []
+            : [
+                forkSlashCommandItem,
+                ...(sideQuestionsSupported ? [sideQuestionSlashCommandItem] : []),
+              ]),
           ...visibleProviderSlashCommandItems,
           ...skillItems,
         ],
@@ -2525,6 +2544,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     return [];
   }, [
     compactSlashCommandAvailable,
+    sideQuestionsSupported,
     composerTrigger,
     exactPullRequestLookup.data,
     planModeUiEnabled,
@@ -3654,6 +3674,25 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           if (applied) {
             setComposerHighlightedItemId(null);
             setIsComposerModelPickerOpen(true);
+          }
+          return;
+        }
+        if (item.command === "btw") {
+          // The question is typed after the command and sent with Enter.
+          const replacement = "/btw ";
+          const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+            snapshot.value,
+            trigger.rangeEnd,
+            replacement,
+          );
+          const applied = applyPromptReplacement(
+            trigger.rangeStart,
+            replacementRangeEnd,
+            replacement,
+            { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
+          );
+          if (applied) {
+            setComposerHighlightedItemId(null);
           }
           return;
         }

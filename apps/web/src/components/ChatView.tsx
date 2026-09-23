@@ -54,6 +54,7 @@ import {
 import { readPastedComposerContext } from "./composerInlineTokenPaste";
 import { isPasteAsTextShortcut } from "@t3tools/client-runtime/text-paste";
 import { type CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
+import { parseSideQuestionCommand } from "@t3tools/client-runtime/state/side-questions";
 import { effectiveSnoozed, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
 import {
   parseCodexFeedbackCommand,
@@ -221,6 +222,7 @@ import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
 import { RightPanelTabs } from "./RightPanelTabs";
 import { AgentsPanel } from "./AgentsPanel";
+import { SideQuestionChips, SideQuestionPanel } from "./chat/SideQuestionPanel";
 import { LinkPullRequestDialogHost } from "./pullRequest/LinkPullRequestDialog";
 import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
 import { useDeviceState } from "~/state/device";
@@ -371,6 +373,7 @@ import {
 import {
   useProject,
   useProjects,
+  useSideQuestionShells,
   useThread,
   useThreadRefs,
   useThreadShell,
@@ -1556,7 +1559,7 @@ export default function ChatView(props: ChatViewProps) {
     reportFailure: false,
   });
   const steerThreadPrompt = useAtomCommand(threadEnvironment.steerPrompt, { reportFailure: false });
-  const { forkQueuedPrompt } = useThreadActions();
+  const { forkQueuedPrompt, askSideQuestion } = useThreadActions();
   const createAttachmentAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
     reportFailure: false,
     refresh: true,
@@ -4800,6 +4803,105 @@ export default function ChatView(props: ChatViewProps) {
     if (!activeThreadRef) return;
     useRightPanelStore.getState().open(activeThreadRef, "agents");
   }, [activeThreadRef]);
+  const openSideQuestionSurface = useCallback(
+    (sideQuestionThreadId: ThreadId) => {
+      if (!activeThreadRef) return;
+      useRightPanelStore.getState().openSideQuestion(activeThreadRef, sideQuestionThreadId);
+    },
+    [activeThreadRef],
+  );
+  const sideQuestionsSupported =
+    isServerThread && serverConfig?.environment.capabilities.threadSideQuestions === true;
+  const sideQuestionShells = useSideQuestionShells(isServerThread ? activeThreadRef : null);
+  // `/btw <question>` and its shortcut: fork the thread into a side question
+  // and show the answer in the right panel. A bare `/btw` reopens the latest.
+  const submitSideQuestion = useCallback(
+    async (question: string, modelSelection: ModelSelection | undefined) => {
+      const clearComposer = () => {
+        promptRef.current = "";
+        clearComposerDraftContent(composerDraftTarget);
+        composerRef.current?.resetCursorState();
+      };
+      if (activeThreadRef && isServerThread && !sideQuestionsSupported) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "warning",
+            title: "Side questions need a newer server",
+            description: "Update this environment's T3 Code server to use /btw.",
+          }),
+        );
+        return;
+      }
+      if (!activeThreadRef || !isServerThread) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "info",
+            title: "Start the thread first",
+            description: "A side question asks about an existing conversation.",
+          }),
+        );
+        return;
+      }
+      if (question.length === 0) {
+        const latest = sideQuestionShells.at(-1);
+        if (latest === undefined) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "info",
+              title: "Ask a side question",
+              description: "Type /btw followed by your question.",
+            }),
+          );
+          return;
+        }
+        clearComposer();
+        openSideQuestionSurface(latest.id);
+        return;
+      }
+      if (composerHasNonPromptContent) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "warning",
+            title: "Side questions are text-only",
+            description: "Remove attachments and context from the composer, then ask again.",
+          }),
+        );
+        return;
+      }
+      const promptSnapshot = promptRef.current;
+      clearComposer();
+      const result = await askSideQuestion(
+        activeThreadRef,
+        question,
+        modelSelection !== undefined ? { modelSelection } : undefined,
+      );
+      if (result._tag === "Failure") {
+        promptRef.current = promptSnapshot;
+        setComposerDraftPrompt(composerDraftTarget, promptSnapshot);
+        const error = squashAtomCommandFailure(result);
+        setThreadError(
+          activeThreadRef.threadId,
+          error instanceof Error ? error.message : "Failed to ask the side question.",
+        );
+        return;
+      }
+      openSideQuestionSurface(result.value.threadId);
+    },
+    [
+      activeThreadRef,
+      askSideQuestion,
+      clearComposerDraftContent,
+      composerDraftTarget,
+      composerHasNonPromptContent,
+      composerRef,
+      isServerThread,
+      openSideQuestionSurface,
+      setComposerDraftPrompt,
+      setThreadError,
+      sideQuestionShells,
+      sideQuestionsSupported,
+    ],
+  );
   const supportsThreadPullRequests =
     serverConfig?.environment.capabilities.threadPullRequests === true;
   const visiblePullRequests = visibleThreadPullRequests(
@@ -7187,6 +7289,20 @@ export default function ChatView(props: ChatViewProps) {
         return;
       }
 
+      if (command === "thread.askSideQuestion") {
+        if (!isServerThread) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.repeat) return;
+        const typed = promptRef.current.trim();
+        const question = parseSideQuestionCommand(typed)?.question ?? typed;
+        void submitSideQuestion(
+          question,
+          composerRef.current?.getSendContext()?.selectedModelSelection,
+        );
+        return;
+      }
+
       if (command === "thread.stop") {
         // An unavailable command should not shadow contextual shortcuts such as Escape to close a dialog.
         if (!canInterruptRunningThread) return;
@@ -7234,6 +7350,8 @@ export default function ChatView(props: ChatViewProps) {
     onInterrupt,
     onSteerQueuedPrompt,
     displayedQueuedPrompts,
+    submitSideQuestion,
+    composerRef,
     onToggleDiff,
     pinThread,
     settleThread,
@@ -7709,6 +7827,14 @@ export default function ChatView(props: ChatViewProps) {
       interactionMode: sendInteractionMode,
       interactionModeEnabled: sendInteractionModeEnabled,
     } = sendCtx;
+    const sideQuestionCommand =
+      !directAnnotation && !queuedMessage && multipleModelSelections === null
+        ? parseSideQuestionCommand(promptRef.current)
+        : null;
+    if (sideQuestionCommand !== null) {
+      await submitSideQuestion(sideQuestionCommand.question, ctxSelectedModelSelection);
+      return;
+    }
     const annotationImageAlreadyAttached =
       directAnnotation?.image !== undefined &&
       sendContextImages.some((image) => image.id === directAnnotation.image?.id);
@@ -10023,6 +10149,13 @@ export default function ChatView(props: ChatViewProps) {
       />
     ) : renderedRightPanelSurface?.kind === "pull-requests" && activeThreadRef ? (
       <ThreadPullRequestsPanel threadRef={activeThreadRef} />
+    ) : renderedRightPanelSurface?.kind === "side-question" && activeThreadRef ? (
+      <SideQuestionPanel
+        key={renderedRightPanelSurface.id}
+        environmentId={activeThreadRef.environmentId}
+        sideQuestionThreadId={renderedRightPanelSurface.threadId}
+        onClose={() => closeRightPanelSurface(renderedRightPanelSurface)}
+      />
     ) : renderedRightPanelSurface?.kind === "agents" ? (
       <AgentsPanel
         model={agentPanelModel}
@@ -10377,6 +10510,14 @@ export default function ChatView(props: ChatViewProps) {
                     <ComposerSurface.Shell contextStrip={showComposerContextStrip}>
                       <ComposerSurface.Host>
                         <div ref={attachDraftHeroComposerAnchorRef} className="relative z-10">
+                          {isServerThread && activeThreadRef ? (
+                            <div className="mx-auto w-full max-w-208">
+                              <SideQuestionChips
+                                parentRef={activeThreadRef}
+                                onOpen={openSideQuestionSurface}
+                              />
+                            </div>
+                          ) : null}
                           {displayedQueuedPrompts.length > 0 ? (
                             <div className="mx-auto mb-2 w-full max-w-208 rounded-lg border border-border/70 bg-card/95 p-2 shadow-sm">
                               <div className="mb-1.5 flex items-center justify-between gap-3 px-1">
@@ -10550,6 +10691,7 @@ export default function ChatView(props: ChatViewProps) {
                             activeThreadModelSelection={activeThread?.modelSelection}
                             activeContextWindow={activeContextWindow}
                             compactThreadUnavailable={compactThreadUnavailable}
+                            sideQuestionsSupported={sideQuestionsSupported}
                             compactDisabled={compactDisabled}
                             compactDisabledReason={compactDisabledReason}
                             resolvedTheme={resolvedTheme}

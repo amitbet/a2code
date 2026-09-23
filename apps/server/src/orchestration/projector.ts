@@ -434,6 +434,7 @@ export function projectEvent(
             branch: payload.branch,
             worktreePath: payload.worktreePath,
             ...(payload.forkedFromId ? { forkedFromId: payload.forkedFromId } : {}),
+            ...(payload.sideQuestionOf ? { sideQuestionOf: payload.sideQuestionOf } : {}),
             pullRequests: [],
             branchPullRequest: null,
             latestTurn: null,
@@ -631,6 +632,9 @@ export function projectEvent(
               ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
               ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
               ...(payload.pinnedAt !== undefined ? { pinnedAt: payload.pinnedAt } : {}),
+              ...(payload.sideQuestionOf !== undefined
+                ? { sideQuestionOf: payload.sideQuestionOf }
+                : {}),
               ...(payload.activeOrderKey !== undefined
                 ? { activeOrderKey: payload.activeOrderKey }
                 : {}),

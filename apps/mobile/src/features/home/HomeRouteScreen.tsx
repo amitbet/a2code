@@ -6,7 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Platform, useWindowDimensions } from "react-native";
 
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
-import { useMachineProjects, useMachineThreadShells } from "../../state/entities";
+import { useMachineListThreadShells, useMachineProjects } from "../../state/entities";
 import { setMachineEnvironmentId, useMachineEnvironmentId } from "../../state/environments";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useWorkspaceState } from "../../state/workspace";
@@ -31,7 +31,7 @@ export function HomeRouteScreen() {
   const { width: windowWidth } = useWindowDimensions();
   const { layout, panes } = useAdaptiveWorkspaceLayout();
   const projects = useMachineProjects();
-  const threads = useMachineThreadShells();
+  const threads = useMachineListThreadShells();
   const machineEnvironmentId = useMachineEnvironmentId();
   const { environments: workspaceEnvironments, state: catalogState } =
     useWorkspaceState(machineEnvironmentId);

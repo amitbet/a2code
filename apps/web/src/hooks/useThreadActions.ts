@@ -5,6 +5,7 @@ import {
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { sideQuestionTitle } from "@t3tools/client-runtime/state/side-questions";
 import { canSnooze, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
 import {
   EnvironmentId,
@@ -29,7 +30,7 @@ import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
 import { useNewThreadHandler } from "./useHandleNewThread";
 import { refreshArchivedThreadsForEnvironment } from "../lib/archivedThreadsState";
-import { newThreadId } from "../lib/utils";
+import { newMessageId, newThreadId } from "../lib/utils";
 import { releaseComposerDraftUploads } from "../lib/composerDraftUploads";
 import { readLocalApi } from "../localApi";
 import {
@@ -222,6 +223,12 @@ export function useThreadActions() {
   });
   const forkThreadMutation = useAtomCommand(threadEnvironment.fork);
   const forkThreadPromptMutation = useAtomCommand(threadEnvironment.forkPrompt, {
+    reportFailure: false,
+  });
+  const askSideQuestionMutation = useAtomCommand(threadEnvironment.askSideQuestion, {
+    reportFailure: false,
+  });
+  const promoteSideQuestionMutation = useAtomCommand(threadEnvironment.promoteSideQuestion, {
     reportFailure: false,
   });
   const settleThreadMutation = useAtomCommand(threadEnvironment.settle, {
@@ -644,6 +651,44 @@ export function useThreadActions() {
     [forkThreadPromptMutation, resolveThreadTarget, router],
   );
 
+  // Side questions keep the user on the parent thread: the answer shows in
+  // the parent's right panel, so there is no navigation here.
+  const askSideQuestion = useCallback(
+    async (
+      target: ScopedThreadRef,
+      question: string,
+      options?: { readonly modelSelection?: ModelSelection },
+    ) => {
+      const sideQuestionThreadId = newThreadId();
+      const result = await askSideQuestionMutation({
+        environmentId: target.environmentId,
+        input: {
+          threadId: sideQuestionThreadId,
+          sourceThreadId: target.threadId,
+          messageId: newMessageId(),
+          text: question,
+          title: sideQuestionTitle(question),
+          ...(options?.modelSelection !== undefined
+            ? { modelSelection: options.modelSelection }
+            : {}),
+        },
+      });
+      return result._tag === "Failure"
+        ? result
+        : AsyncResult.success(scopeThreadRef(target.environmentId, sideQuestionThreadId));
+    },
+    [askSideQuestionMutation],
+  );
+
+  const promoteSideQuestion = useCallback(
+    async (target: ScopedThreadRef) =>
+      promoteSideQuestionMutation({
+        environmentId: target.environmentId,
+        input: { threadId: target.threadId },
+      }),
+    [promoteSideQuestionMutation],
+  );
+
   const unsettleThread = useCallback(
     async (target: ScopedThreadRef) => {
       if (!readEnvironmentSupportsSettlement(target.environmentId)) {
@@ -979,6 +1024,8 @@ export function useThreadActions() {
       confirmAndDeleteThread,
       forkThread,
       forkQueuedPrompt,
+      askSideQuestion,
+      promoteSideQuestion,
       setThreadPinned,
       settleThread,
       unsettleThread,
@@ -997,6 +1044,8 @@ export function useThreadActions() {
       deleteThread,
       forkThread,
       forkQueuedPrompt,
+      askSideQuestion,
+      promoteSideQuestion,
       pinThread,
       reorderPinnedThread,
       setThreadPinned,

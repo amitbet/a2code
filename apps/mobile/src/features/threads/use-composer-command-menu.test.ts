@@ -100,4 +100,60 @@ describe("mobile slash commands", () => {
       }),
     ).toEqual({ text: "/plan ", cursor: 6, interactionMode: null });
   });
+
+  it("offers /btw only in an existing thread on a supporting server", () => {
+    const codex = { driver: ProviderDriverKind.make("codex"), slashCommands: [] };
+    const inThread = buildComposerSlashCommandItems({
+      query: "bt",
+      atMessageStart: true,
+      hasThread: true,
+      offersSideQuestions: true,
+      allowInteractionMode: false,
+      selectedProviderStatus: codex,
+    });
+    expect(inThread.map((item) => item.label)).toEqual(["/btw"]);
+    const item = inThread[0];
+    if (!item) throw new Error("Expected the /btw command");
+    expect(
+      resolveComposerCommandSelection({
+        draftMessage: "/bt",
+        trigger: { rangeStart: 0, rangeEnd: 3 },
+        item,
+        allowInteractionMode: true,
+      }),
+    ).toEqual({ text: "/btw ", cursor: 5, interactionMode: null });
+
+    for (const context of [
+      { hasThread: false, offersSideQuestions: true },
+      { hasThread: true, offersSideQuestions: false },
+    ]) {
+      expect(
+        buildComposerSlashCommandItems({
+          query: "bt",
+          atMessageStart: true,
+          ...context,
+          allowInteractionMode: true,
+          selectedProviderStatus: codex,
+        }),
+      ).toEqual([]);
+    }
+  });
+
+  it("replaces a provider's own /btw only where T3 answers it", () => {
+    const claude = {
+      driver: ProviderDriverKind.make("claudeAgent"),
+      slashCommands: [{ name: "btw", description: "Quick side question" }],
+    };
+    const itemTypes = (offersSideQuestions: boolean) =>
+      buildComposerSlashCommandItems({
+        query: "btw",
+        atMessageStart: true,
+        hasThread: true,
+        offersSideQuestions,
+        allowInteractionMode: true,
+        selectedProviderStatus: claude,
+      }).map((item) => item.type);
+    expect(itemTypes(true)).toEqual(["slash-command"]);
+    expect(itemTypes(false)).toEqual(["provider-slash-command"]);
+  });
 });

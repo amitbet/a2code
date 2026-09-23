@@ -5,6 +5,7 @@ import type {
   EnvironmentProject,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
+import { withoutNestedSideQuestions } from "@t3tools/client-runtime/state/side-questions";
 import type {
   EnvironmentId,
   ScopedProjectRef,
@@ -24,6 +25,9 @@ const EMPTY_PROJECT_ATOM = Atom.make<EnvironmentProject | null>(null).pipe(
 );
 const EMPTY_THREAD_SHELL_ATOM = Atom.make<EnvironmentThreadShell | null>(null).pipe(
   Atom.withLabel("mobile-thread-shell:empty"),
+);
+const EMPTY_SIDE_QUESTION_SHELLS_ATOM = Atom.make<ReadonlyArray<EnvironmentThreadShell>>([]).pipe(
+  Atom.withLabel("mobile-side-question-shells:empty"),
 );
 const EMPTY_SERVER_CONFIG_ATOM = Atom.make<ServerConfig | null>(null).pipe(
   Atom.withLabel("mobile-server-config:empty"),
@@ -92,6 +96,15 @@ export function useMachineThreadShells(): ReadonlyArray<EnvironmentThreadShell> 
   );
 }
 
+/**
+ * Machine thread shells for thread lists: `/btw` side questions are dropped
+ * when their parent is in the list, since they open from the parent thread.
+ */
+export function useMachineListThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
+  const threads = useMachineThreadShells();
+  return useMemo(() => withoutNestedSideQuestions(threads), [threads]);
+}
+
 export function useProject(ref: ScopedProjectRef | null): EnvironmentProject | null {
   return useAtomValue(ref === null ? EMPTY_PROJECT_ATOM : environmentProjects.projectAtom(ref));
 }
@@ -99,6 +112,17 @@ export function useProject(ref: ScopedProjectRef | null): EnvironmentProject | n
 export function useThreadShell(ref: ScopedThreadRef | null): EnvironmentThreadShell | null {
   return useAtomValue(
     ref === null ? EMPTY_THREAD_SHELL_ATOM : environmentThreadShells.threadShellAtom(ref),
+  );
+}
+
+/** Unarchived `/btw` side questions asked from `ref`, oldest first. */
+export function useSideQuestionShells(
+  ref: ScopedThreadRef | null,
+): ReadonlyArray<EnvironmentThreadShell> {
+  return useAtomValue(
+    ref === null
+      ? EMPTY_SIDE_QUESTION_SHELLS_ATOM
+      : environmentThreadShells.sideQuestionShellsAtom(ref),
   );
 }
 

@@ -59,6 +59,8 @@ export interface CreateThreadContextArtifactInput {
   readonly sourceTitle?: string;
   /** Intro paragraph rendered under the transcript heading. */
   readonly intro?: string;
+  /** Keep the running turn's partial work (see buildThreadTranscript). */
+  readonly includeRunningTurn?: boolean;
   /** File-system service used to persist the artifact. */
   readonly fileSystem: FileSystem.FileSystem;
   /** Path service used to resolve the attachment directory. */
@@ -103,6 +105,7 @@ export const createThreadContextArtifact = Effect.fn("createThreadContextArtifac
       ...(input.sourceTitle !== undefined ? { sourceTitle: input.sourceTitle } : {}),
       ...(input.intro !== undefined ? { intro: input.intro } : {}),
       ...(attachmentDetailsById.size > 0 ? { attachmentDetailsById } : {}),
+      ...(input.includeRunningTurn === true ? { includeRunningTurn: true } : {}),
       maxToolResultChars: Number.MAX_SAFE_INTEGER,
     },
   );

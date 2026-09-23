@@ -14,6 +14,7 @@
  * order. It deliberately omits:
  * - proposed plans (intent / in-flight work, not completed work),
  * - the currently-running turn (an in-flight prompt and its partial work),
+ *   unless the caller opts in with `includeRunningTurn`,
  * - tool `started`/`updated` lifecycle noise (only `completed` carries a result).
  *
  * It performs no I/O and depends only on contract shapes, so it runs on both the
@@ -49,6 +50,12 @@ export interface BuildThreadTranscriptOptions {
   readonly attachmentDetailsById?: ReadonlyMap<string, ThreadTranscriptAttachmentDetails>;
   /** Max characters of a single tool result to inline (default 4000). */
   readonly maxToolResultChars?: number;
+  /**
+   * Keep the running turn's prompt and partial work. Side questions ask about
+   * what the source agent is doing right now, so they need it; forks and
+   * references should only see completed work.
+   */
+  readonly includeRunningTurn?: boolean;
 }
 
 export interface ThreadTranscriptAttachmentDetails {
@@ -176,8 +183,8 @@ function renderActivity(
  * Render a thread's completed history as a single Markdown document.
  *
  * Messages and completed tool activities are interleaved chronologically.
- * A running turn (and its triggering prompt) is excluded; proposed plans are
- * never included.
+ * A running turn (and its triggering prompt) is excluded unless
+ * `includeRunningTurn` is set; proposed plans are never included.
  */
 export function buildThreadTranscript(
   input: ThreadTranscriptInput,
@@ -185,7 +192,9 @@ export function buildThreadTranscript(
 ): string {
   const maxResultChars = options?.maxToolResultChars ?? DEFAULT_MAX_TOOL_RESULT_CHARS;
   const excludedTurnId =
-    input.latestTurn != null && input.latestTurn.state === "running"
+    options?.includeRunningTurn !== true &&
+    input.latestTurn != null &&
+    input.latestTurn.state === "running"
       ? input.latestTurn.turnId
       : undefined;
 

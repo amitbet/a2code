@@ -176,7 +176,7 @@ describe("buildThreadTranscript", () => {
     expect(transcript).not.toContain("started");
   });
 
-  it("excludes the running turn so only completed work is serialized", () => {
+  const runningTurnInput = () => {
     const latestTurn: OrchestrationLatestTurn = {
       turnId: TurnId.make("turn-2"),
       state: "running",
@@ -185,7 +185,7 @@ describe("buildThreadTranscript", () => {
       completedAt: null,
       assistantMessageId: null,
     };
-    const transcript = buildThreadTranscript({
+    return {
       messages: [
         message({
           id: "msg-done",
@@ -214,10 +214,22 @@ describe("buildThreadTranscript", () => {
         }),
       ],
       latestTurn,
-    });
+    };
+  };
+
+  it("excludes the running turn so only completed work is serialized", () => {
+    const transcript = buildThreadTranscript(runningTurnInput());
 
     expect(transcript).toContain("completed work");
     expect(transcript).not.toContain("in-flight prompt");
     expect(transcript).not.toContain("rm -rf");
+  });
+
+  it("keeps the running turn when a side question asks for in-flight work", () => {
+    const transcript = buildThreadTranscript(runningTurnInput(), { includeRunningTurn: true });
+
+    expect(transcript).toContain("completed work");
+    expect(transcript).toContain("in-flight prompt");
+    expect(transcript).toContain("rm -rf tmp");
   });
 });

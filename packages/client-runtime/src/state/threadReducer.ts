@@ -127,6 +127,8 @@ export function applyThreadDetailEvent(
           interactionMode: event.payload.interactionMode,
           branch: event.payload.branch,
           worktreePath: event.payload.worktreePath,
+          ...(event.payload.forkedFromId ? { forkedFromId: event.payload.forkedFromId } : {}),
+          ...(event.payload.sideQuestionOf ? { sideQuestionOf: event.payload.sideQuestionOf } : {}),
           branchPullRequest: null,
           latestTurn: null,
           createdAt: event.payload.createdAt,
@@ -277,6 +279,9 @@ export function applyThreadDetailEvent(
             ? { worktreePath: event.payload.worktreePath }
             : {}),
           ...(event.payload.pinnedAt !== undefined ? { pinnedAt: event.payload.pinnedAt } : {}),
+          ...(event.payload.sideQuestionOf !== undefined
+            ? { sideQuestionOf: event.payload.sideQuestionOf }
+            : {}),
           ...(event.payload.linkedPullRequest !== undefined
             ? { linkedPullRequest: event.payload.linkedPullRequest }
             : {}),

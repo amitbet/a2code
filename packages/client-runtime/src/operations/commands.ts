@@ -54,6 +54,8 @@ export type QueueThreadPromptInput = CommandInput<"thread.prompt.queue">;
 export type RemoveThreadPromptInput = CommandInput<"thread.prompt.remove">;
 export type SteerThreadPromptInput = CommandInput<"thread.prompt.steer">;
 export type ForkThreadPromptInput = CommandInput<"thread.prompt.fork">;
+export type AskSideQuestionInput = CommandInput<"thread.side-question.ask">;
+export type PromoteSideQuestionInput = CommandInput<"thread.side-question.promote">;
 export type InterruptThreadTurnInput = CommandInput<"thread.turn.interrupt">;
 export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond">;
 export type RespondToThreadUserInputInput = CommandInput<"thread.user-input.respond">;
@@ -369,6 +371,30 @@ export const forkThreadPrompt: (input: ForkThreadPromptInput) => CommandEffect =
   return yield* dispatch({
     ...input,
     type: "thread.prompt.fork",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const askSideQuestion: (input: AskSideQuestionInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.askSideQuestion",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.side-question.ask",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
+
+export const promoteSideQuestion: (input: PromoteSideQuestionInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.promoteSideQuestion",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.side-question.promote",
     commandId: metadata.commandId,
     createdAt: metadata.createdAt,
   });

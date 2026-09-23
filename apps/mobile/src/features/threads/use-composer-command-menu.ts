@@ -56,6 +56,8 @@ export function buildComposerSlashCommandItems(input: {
   readonly hasCompactableConversation?: boolean;
   /** Whether T3 itself offers /usage-limits for the selected provider. */
   readonly offersUsageLimits?: boolean;
+  /** Whether the thread's server answers `/btw` side questions. */
+  readonly offersSideQuestions?: boolean;
   readonly allowInteractionMode: boolean;
   readonly selectedProviderStatus: Pick<
     ServerProvider,
@@ -65,6 +67,7 @@ export function buildComposerSlashCommandItems(input: {
   const query = input.query.toLowerCase();
   const allowInteractionMode =
     input.allowInteractionMode && input.selectedProviderStatus?.showInteractionModeToggle !== false;
+  const offersSideQuestions = input.hasThread && input.offersSideQuestions === true;
   const builtIn = [
     {
       id: "cmd:model",
@@ -87,10 +90,20 @@ export function buildComposerSlashCommandItems(input: {
       label: "/default",
       description: "Switch to default mode",
     },
+    {
+      id: "cmd:btw",
+      type: "slash-command",
+      command: "btw",
+      label: "/btw",
+      description: "Ask a side question without interrupting the agent",
+    },
   ] satisfies ComposerCommandItem[];
-  const items: ComposerCommandItem[] = builtIn.filter(
-    (item) => item.command.includes(query) && (item.command === "model" || allowInteractionMode),
-  );
+  const items: ComposerCommandItem[] = builtIn.filter((item) => {
+    if (!item.command.includes(query)) return false;
+    // A side question forks an existing conversation, so it needs a thread.
+    if (item.command === "btw") return offersSideQuestions;
+    return item.command === "model" || allowInteractionMode;
+  });
 
   // Providers expand commands only at the start of a message. T3 commands
   // change local state and do not have this restriction.
@@ -98,6 +111,8 @@ export function buildComposerSlashCommandItems(input: {
   for (const command of input.selectedProviderStatus?.slashCommands ?? []) {
     if (!command.name.toLowerCase().includes(query)) continue;
     if (command.name === "compact" && !input.hasCompactableConversation) continue;
+    // The thread composer answers `/btw` itself, so a provider's own never runs.
+    if (command.name === "btw" && offersSideQuestions) continue;
     // T3's own limits command is answered by the thread composer; New Task has
     // nowhere to show it. A provider's same-named command is left alone.
     if (command.name === USAGE_LIMITS_COMMAND.name && input.offersUsageLimits && !input.hasThread) {
@@ -171,6 +186,7 @@ export function useComposerCommandMenu({
   hasThread,
   hasCompactableConversation,
   offersUsageLimits = false,
+  offersSideQuestions = false,
   enabled = true,
   onChangeDraftMessage,
   onUpdateInteractionMode,
@@ -187,6 +203,8 @@ export function useComposerCommandMenu({
   readonly hasCompactableConversation: boolean;
   /** Whether T3 itself offers /usage-limits for the selected provider. */
   readonly offersUsageLimits?: boolean;
+  /** Whether the thread's server answers `/btw` side questions. */
+  readonly offersSideQuestions?: boolean;
   readonly enabled?: boolean;
   readonly onChangeDraftMessage: (value: string) => void;
   readonly onUpdateInteractionMode?: (mode: ProviderInteractionMode) => void;
@@ -338,6 +356,7 @@ export function useComposerCommandMenu({
         hasThread,
         hasCompactableConversation,
         offersUsageLimits,
+        offersSideQuestions,
         allowInteractionMode: onUpdateInteractionMode !== undefined,
         selectedProviderStatus: selectedProviderStatus
           ? {
@@ -472,6 +491,7 @@ export function useComposerCommandMenu({
     skills,
     trigger,
     offersUsageLimits,
+    offersSideQuestions,
   ]);
 
   const onSelect = useCallback(

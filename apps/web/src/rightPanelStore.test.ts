@@ -407,6 +407,46 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("keeps one tab per side question and reopens an existing one", () => {
+    const store = useRightPanelStore.getState();
+    store.openSideQuestion(refA, "side-1");
+    store.openSideQuestion(refA, "side-2");
+    store.open(refA, "diff");
+    store.openSideQuestion(refA, "side-1");
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.surfaces.map((surface) => surface.id)).toEqual([
+      "side-question:side-1",
+      "side-question:side-2",
+      "diff",
+    ]);
+    expect(state.activeSurfaceId).toBe("side-question:side-1");
+  });
+
+  it("restores persisted side-question tabs and drops malformed ones", () => {
+    expect(
+      migratePersistedRightPanelState({
+        byThreadKey: {
+          "env-1:thread-A": {
+            isOpen: true,
+            activeSurfaceId: "side-question:side-1",
+            surfaces: [
+              { id: "side-question:side-1", kind: "side-question", threadId: "side-1" },
+              { id: "side-question:broken", kind: "side-question" },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "side-question:side-1",
+          surfaces: [{ id: "side-question:side-1", kind: "side-question", threadId: "side-1" }],
+        },
+      },
+    });
+  });
+
   it("open sets the active panel for a thread", () => {
     useRightPanelStore.getState().open(refA, "preview");
     expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, refA)).toBe("preview");

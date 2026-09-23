@@ -55,7 +55,9 @@ import { scopedThreadKey } from "../../lib/scopedEntities";
 import {
   composerContextImportsAtom,
   countComposerDraftAttachmentsAfterSelection,
+  getComposerDraftSnapshot,
 } from "../../state/use-composer-drafts";
+import { parseSideQuestionCommand } from "@t3tools/client-runtime/state/side-questions";
 import type { ComposerDocumentAttachment } from "../../lib/composerContext";
 import { useProject } from "../../state/entities";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
@@ -149,6 +151,16 @@ export interface ThreadComposerProps {
   readonly onSendMessage: () => Promise<MessageId | null>;
   /** `/usage-limits` resolves locally; the host decides where the report shows. Null clears it. */
   readonly onShowUsageLimits: (report: UsageLimitsReport | null) => void;
+  /**
+   * `/btw <question>` forks this thread into a side question. Resolves true
+   * once the server accepted it; on false the composer restores the draft.
+   */
+  readonly onAskSideQuestion: (
+    question: string,
+    modelSelection: ModelSelection,
+  ) => Promise<boolean>;
+  /** Bare `/btw` reopens the latest side question. Returns false when there is none. */
+  readonly onOpenLatestSideQuestion: () => boolean;
   readonly onUpdateModelSelection: (modelSelection: ModelSelection) => void;
   readonly onUpdateRuntimeMode: (runtimeMode: RuntimeMode) => void;
   readonly onUpdateInteractionMode: (interactionMode: ProviderInteractionMode) => void;
@@ -343,7 +355,15 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       draftKey: composerOwnerKey,
     });
   };
-  const { onSendMessage, onChangeDraftMessage, onShowUsageLimits } = props;
+  const {
+    onSendMessage,
+    onChangeDraftMessage,
+    onShowUsageLimits,
+    onAskSideQuestion,
+    onOpenLatestSideQuestion,
+  } = props;
+  const sideQuestionsOffered =
+    props.serverConfig?.environment.capabilities.threadSideQuestions === true;
   // T3 owns /usage-limits only where Limits has data for the selected provider;
   // elsewhere the name stays the provider's own and is sent through untouched.
   const usageLimitsOffered =
@@ -386,6 +406,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         ? undefined
         : props.onUpdateInteractionMode,
     offersUsageLimits: usageLimitsOffered,
+    offersSideQuestions: sideQuestionsOffered,
     // With attachments aboard the pick just inserts the text, so it sends as a prompt.
     onUsageLimits:
       usageLimitsOffered && props.draftAttachments.length === 0 ? openUsageLimits : undefined,
@@ -485,6 +506,38 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       return;
     }
     const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
+    const sideQuestion = sideQuestionsOffered ? parseSideQuestionCommand(props.draftMessage) : null;
+    if (sideQuestion !== null) {
+      if (sideQuestion.question.length === 0) {
+        if (onOpenLatestSideQuestion()) {
+          onChangeDraftMessage("");
+        } else {
+          Alert.alert("Ask a side question", "Type /btw followed by your question.");
+        }
+        return;
+      }
+      if (
+        props.draftAttachments.length > 0 ||
+        (getComposerDraftSnapshot(threadKey).context?.records.length ?? 0) > 0
+      ) {
+        Alert.alert(
+          "Side questions are text-only",
+          "Remove attachments and context from the composer, then ask again.",
+        );
+        return;
+      }
+      if (inFlightThreadIdsRef.current.has(threadKey)) return;
+      inFlightThreadIdsRef.current.add(threadKey);
+      const draftSnapshot = props.draftMessage;
+      onChangeDraftMessage("");
+      try {
+        const asked = await onAskSideQuestion(sideQuestion.question, currentModelSelection);
+        if (!asked) onChangeDraftMessage(draftSnapshot);
+      } finally {
+        inFlightThreadIdsRef.current.delete(threadKey);
+      }
+      return;
+    }
     if (inFlightThreadIdsRef.current.has(threadKey)) return;
     inFlightThreadIdsRef.current.add(threadKey);
     try {
@@ -510,6 +563,10 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     onChangeDraftMessage,
     openUsageLimits,
     usageLimitsOffered,
+    sideQuestionsOffered,
+    onAskSideQuestion,
+    onOpenLatestSideQuestion,
+    currentModelSelection,
     onSendMessage,
     props.environmentId,
     props.environmentLabel,

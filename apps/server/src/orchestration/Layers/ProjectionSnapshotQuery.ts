@@ -131,6 +131,7 @@ const ProjectionQueuedPromptDbRowSchema = OrchestrationQueuedPrompt.mapFields(
 );
 const ThreadForkContextDbRowSchema = Schema.Struct({
   forkedFromId: Schema.NullOr(ThreadId),
+  sideQuestionOf: Schema.NullOr(ThreadId),
   userMessageCount: Schema.Number,
 });
 const ProjectionTurnStartMessageDbRowSchema = ProjectionThreadMessageDbRowSchema.mapFields(
@@ -637,6 +638,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           forked_from_id AS "forkedFromId",
+          side_question_of AS "sideQuestionOf",
           deleted_at AS "deletedAt"
         FROM projection_threads
         ORDER BY created_at ASC, thread_id ASC
@@ -680,6 +682,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           forked_from_id AS "forkedFromId",
+          side_question_of AS "sideQuestionOf",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE deleted_at IS NULL
@@ -755,6 +758,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           forked_from_id AS "forkedFromId",
+          side_question_of AS "sideQuestionOf",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE deleted_at IS NULL
@@ -1345,6 +1349,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pending_user_input_count AS "pendingUserInputCount",
           has_actionable_proposed_plan AS "hasActionableProposedPlan",
           forked_from_id AS "forkedFromId",
+          side_question_of AS "sideQuestionOf",
           deleted_at AS "deletedAt"
         FROM projection_threads
         WHERE thread_id = ${threadId}
@@ -1430,6 +1435,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     execute: ({ threadId }) => sql`
       SELECT
         forked_from_id AS "forkedFromId",
+        side_question_of AS "sideQuestionOf",
         (
           SELECT COUNT(*)
           FROM projection_thread_messages AS messages
@@ -2456,6 +2462,7 @@ pending_approval_requests AS (
                 interactionMode: row.interactionMode,
                 branch: row.branch,
                 worktreePath: row.worktreePath,
+                sideQuestionOf: row.sideQuestionOf ?? null,
                 ...mapThreadPullRequests(
                   pullRequestsByThread.get(row.threadId) ?? [],
                   row.projectId,
@@ -2702,6 +2709,7 @@ pending_approval_requests AS (
                   interactionMode: row.interactionMode,
                   branch: row.branch,
                   worktreePath: row.worktreePath,
+                  sideQuestionOf: row.sideQuestionOf ?? null,
                   ...mapThreadPullRequests(
                     pullRequestsByThread.get(row.threadId) ?? [],
                     row.projectId,
@@ -2859,6 +2867,7 @@ pending_approval_requests AS (
                         interactionMode: row.interactionMode,
                         branch: row.branch,
                         worktreePath: row.worktreePath,
+                        sideQuestionOf: row.sideQuestionOf ?? null,
                         branchPullRequest: row.branchPullRequest,
                         ...mapThreadPullRequests(
                           pullRequestsByThread.get(row.threadId) ?? [],
@@ -3022,6 +3031,7 @@ pending_approval_requests AS (
                   interactionMode: row.interactionMode,
                   branch: row.branch,
                   worktreePath: row.worktreePath,
+                  sideQuestionOf: row.sideQuestionOf ?? null,
                   branchPullRequest: row.branchPullRequest,
                   ...mapThreadPullRequests(
                     pullRequestsByThread.get(row.threadId) ?? [],
@@ -3375,6 +3385,7 @@ pending_approval_requests AS (
         interactionMode: threadRow.value.interactionMode,
         branch: threadRow.value.branch,
         worktreePath: threadRow.value.worktreePath,
+        sideQuestionOf: threadRow.value.sideQuestionOf ?? null,
         ...mapThreadPullRequests(
           pullRequestRows.map(mapPullRequestRow),
           threadRow.value.projectId,
@@ -3712,6 +3723,7 @@ pending_approval_requests AS (
         interactionMode: threadRow.value.interactionMode,
         branch: threadRow.value.branch,
         worktreePath: threadRow.value.worktreePath,
+        sideQuestionOf: threadRow.value.sideQuestionOf ?? null,
         ...(threadRow.value.forkedFromId ? { forkedFromId: threadRow.value.forkedFromId } : {}),
         ...mapThreadPullRequests(
           pullRequestRows.map(mapPullRequestRow),
