@@ -157,9 +157,9 @@ const resolveOptions = Effect.fn("buildPayload.resolveOptions")(function* (input
   const path = yield* Path.Path;
   const repoRoot = path.resolve(import.meta.dirname, "..");
   const env = yield* Config.all({
-    version: Config.string("T3CODE_PAYLOAD_VERSION").pipe(Config.option),
-    minShellVersion: Config.string("T3CODE_PAYLOAD_MIN_SHELL_VERSION").pipe(Config.option),
-    signingKey: Config.string("T3CODE_PAYLOAD_SIGNING_KEY").pipe(Config.option),
+    version: Config.String("T3CODE_PAYLOAD_VERSION").pipe(Config.option),
+    minShellVersion: Config.String("T3CODE_PAYLOAD_MIN_SHELL_VERSION").pipe(Config.option),
+    signingKey: Config.String("T3CODE_PAYLOAD_SIGNING_KEY").pipe(Config.option),
   });
   const version = Option.getOrUndefined(input.version) ?? Option.getOrUndefined(env.version);
   if (!version || version.trim().length === 0) {
@@ -179,11 +179,11 @@ const resolveOptions = Effect.fn("buildPayload.resolveOptions")(function* (input
 });
 
 const buildPayloadAssetCli = Command.make("build-payload-asset", {
-  version: Flag.string("version").pipe(
+  version: Flag.String("version").pipe(
     Flag.withDescription("Payload version, e.g. 1.2.3 (env: T3CODE_PAYLOAD_VERSION)."),
     Flag.optional,
   ),
-  outputDir: Flag.string("output-dir").pipe(
+  outputDir: Flag.String("output-dir").pipe(
     Flag.withDescription("Output directory for the asset + manifest (default: release/)."),
     Flag.optional,
   ),

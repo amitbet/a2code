@@ -109,6 +109,14 @@ leaf components.
   and the stale client duplicates made upstream's new scoped-settings planner write them to client
   storage too. `UnifiedSettings` still resolves both from the server, so the settings UI is
   unchanged.
+- **Effect rc.115 capitalized the CLI/Config constructors** (`Flag.string` -> `Flag.String`,
+  `Config.string` -> `Config.String`). Only the fork-only `scripts/build-payload-asset.ts` used
+  them, and it broke at module load in the release workflow's payload job. **`scripts/` is its own
+  tsconfig root and is easy to miss** — when typechecking after a merge, iterate every
+  `tsconfig.json` (15 of them: the apps, the packages, plus `scripts`, `infra/relay` and
+  `oxlint-plugin-t3code`), not just apps and packages. For this script also run
+  `node scripts/build-payload-asset.ts --help`: the release job is the only thing that executes it,
+  and the fork's CI does not typecheck.
 - **Relay tests that assert things the fork does not ship were deleted**:
   `infra/relay/scripts/deploy.test.ts` (upstream deleted it and its `deploy.ts` subject when the
   relay moved to the Alchemy CLI) and `.github/scripts/relay-state-output.test.cjs` (it asserts a
