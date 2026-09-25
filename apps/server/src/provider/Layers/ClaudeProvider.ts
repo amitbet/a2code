@@ -2,6 +2,7 @@ import {
   type ClaudeSettings,
   type ModelCapabilities,
   type ServerProviderSlashCommand,
+  type ServerProviderUsageLimits,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -416,6 +417,38 @@ const runClaudeCommand = Effect.fn("runClaudeCommand")(function* (
   return yield* spawnAndCollect(claudeSettings.binaryPath, command);
 });
 
+const claudeUsageLimitsFromCapabilities = (
+  capabilities: ClaudeCapabilitiesProbe | undefined,
+  checkedAt: string,
+  scopedLimitNames: Ref.Ref<ClaudeScopedLimitNames> | undefined,
+): Effect.Effect<ServerProviderUsageLimits> => {
+  if (!capabilities?.usage) {
+    return Effect.succeed(makeUnavailableUsageLimits({ checkedAt, reason: "probeFailed" }));
+  }
+  const input = {
+    response: capabilities.usage,
+    checkedAt,
+    planType: capabilities.subscriptionType,
+  };
+  return scopedLimitNames
+    ? recordClaudeUsageResponse(scopedLimitNames, input)
+    : Effect.succeed(claudeUsageResponseToLimits(input).limits);
+};
+
+/**
+ * Usage-only read for the managed provider's usage loop. `resolveCapabilities`
+ * must run a fresh probe: `checkedAt` is stamped before it starts, so a turn
+ * event that lands during the probe still wins.
+ */
+export const readClaudeUsageLimits = Effect.fn("readClaudeUsageLimits")(function* (
+  resolveCapabilities: Effect.Effect<ClaudeCapabilitiesProbe | undefined>,
+  scopedLimitNames: Ref.Ref<ClaudeScopedLimitNames>,
+) {
+  const checkedAt = DateTime.formatIso(yield* DateTime.now);
+  const capabilities = yield* resolveCapabilities;
+  return yield* claudeUsageLimitsFromCapabilities(capabilities, checkedAt, scopedLimitNames);
+});
+
 export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(function* (
   claudeSettings: ClaudeSettings,
   resolveCapabilities?: (
@@ -560,19 +593,11 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       subscriptionType: capabilities.subscriptionType,
       authMethod: capabilities.tokenSource,
     }) ?? apiProviderAuthMetadata(capabilities.apiProvider);
-  const usageLimits = !capabilities.usage
-    ? makeUnavailableUsageLimits({ checkedAt, reason: "probeFailed" })
-    : scopedLimitNames
-      ? yield* recordClaudeUsageResponse(scopedLimitNames, {
-          response: capabilities.usage,
-          checkedAt,
-          planType: capabilities.subscriptionType,
-        })
-      : claudeUsageResponseToLimits({
-          response: capabilities.usage,
-          checkedAt,
-          planType: capabilities.subscriptionType,
-        }).limits;
+  const usageLimits = yield* claudeUsageLimitsFromCapabilities(
+    capabilities,
+    checkedAt,
+    scopedLimitNames,
+  );
   return buildServerProvider({
     presentation: CLAUDE_PRESENTATION,
     enabled: claudeSettings.enabled,

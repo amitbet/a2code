@@ -35,6 +35,7 @@ import {
   checkClaudeProviderStatus,
   makePendingClaudeProvider,
   probeClaudeCapabilities,
+  readClaudeUsageLimits,
 } from "../Layers/ClaudeProvider.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { resolveClaudeModelCatalog } from "../ClaudeModelCatalog.ts";
@@ -217,6 +218,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
             Effect.map(stampIdentity),
           ),
         checkProvider,
+        // `Cache.refresh` forces a new probe and leaves it cached for the next check.
+        readUsageLimits: readClaudeUsageLimits(
+          Cache.refresh(capabilitiesProbeCache, capabilitiesCacheKey),
+          scopedLimitNames,
+        ).pipe(Effect.provideService(Path.Path, path)),
         enrichSnapshot: ({ settings, snapshot, publishSnapshot }) =>
           resolveMaintenance().pipe(
             Effect.flatMap((maintenanceCapabilities) =>

@@ -78,6 +78,11 @@ leaf components.
   by hand. It is now one branch that does both. A duplicate `case` compiles cleanly, so check for
   one in that switch after every merge. `starts the next queued prompt when the running turn ends`
   covers it.
+- **Slow-request toast ignores `server.reportClientActivity`.** The fork added it to
+  `untrackedRpcAckMethods` in `apps/web/src/rpc/requestLatencyState.ts`. The background activity
+  report fans out to every saved environment on the first keypress after idle, so an unreachable
+  remote environment raised "Some requests are slow" on ordinary typing (it looked tied to
+  queueing a prompt). Keep the entry when upstream touches that set.
 
 ### Other notable resolutions
 

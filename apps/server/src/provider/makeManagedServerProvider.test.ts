@@ -680,4 +680,95 @@ describe("makeManagedServerProvider", () => {
       }),
     ).pipe(Effect.provide(AlwaysRunTestLayer)),
   );
+
+  it.effect("refreshes usage limits every five minutes without re-running the check", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const checkCalls = yield* Ref.make(0);
+        const usageReads = yield* Ref.make(0);
+        const provider = yield* makeManagedServerProvider<TestSettings>({
+          resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
+          getSettings: Effect.succeed({ enabled: true }),
+          streamSettings: Stream.empty,
+          haveSettingsChanged: (previous, next) => previous.enabled !== next.enabled,
+          initialSnapshot: () => Effect.succeed(initialSnapshot),
+          checkProvider: Ref.update(checkCalls, (count) => count + 1).pipe(
+            Effect.as({
+              ...refreshedSnapshot,
+              usageLimits: {
+                checkedAt: "2026-04-10T00:00:01.000Z",
+                windows: [{ id: "five_hour", kind: "session", label: "Session", usedPercent: 10 }],
+              },
+            } satisfies ServerProvider),
+          ),
+          readUsageLimits: Ref.updateAndGet(usageReads, (count) => count + 1).pipe(
+            Effect.map((count) => ({
+              checkedAt: `2026-04-10T0${count}:00:00.000Z`,
+              windows: [
+                {
+                  id: "five_hour",
+                  kind: "session" as const,
+                  label: "Session",
+                  usedPercent: 10 + count * 5,
+                },
+              ],
+            })),
+          ),
+          refreshInterval: "1 day",
+        });
+        yield* Stream.take(provider.streamChanges, 1).pipe(Stream.runDrain);
+
+        yield* TestClock.adjust("4 minutes");
+        assert.strictEqual(yield* Ref.get(usageReads), 0);
+
+        yield* TestClock.adjust("1 minute");
+        yield* Effect.yieldNow;
+        assert.strictEqual(yield* Ref.get(usageReads), 1);
+        assert.strictEqual((yield* provider.getSnapshot).usageLimits?.windows[0]?.usedPercent, 15);
+
+        yield* TestClock.adjust("5 minutes");
+        yield* Effect.yieldNow;
+        assert.strictEqual(yield* Ref.get(usageReads), 2);
+        assert.strictEqual((yield* provider.getSnapshot).usageLimits?.windows[0]?.usedPercent, 20);
+        assert.strictEqual(yield* Ref.get(checkCalls), 1);
+      }),
+    ).pipe(Effect.provide(Layer.mergeAll(AlwaysRunTestLayer, TestClock.layer()))),
+  );
+
+  it.effect("skips usage reads without demand or for an unsupported account", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const usageReads = yield* Ref.make(0);
+        const makeProvider = (usageLimits: ServerProvider["usageLimits"]) =>
+          makeManagedServerProvider<TestSettings>({
+            resolveMaintenance: () => Effect.succeed(maintenanceCapabilities),
+            getSettings: Effect.succeed({ enabled: true }),
+            streamSettings: Stream.empty,
+            haveSettingsChanged: (previous, next) => previous.enabled !== next.enabled,
+            initialSnapshot: () => Effect.succeed(initialSnapshot),
+            checkProvider: Effect.succeed({ ...refreshedSnapshot, usageLimits }),
+            readUsageLimits: Ref.update(usageReads, (count) => count + 1).pipe(
+              Effect.as(undefined),
+            ),
+            refreshInterval: "1 day",
+          });
+
+        const idle = yield* makeProvider({
+          checkedAt: "2026-04-10T00:00:01.000Z",
+          windows: [],
+        }).pipe(Effect.provide(NeverRunTestLayer));
+        const unsupported = yield* makeProvider({
+          checkedAt: "2026-04-10T00:00:01.000Z",
+          windows: [],
+          unavailable: { reason: "unsupported" },
+        }).pipe(Effect.provide(AlwaysRunTestLayer));
+        yield* Stream.take(idle.streamChanges, 1).pipe(Stream.runDrain);
+        yield* Stream.take(unsupported.streamChanges, 1).pipe(Stream.runDrain);
+
+        yield* TestClock.adjust("10 minutes");
+        yield* Effect.yieldNow;
+        assert.strictEqual(yield* Ref.get(usageReads), 0);
+      }),
+    ).pipe(Effect.provide(TestClock.layer())),
+  );
 });

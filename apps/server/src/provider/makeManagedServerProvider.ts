@@ -1,6 +1,7 @@
 import {
   DEFAULT_PROVIDER_HEALTH_REFRESH_INTERVAL,
   type ServerProvider,
+  type ServerProviderUsageLimits,
   ServerSettingsError,
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
@@ -35,6 +36,10 @@ interface ProviderSnapshotState {
 const PROVIDER_CHECK_CACHE_TTL = Duration.hours(24);
 const PROVIDER_CHECK_CACHE_KEY = "provider";
 
+// Usage moves by the minute, far faster than the day-long check cache above,
+// so drivers that can read it separately refresh it on its own loop.
+const USAGE_LIMITS_REFRESH_INTERVAL = Duration.minutes(5);
+
 function withUsageLimits(
   snapshot: ServerProvider,
   usageLimits: ServerProvider["usageLimits"],
@@ -61,6 +66,12 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
     readonly getSnapshot: Effect.Effect<ServerProvider>;
     readonly publishSnapshot: (snapshot: ServerProvider) => Effect.Effect<void>;
   }) => Effect.Effect<void>;
+  /**
+   * Reads fresh usage limits without a full provider check. Runs every
+   * `USAGE_LIMITS_REFRESH_INTERVAL` while clients are watching, for an
+   * enabled, authenticated provider whose usage is not `unsupported`.
+   */
+  readonly readUsageLimits?: Effect.Effect<ServerProviderUsageLimits | undefined>;
   readonly refreshInterval?: Duration.Input;
   readonly refreshOnInterval?: boolean;
   readonly checkProviderOnSettingsChange?: (previous: Settings, next: Settings) => boolean;
@@ -256,6 +267,37 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
     return genericDemand || instanceDemand;
   });
 
+  const refreshUsageLimits = Effect.fn("refreshUsageLimits")(function* (
+    readUsageLimits: Effect.Effect<ServerProviderUsageLimits | undefined>,
+  ) {
+    const { snapshot } = yield* Ref.get(snapshotStateRef);
+    if (
+      !snapshot.enabled ||
+      snapshot.auth.status !== "authenticated" ||
+      snapshot.usageLimits?.unavailable?.reason === "unsupported"
+    ) {
+      return;
+    }
+    const probed = yield* readUsageLimits;
+    if (probed === undefined) {
+      return;
+    }
+    const snapshotToPublish = yield* Ref.modify(snapshotStateRef, (state) => {
+      const usageLimits = resolveUsageLimitsAfterProbe({
+        published: state.snapshot.usageLimits,
+        probed,
+      });
+      if (usageLimits === state.snapshot.usageLimits) {
+        return [null, state] as const;
+      }
+      const next = withUsageLimits(state.snapshot, usageLimits);
+      return [next, { ...state, snapshot: next }] as const;
+    });
+    if (snapshotToPublish !== null) {
+      yield* PubSub.publish(changesPubSub, snapshotToPublish);
+    }
+  });
+
   const getRefreshInterval =
     input.refreshInterval !== undefined
       ? Effect.succeed(input.refreshInterval)
@@ -315,6 +357,19 @@ export const makeManagedServerProvider = Effect.fn("makeManagedServerProvider")(
       Effect.ignoreCause({ log: true }),
     ),
   ).pipe(Effect.forkScoped);
+
+  const readUsageLimits = input.readUsageLimits;
+  if (readUsageLimits !== undefined && input.refreshOnInterval !== false) {
+    yield* Effect.forever(
+      Effect.sleep(USAGE_LIMITS_REFRESH_INTERVAL).pipe(
+        Effect.andThen(hasProviderStatusDemand),
+        Effect.flatMap((shouldRefresh) =>
+          shouldRefresh ? refreshUsageLimits(readUsageLimits) : Effect.void,
+        ),
+        Effect.ignoreCause({ log: true }),
+      ),
+    ).pipe(Effect.forkScoped);
+  }
 
   yield* applySnapshot(initialSettings, { forceRefresh: true }).pipe(
     Effect.ignoreCause({ log: true }),
