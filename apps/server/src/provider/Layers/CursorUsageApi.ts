@@ -15,7 +15,7 @@ import {
   HttpClientRequest,
   HttpClientResponse,
 } from "effect/unstable/http";
-import { makeUsageLimits } from "../providerUsageLimits.ts";
+import { makeUnavailableUsageLimits, makeUsageLimits } from "../providerUsageLimits.ts";
 import { invalidateMacOSKeychainPassword, readMacOSKeychainPassword } from "./MacOSKeychain.ts";
 
 const DEFAULT_API_ENDPOINT = "https://api2.cursor.sh";
@@ -462,3 +462,31 @@ export const fetchCursorUsageSnapshot = (
     }
     return response ? normalizeCursorUsage(response, checkedAt) : null;
   }).pipe(Effect.provide(FetchHttpClient.layer));
+
+/**
+ * The provider check's usage read. A missing snapshot is a probe failure, never
+ * `unsupported`: that reason makes the snapshot drop every later turn-time
+ * update from the adapter, so one bad read would hide the meter until restart.
+ */
+export const readCursorProviderUsageLimits = (
+  options: CursorUsageApiOptions = {},
+): Effect.Effect<ServerProviderUsageLimits> =>
+  fetchCursorUsageSnapshot(options).pipe(
+    Effect.timeoutOption("10 seconds"),
+    Effect.map(Option.flatMap(Option.fromNullishOr)),
+    Effect.flatMap(
+      Option.match({
+        onSome: Effect.succeed,
+        onNone: () =>
+          DateTime.now.pipe(
+            Effect.map((now) =>
+              makeUnavailableUsageLimits({
+                checkedAt: DateTime.formatIso(now),
+                reason: "probeFailed",
+                message: "Cursor could not read usage limits.",
+              }),
+            ),
+          ),
+      }),
+    ),
+  );

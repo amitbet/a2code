@@ -26,7 +26,7 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import { makeCursorTextGeneration } from "../../textGeneration/CursorTextGeneration.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeCursorAdapter } from "../Layers/CursorAdapter.ts";
-import { readCursorUsageLimits } from "../Layers/cursorUsageLimits.ts";
+import { readCursorProviderUsageLimits } from "../Layers/CursorUsageApi.ts";
 import {
   buildInitialCursorProviderSnapshot,
   checkCursorProviderStatus,
@@ -135,6 +135,12 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
       const textGeneration = yield* makeCursorTextGeneration(effectiveConfig, processEnv);
 
       const discoverModels = yield* makeCursorModelDiscovery(effectiveConfig, processEnv);
+      // The fork's reader, not upstream's `cursorUsageLimits.ts`: upstream reports
+      // a macOS Keychain login (Cursor's default) as unsupported.
+      const readCursorUsageLimits = readCursorProviderUsageLimits({
+        apiEndpoint: effectiveConfig.apiEndpoint,
+        environment: processEnv,
+      });
       const checkProvider = checkCursorProviderStatus(
         effectiveConfig,
         processEnv,
@@ -142,7 +148,7 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
       ).pipe(
         Effect.flatMap((snapshot) =>
           effectiveConfig.enabled && snapshot.installed && snapshot.auth.status === "authenticated"
-            ? readCursorUsageLimits(effectiveConfig, processEnv).pipe(
+            ? readCursorUsageLimits.pipe(
                 Effect.map((usageLimits) => ({ ...snapshot, usageLimits })),
               )
             : Effect.succeed(snapshot),
@@ -166,6 +172,7 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
         initialSnapshot: (settings) =>
           buildInitialCursorProviderSnapshot(settings.provider).pipe(Effect.map(stampIdentity)),
         checkProvider,
+        readUsageLimits: readCursorUsageLimits,
         // Model catalog and capabilities come exclusively from Cursor's
         // list_available_models extension method during provider checks.
         enrichSnapshot: ({ settings, snapshot: currentSnapshot, publishSnapshot }) =>

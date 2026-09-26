@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
 
-import { normalizeCursorUsage } from "./CursorUsageApi.ts";
+import { normalizeCursorUsage, readCursorProviderUsageLimits } from "./CursorUsageApi.ts";
 
 const CHECKED_AT = "2026-06-30T00:00:00.000Z";
 const BILLING_PERIOD_MINS = 30 * 24 * 60;
@@ -89,4 +90,17 @@ describe("normalizeCursorUsage", () => {
     expect(normalizeCursorUsage({}, CHECKED_AT)).toBeNull();
     expect(normalizeCursorUsage({ planUsage: { remaining: 100 } }, CHECKED_AT)).toBeNull();
   });
+});
+
+describe("readCursorProviderUsageLimits", () => {
+  it.effect("reports a missing login as a probe failure so turn-time updates still apply", () =>
+    Effect.gen(function* () {
+      // Explicitly empty credentials skip the Keychain and auth file lookups.
+      const limits = yield* readCursorProviderUsageLimits({
+        environment: { CURSOR_ACCESS_TOKEN: "" },
+      });
+      expect(limits.windows).toEqual([]);
+      expect(limits.unavailable?.reason).toBe("probeFailed");
+    }),
+  );
 });

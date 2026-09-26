@@ -2250,8 +2250,10 @@ selectedProviderEntry?.snapshot.usageLimits ?? null`, passed to `ComposerFooterP
     keep `applyUsageLimitsUpdate` / `usageWindowEquals` carrying and comparing `detail`.
   - `apps/server/src/provider/Layers/claudeUsageLimits.ts` — **upstream's file, fork's `spendWindow`**
     (`extra_usage` → a `monthly` window with the dollar `detail`) and the `planType` passthrough.
-  - `apps/server/src/provider/Layers/CursorUsageApi.ts` — fork-added; upstream has no Cursor usage.
-    Fetching and credential resolution are the fork's; the normalizer emits upstream's shape.
+  - `apps/server/src/provider/Layers/CursorUsageApi.ts` — fork-added. Fetching and credential
+    resolution (macOS Keychain included) are the fork's; the normalizer emits upstream's shape.
+    `CursorDriver` reads it through `readCursorProviderUsageLimits` for both the provider check and
+    the 5-minute `readUsageLimits` loop, in place of upstream's `cursorUsageLimits.ts`.
   - `apps/server/src/provider/Layers/CodexRateLimits.ts` — fork-added, now only
     `nextCodexRateLimitResetRefreshAt` (schedules a re-read just after a window resets).
 - The Claude spend window renders only when `get_usage` returns a numeric `extra_usage.utilization`
@@ -2608,7 +2610,11 @@ build:desktop` → `vp run dist:payload:asset`, using the
   `ServerProviderUsageLimits.planType`, and `claudeUsageLimits.spendWindow`. Everything else is
   upstream's and should be taken wholesale.
 - The composer-footer meter is the fork's user-facing surface — see the quota-meter feature above.
-- `CursorUsageApi.ts` is fork-only; upstream reports no Cursor usage.
+- `CursorUsageApi.ts` is fork-only. Upstream later added its own `Layers/cursorUsageLimits.ts`, but
+  it reports Cursor's default macOS Keychain login as `unsupported`, and `applyUsageLimitsUpdate`
+  then drops every later turn-time update, so the composer meter vanishes. Keep `CursorDriver` on
+  `readCursorProviderUsageLimits` when merging; upstream's reader stays in the tree unused, which
+  avoids modify/delete conflicts.
 
 ### ChatMarkdown renderer identity (upstream-owned since 2026-09-05)
 
