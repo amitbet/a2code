@@ -644,8 +644,8 @@ function ToolbarSelect(props: {
         <span className="font-medium">{selectedOption.label}</span>
         <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground/70" />
       </PopoverTrigger>
-      <PopoverPopup align="start" className="w-44" viewportClassName="p-1">
-        <div className="flex flex-col gap-0.5" role="listbox" aria-label={props.ariaLabel}>
+      <PopoverPopup align="start" className="w-44" padding="none">
+        <div className="flex flex-col gap-0.5 p-1" role="listbox" aria-label={props.ariaLabel}>
           {props.options.map((option) => {
             const isSelected = option.value === selectedOption.value;
             return (

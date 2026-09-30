@@ -3,11 +3,9 @@ import type {
   NativeStackHeaderItemMenu,
 } from "@react-navigation/native-stack";
 
-import {
-  createMachineHeaderItem,
-  type MachineSwitcherEnvironment,
-} from "../../components/MachineSwitcher";
+import type { MachineSwitcherEnvironment } from "../../components/MachineSwitcher";
 import type { HomeListFilterMenu } from "../home/home-list-filter-menu";
+import { createMachineHeaderItem } from "../layout/machine-header-item";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 
 type NativeHeaderMenuItems = NativeStackHeaderItemMenu["menu"]["items"];
@@ -57,7 +55,7 @@ export function createSidebarHeaderItems(input: {
     withNativeGlassHeaderItem({
       type: "menu",
       label: "",
-      accessibilityLabel: "Filter and sort threads",
+      accessibilityLabel: "Filter threads",
       icon: sfSymbolIcon(input.filterIcon),
       menu: {
         title: input.filterMenu.title,

@@ -165,7 +165,7 @@ function ActiveSshPasswordPrompt({
             local SSH process for this connection attempt and is not saved by A2 Code.
           </DialogDescription>
         </DialogHeader>
-        <DialogPanel className="space-y-3" scrollFade={false}>
+        <DialogPanel scrollFade={false}>
           <form
             className="space-y-3"
             id={formId}

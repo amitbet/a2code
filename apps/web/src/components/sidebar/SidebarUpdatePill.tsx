@@ -98,7 +98,7 @@ function SidebarUpdateArchitectureWarningContent() {
   if (!visible || !description) return null;
 
   return (
-    <Alert variant="warning" className="rounded-2xl border-warning/40 bg-warning/8 text-xs">
+    <Alert variant="warning">
       <TriangleAlertIcon />
       <AlertTitle>Intel build on Apple Silicon</AlertTitle>
       <AlertDescription>{description}</AlertDescription>
@@ -295,7 +295,7 @@ function SidebarUpdateControl() {
               !isInteractionDisabled && "hover:bg-sidebar-row-hover",
             )
           : cn(
-              "text-[var(--sidebar-icon-color)]",
+              "text-(--sidebar-icon-color)",
               !isInteractionDisabled && "hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
             ),
         disabled && !showUpdateIconState && "opacity-60",
@@ -377,7 +377,6 @@ function SidebarUpdateControl() {
           <PopoverPopup
             align="center"
             aria-label="Nightly update release notes"
-            className="max-w-none text-balance shadow-xl shadow-black/25"
             initialFocus={false}
             onKeyDownCapture={(event) => {
               if (

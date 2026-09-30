@@ -3,6 +3,86 @@
 This file tracks fork-specific divergences that are likely to conflict when
 merging `upstream/main`.
 
+## 2026-09-30 upstream merge (lint-enforced UI rules, legacy mobile list retired, Codex tool context) — migration notes
+
+Merged `upstream/main` through `c18e5ea6ed` (245 commits). 47 conflicts.
+
+### Migrations: upstream 054 became the fork's 059 — next free id is 60
+
+Upstream added `054_ProjectionThreadsAutoSettleDisabledAt` (per-thread auto-settle switch). It was
+renamed to **059** (file, test, registry, and the test's `toMigrationInclusive` bounds 58/59).
+
+### Provider compatibility gates on the upstream version (`upstreamVersion`)
+
+Upstream's manifest compatibility policies (#13130) select a policy by `t3CodeRange`, matched
+against the server's `package.json` version. Every range is written against upstream releases
+(`>=0.0.42`, `>=0.0.44`), so the fork's `0.0.25-amit` matched none: no provider got an advisory and
+Codex's managed installation found no pinned release (`providerCompatibility`, `CodexInstallation`
+and `CodexCollabRuntime` suites all failed). `apps/server/package.json` now carries
+**`upstreamVersion`** (the upstream release last merged, `0.0.44` here), and
+`resolveProviderCompatibility` defaults to it. **Bump `upstreamVersion` to upstream's
+`apps/server` version on every merge** — a stale value silently picks old policies once upstream
+moves its ranges past it.
+
+### Codex tool instructions moved to `additionalContext`
+
+Upstream moved the browser/device tool blocks out of the collaboration-mode prompt and into
+`buildCodexAdditionalContext` (Codex drops `developer_instructions` when the model catalog ships its
+own mode text). The fork's thread-history block (`thread_search` / `thread_read`) now rides as its
+own `t3_code_thread_history` entry there, sent only when the session's MCP credential carries the
+`threads` capability (`T3CodeToolAvailability.threads`), the same way upstream gates browser/device.
+
+### Mobile: the legacy grouped thread list is gone
+
+Upstream deleted `thread-list-items.tsx` and every v1 branch (#13183). The fork's v1-only Pin/Unpin
+toggle went with it; v2 rows already carry upstream's pin/unpin actions. Machine scope was
+re-applied on top of upstream's versions of `ThreadNavigationSidebar.tsx`, `HomeHeader.tsx`,
+`HomeRouteScreen.tsx` and `AdaptiveWorkspaceLayout.tsx` (environment filter hidden via
+`includeEnvironment: false`, machine hooks, `MachineSwitcher`). Upstream moved the v2 row time label
+into `threadListV2.ts` (`resolveThreadListV2ItemTimeLabel`); it now reads
+`activeThreadAnchorTimestamp`, keeping the label/order rule from "Active thread list sorts by last
+prompt".
+
+`createMachineHeaderItem` moved from `components/MachineSwitcher.tsx` to
+`features/layout/machine-header-item.ts`: upstream's `dependency-graph.test.ts` caps
+`components -> features` edges, and the header factory's import of `native-glass-header-items` was
+the one over the ceiling.
+
+### Other notable resolutions
+
+- **Cursor usage stays on the fork reader.** Upstream's `cursorUsageLimits.ts` now reads the macOS
+  Keychain, but only behind the opt-in `cursorKeychainUsageEnabled` setting (default off).
+  `CursorDriver` keeps `readCursorProviderUsageLimits`, which works without the opt-in.
+- **Claude banked resets** (upstream #13118): `checkClaudeProviderStatus` keeps the fork's
+  `claudeUsageLimitsFromCapabilities` and adds upstream's `resetCredits` on top. The fork's 5-minute
+  `readClaudeUsageLimits` refresh does not fetch reset credits.
+- **`ServerProviderUsageLimits`** carries both the fork's `planType` and upstream's `externalUsage`.
+- **Desktop compile cache** (upstream #13501): the backend args take upstream's
+  `--require <compileCachePath>` in packaged builds, in front of the fork's payload-aware `entryPath`.
+- **Desktop updates**: upstream's restart-marker and Linux `.deb` self-update work was declined
+  again. `DesktopUpdates.ts`/test are the fork's; `updatesTestHarness.ts` stays deleted;
+  `build-desktop-artifact.ts` keeps the AppImage-only Linux target and `a2code` executable name.
+- **ChatView queue**: upstream removed `onSend`'s `queuedMessage` parameter; the fork's
+  `shouldQueuePrompt` and `/btw` guards dropped their `!queuedMessage` checks. Upstream's re-added
+  `enqueue` branch was dropped again (fork queue wins, see 2026-09-22).
+- **`KeybindingsSettings.logic.ts`**: upstream's Usage comparator ranked six commands by page order
+  and `usage.open` alphabetically, which is not transitive; the fork's extra
+  `thread.askSideQuestion` default changed the input order and broke upstream's ordering test.
+  `usage.open` now has an explicit rank.
+- `AskSideQuestionInput` / `PromoteSideQuestionInput` are re-exported from `state/threadCommands.ts`;
+  without that, `apps/web/src/state/threads.ts` fails TS2883 (inferred type not nameable).
+- CI: `ci.yml`/`release.yml` byte-identical to the fork tip. Upstream's `deploy-relay.yml`,
+  `mobile-eas-preview.yml`, `mobile-showcase-screenshots.yml` and `release-desktop.yml` stayed out.
+
+### Lint: upstream made the `shadcn/*` UI rules errors
+
+`shadcn/no-restyle`, `no-arbitrary-values`, `no-raw-colors` and `no-unknown-classes` now fail
+`vp check` for `apps/web/src/**` (#13210, #13366). Upstream cleaned its own files; the remaining
+errors are all in fork-owned UI (`ProjectTodoSheet`, `RateLimitMeter`, `MachineSwitcher`,
+`SideQuestionPanel`, fork additions in `LegacySidebar`/`Sidebar`/`MessagesTimeline`/
+`ProviderInstanceCard`/`ComposerPrimaryActions`). **Still open at merge time: `vp check` reports
+78 errors, all from these rules in fork files.**
+
 ## 2026-09-22 upstream merge (Tiptap composer, hoisted thread route, project settings) — migration notes
 
 Merged `upstream/main` through `7c2702d68a` (442 commits). 77 conflicts. The three that change how
@@ -17,8 +97,8 @@ Upstream added `051_ProjectionThreadMessageContext`, `052_ProjectionThreadTitleS
 (files, `Migrations.ts` registry, the `it.layer` name, and the `toMigrationInclusive` bounds in
 `055`'s test). Fork ids 33-35, 43 and 48 stay frozen.
 
-Since this merge the fork added **`058_ProjectionThreadSideQuestionOf`** (side questions), so the
-next free id is **59**.
+Since this merge the fork added **`058_ProjectionThreadSideQuestionOf`** (side questions); the
+2026-09-30 merge then took 059, so the next free id is **60**.
 
 `NodeSqliteClient.layerMemory()` **was removed upstream**; every call site now uses
 `NodeSqliteClient.layer({ filename: ":memory:" })`. Four fork-owned tests were converted
@@ -2724,7 +2804,7 @@ build:desktop` → `vp run dist:payload:asset`, using the
   it.
 - Migration seam: `033_ProjectionThreadsForkedFrom` is fork-added. Fork ids
   33-35 are frozen because existing fork DBs already recorded them. **The fork's
-  next free migration id is 58** (upstream's 051-053 became the fork's 055-057 in the
+  next free migration id is 60** (upstream's 054 became the fork's 059 in the 2026-09-30 merge; 051-053 became the fork's 055-057 in the
   2026-09-22 merge; 048-050 became 052-054 on 2026-09-11; 045-047 became 049-051 on
   2026-09-05) (see the
   2026-07-24 merge notes): when upstream adds a migration with id >= 33,
@@ -2906,3 +2986,5 @@ When pulling from `upstream/main`:
 5. Run `bunx vp run typecheck`.
 6. Because CI does not gate on tests, run `bunx vp run test` locally and confirm
    the fork-feature suites pass before pushing the merge.
+7. Set `upstreamVersion` in `apps/server/package.json` to upstream's `apps/server` version (see the
+   2026-09-30 notes); provider compatibility policies are matched against it.

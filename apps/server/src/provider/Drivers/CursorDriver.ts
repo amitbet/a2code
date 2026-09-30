@@ -134,7 +134,7 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
 
       const textGeneration = yield* makeCursorTextGeneration(effectiveConfig, processEnv);
 
-      const discoverModels = yield* makeCursorModelDiscovery(effectiveConfig, processEnv);
+      const modelDiscovery = yield* makeCursorModelDiscovery(effectiveConfig, processEnv);
       // The fork's reader, not upstream's `cursorUsageLimits.ts`: upstream reports
       // a macOS Keychain login (Cursor's default) as unsupported.
       const readCursorUsageLimits = readCursorProviderUsageLimits({
@@ -144,7 +144,7 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
       const checkProvider = checkCursorProviderStatus(
         effectiveConfig,
         processEnv,
-        discoverModels,
+        modelDiscovery.discover,
       ).pipe(
         Effect.flatMap((snapshot) =>
           effectiveConfig.enabled && snapshot.installed && snapshot.auth.status === "authenticated"
@@ -224,6 +224,7 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
         accentColor,
         enabled,
         snapshot,
+        invalidateCaches: modelDiscovery.invalidate,
         snapshotForCwd: (cwd) =>
           !effectiveConfig.enabled
             ? snapshot.getSnapshot

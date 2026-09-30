@@ -1,15 +1,10 @@
 import type { EnvironmentId } from "@t3tools/contracts";
-import type {
-  NativeStackHeaderItem,
-  NativeStackHeaderItemMenu,
-} from "@react-navigation/native-stack";
 import { useMemo } from "react";
 import { Pressable, View } from "react-native";
 
 import { ControlPillMenu } from "./ControlPill";
 import { SymbolView } from "./AppSymbol";
 import { AppText as Text } from "./AppText";
-import { withNativeGlassHeaderItem } from "../features/layout/native-glass-header-items";
 import { useUniwindTheme } from "../lib/useUniwindTheme";
 
 export interface MachineSwitcherEnvironment {
@@ -19,32 +14,6 @@ export interface MachineSwitcherEnvironment {
 
 function checkedMenuState(checked: boolean) {
   return checked ? ("on" as const) : undefined;
-}
-
-export function createMachineHeaderItem(input: {
-  readonly environments: ReadonlyArray<MachineSwitcherEnvironment>;
-  readonly activeEnvironmentId: EnvironmentId | null;
-  readonly onEnvironmentChange: (environmentId: EnvironmentId) => void;
-}): NativeStackHeaderItem {
-  const items: NativeStackHeaderItemMenu["menu"]["items"] = input.environments.map(
-    (environment) => ({
-      type: "action" as const,
-      label: environment.label,
-      state: checkedMenuState(environment.environmentId === input.activeEnvironmentId),
-      onPress: () => input.onEnvironmentChange(environment.environmentId),
-    }),
-  );
-
-  return withNativeGlassHeaderItem({
-    type: "menu",
-    label: "",
-    accessibilityLabel: "Active environment",
-    icon: { type: "sfSymbol", name: "server.rack" } as const,
-    menu: {
-      title: "Active environment",
-      items,
-    },
-  });
 }
 
 export function MachineSwitcher(props: {
