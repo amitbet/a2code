@@ -12,6 +12,7 @@ import {
   type AuthPairingLink,
   type AuthPairingCredentialResult,
   type AuthSessionId,
+  type AuthSessionLifetime,
   type AuthSessionState,
   type ServerAuthDescriptor,
   type ServerAuthSessionMethod,
@@ -452,6 +453,7 @@ export class EnvironmentAuth extends Context.Service<
       readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
       readonly subject?: string;
       readonly proofKeyThumbprint?: string;
+      readonly sessionLifetime?: AuthSessionLifetime;
       readonly purpose?: "startup";
     }) => Effect.Effect<IssuedPairingLink, ServerAuthInternalError>;
     readonly issuePairingCredential: (
@@ -747,6 +749,7 @@ export const make = Effect.gen(function* () {
             method: "browser-session-cookie",
             subject: grant.subject,
             scopes: grant.scopes,
+            ...(grant.sessionLifetime ? { lifetime: grant.sessionLifetime } : {}),
             client: {
               ...requestMetadata,
               ...(grant.label ? { label: grant.label } : {}),
@@ -774,7 +777,7 @@ export const make = Effect.gen(function* () {
 
   type ResolvedBootstrapGrant = Pick<
     PairingGrantStore.BootstrapGrant,
-    "scopes" | "subject" | "label"
+    "scopes" | "subject" | "label" | "sessionLifetime"
   > & {
     readonly method: PairingGrantStore.BootstrapGrant["method"] | "reusable-dev-token";
   };
@@ -817,12 +820,16 @@ export const make = Effect.gen(function* () {
                 method: input?.proofKeyThumbprint ? "dpop-access-token" : "bearer-access-token",
                 subject: grant.subject,
                 scopes: grantedScopes,
+                // DPoP access tokens stay short-lived; the pairing link's
+                // session lifetime only applies to bearer sessions.
                 ...(input?.proofKeyThumbprint
                   ? {
                       proofKeyThumbprint: input.proofKeyThumbprint,
                       ttl: Duration.hours(1),
                     }
-                  : {}),
+                  : grant.sessionLifetime
+                    ? { lifetime: grant.sessionLifetime }
+                    : {}),
                 // Desktop restarts forget the previous bearer token. Replace
                 // its session, including stale entries left by older versions.
                 replaceActiveForSubjectAndMethod: grant.method === "desktop-bootstrap",
@@ -864,12 +871,14 @@ export const make = Effect.gen(function* () {
     readonly scopes: ReadonlyArray<AuthEnvironmentScope>;
     readonly subject: string;
     readonly label?: string;
+    readonly sessionLifetime?: AuthSessionLifetime;
     readonly purpose?: "startup";
   }) =>
     createPairingLink({
       scopes: input.scopes,
       subject: input.subject,
       ...(input.label ? { label: input.label } : {}),
+      ...(input.sessionLifetime ? { sessionLifetime: input.sessionLifetime } : {}),
       ...(input.purpose ? { purpose: input.purpose } : {}),
     }).pipe(
       Effect.map(
@@ -894,6 +903,7 @@ export const make = Effect.gen(function* () {
         ...(input?.ttl ? { ttl: input.ttl } : {}),
         ...(input?.label ? { label: input.label } : {}),
         ...(input?.proofKeyThumbprint ? { proofKeyThumbprint: input.proofKeyThumbprint } : {}),
+        ...(input?.sessionLifetime ? { sessionLifetime: input.sessionLifetime } : {}),
         ...(input?.purpose ? { purpose: input.purpose } : {}),
       });
       return {
@@ -986,6 +996,7 @@ export const make = Effect.gen(function* () {
       scopes: input?.scopes ?? AuthStandardClientScopes,
       subject: "one-time-token",
       ...(input?.label ? { label: input.label } : {}),
+      ...(input?.sessionLifetime ? { sessionLifetime: input.sessionLifetime } : {}),
     }).pipe(Effect.withSpan("EnvironmentAuth.issuePairingCredential"));
 
   const issueStartupPairingCredential: EnvironmentAuth["Service"]["issueStartupPairingCredential"] =

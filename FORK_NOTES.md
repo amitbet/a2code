@@ -3,6 +3,15 @@
 This file tracks fork-specific divergences that are likely to conflict when
 merging `upstream/main`.
 
+## Pairing-link session lifetime (fork feature) — migration 060
+
+Settings → Connections → Create link has a session expiry picker (1 month, 1 year, 10 years,
+never). The choice is stored in `auth_pairing_links.session_lifetime` (fork migration
+**060_AuthPairingSessionLifetime**, so the **next free id is 61**). It is applied in
+`SessionStore.issue` via `sessionLifetimeExpiresAt` (`apps/server/src/auth/sessionLifetime.ts`).
+Expect conflicts in `AuthPairingLinks.ts`, `PairingGrantStore.ts`, `EnvironmentAuth.ts` and the
+`AuthCreatePairingCredentialInput` contract.
+
 ## 2026-09-30 upstream merge (lint-enforced UI rules, legacy mobile list retired, Codex tool context) — migration notes
 
 Merged `upstream/main` through `c18e5ea6ed` (245 commits). 47 conflicts.
@@ -2804,7 +2813,7 @@ build:desktop` → `vp run dist:payload:asset`, using the
   it.
 - Migration seam: `033_ProjectionThreadsForkedFrom` is fork-added. Fork ids
   33-35 are frozen because existing fork DBs already recorded them. **The fork's
-  next free migration id is 60** (upstream's 054 became the fork's 059 in the 2026-09-30 merge; 051-053 became the fork's 055-057 in the
+  next free migration id is 61** (fork-added 060 is the pairing-link session lifetime; upstream's 054 became the fork's 059 in the 2026-09-30 merge; 051-053 became the fork's 055-057 in the
   2026-09-22 merge; 048-050 became 052-054 on 2026-09-11; 045-047 became 049-051 on
   2026-09-05) (see the
   2026-07-24 merge notes): when upstream adds a migration with id >= 33,

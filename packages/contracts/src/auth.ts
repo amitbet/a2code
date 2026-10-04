@@ -339,9 +339,17 @@ export const AuthRevokeClientSessionInput = Schema.Struct({
 });
 export type AuthRevokeClientSessionInput = typeof AuthRevokeClientSessionInput.Type;
 
+/**
+ * How long a client session created by redeeming a pairing link stays valid.
+ * Omitted means the server default (one month).
+ */
+export const AuthSessionLifetime = Schema.Literals(["month", "year", "decade", "forever"]);
+export type AuthSessionLifetime = typeof AuthSessionLifetime.Type;
+
 export const AuthCreatePairingCredentialInput = Schema.Struct({
   label: Schema.optionalKey(TrimmedNonEmptyString),
   scopes: Schema.optionalKey(AuthEnvironmentScopes),
+  sessionLifetime: Schema.optionalKey(AuthSessionLifetime),
 });
 export type AuthCreatePairingCredentialInput = typeof AuthCreatePairingCredentialInput.Type;
 

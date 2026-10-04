@@ -5,6 +5,7 @@ import type {
   AuthPairingCredentialResult,
   ServerAuthSessionMethod,
   AuthSessionId,
+  AuthSessionLifetime,
   AuthSessionState,
 } from "@t3tools/contracts";
 import { EnvironmentHttpCommonError, PRIMARY_LOCAL_ENVIRONMENT_ID } from "@t3tools/contracts";
@@ -353,6 +354,7 @@ export async function submitServerAuthCredential(credential: string): Promise<vo
 export async function createServerPairingCredential(input?: {
   readonly label?: string;
   readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
+  readonly sessionLifetime?: AuthSessionLifetime;
 }): Promise<AuthPairingCredentialResult> {
   const trimmedLabel = input?.label?.trim();
   try {
@@ -364,6 +366,7 @@ export async function createServerPairingCredential(input?: {
             payload: {
               ...(trimmedLabel ? { label: trimmedLabel } : {}),
               ...(input?.scopes ? { scopes: input.scopes } : {}),
+              ...(input?.sessionLifetime ? { sessionLifetime: input.sessionLifetime } : {}),
             },
           }),
         ),

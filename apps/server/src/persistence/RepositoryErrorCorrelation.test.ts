@@ -164,6 +164,7 @@ describe("persistence error correlation", () => {
           subject,
           label: null,
           proofKeyThumbprint: null,
+          sessionLifetime: null,
           createdAt: issuedAt,
           expiresAt,
         }),

@@ -33,6 +33,7 @@ import {
   type AuthEnvironmentScope,
   type AuthPairingLink,
   type AuthPairingCredentialResult,
+  type AuthSessionLifetime,
   type AdvertisedEndpoint,
   type DesktopDiscoveredSshHost,
   type DesktopSshEnvironmentTarget,
@@ -205,6 +206,17 @@ function formatAccessTimestamp(value: string): string {
   }
   return accessTimestampFormatter.format(parsed);
 }
+
+const SESSION_LIFETIME_OPTIONS: ReadonlyArray<{
+  value: AuthSessionLifetime;
+  label: string;
+}> = [
+  { value: "month", label: "1 month" },
+  { value: "year", label: "1 year" },
+  { value: "decade", label: "10 years" },
+  { value: "forever", label: "Never expires" },
+];
+const DEFAULT_SESSION_LIFETIME: AuthSessionLifetime = "month";
 
 const PAIRING_SCOPE_OPTIONS: ReadonlyArray<{
   readonly scope: AuthEnvironmentScope;
@@ -1062,6 +1074,8 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
   const [pairingScopes, setPairingScopes] = useState<ReadonlyArray<AuthEnvironmentScope>>([
     ...AuthStandardClientScopes,
   ]);
+  const [sessionLifetime, setSessionLifetime] =
+    useState<AuthSessionLifetime>(DEFAULT_SESSION_LIFETIME);
   const [isCreatingPairingLink, setIsCreatingPairingLink] = useState(false);
 
   const handleCreatePairingLink = useCallback(async () => {
@@ -1070,10 +1084,12 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
       const created = await createServerPairingCredential({
         label: pairingLabel,
         scopes: pairingScopes,
+        sessionLifetime,
       });
       onPairingLinkCreated(created);
       setPairingLabel("");
       setPairingScopes([...AuthStandardClientScopes]);
+      setSessionLifetime(DEFAULT_SESSION_LIFETIME);
       setDialogOpen(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to create pairing URL.";
@@ -1087,7 +1103,7 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
     } finally {
       setIsCreatingPairingLink(false);
     }
-  }, [onPairingLinkCreated, pairingLabel, pairingScopes]);
+  }, [onPairingLinkCreated, pairingLabel, pairingScopes, sessionLifetime]);
 
   const togglePairingScope = useCallback((scope: AuthEnvironmentScope, checked: boolean) => {
     setPairingScopes((current) =>
@@ -1114,6 +1130,7 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
           if (!open) {
             setPairingLabel("");
             setPairingScopes([...AuthStandardClientScopes]);
+            setSessionLifetime(DEFAULT_SESSION_LIFETIME);
           }
         }}
       >
@@ -1146,6 +1163,42 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
                 autoFocus
               />
             </label>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-xs font-medium text-foreground">Session expiry</h3>
+                <p className="text-xs text-muted-foreground">
+                  How long the paired client stays signed in.
+                </p>
+              </div>
+              <Select
+                value={sessionLifetime}
+                onValueChange={(value) => {
+                  const option = SESSION_LIFETIME_OPTIONS.find((entry) => entry.value === value);
+                  if (option) setSessionLifetime(option.value);
+                }}
+              >
+                <SelectTrigger
+                  size="sm"
+                  className="w-36"
+                  aria-label="Session expiry"
+                  disabled={isCreatingPairingLink}
+                >
+                  <SelectValue>
+                    {
+                      SESSION_LIFETIME_OPTIONS.find((entry) => entry.value === sessionLifetime)
+                        ?.label
+                    }
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  {SESSION_LIFETIME_OPTIONS.map((option) => (
+                    <SelectItem hideIndicator key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
+            </div>
             <section className="space-y-3">
               <div className="flex items-center justify-between gap-3">
                 <div>

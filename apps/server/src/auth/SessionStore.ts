@@ -6,6 +6,7 @@ import {
   type AuthClientMetadata,
   type AuthClientSession,
   type AuthEnvironmentScope,
+  type AuthSessionLifetime,
   type ClientSurface,
   type ServerAuthSessionMethod,
 } from "@t3tools/contracts";
@@ -30,6 +31,7 @@ import {
   REUSABLE_DEV_SESSION_PREFIX,
   resolveReusableDevAuth,
 } from "./ReusableDevAuth.ts";
+import { sessionLifetimeExpiresAt } from "./sessionLifetime.ts";
 import {
   base64UrlDecodeUtf8,
   base64UrlEncode,
@@ -369,6 +371,8 @@ export class SessionStore extends Context.Service<
     readonly legacyCookieName: string | undefined;
     readonly issue: (input?: {
       readonly ttl?: Duration.Duration;
+      /** Overrides `ttl` with a user-chosen lifetime (see `sessionLifetimeExpiresAt`). */
+      readonly lifetime?: AuthSessionLifetime;
       readonly subject?: string;
       readonly method?: ServerAuthSessionMethod;
       readonly scopes?: ReadonlyArray<AuthEnvironmentScope>;
@@ -654,9 +658,11 @@ export const make = Effect.gen(function* () {
         ),
       );
       const issuedAt = yield* DateTime.now;
-      const expiresAt = DateTime.add(issuedAt, {
-        milliseconds: Duration.toMillis(input?.ttl ?? DEFAULT_SESSION_TTL),
-      });
+      const expiresAt = input?.lifetime
+        ? sessionLifetimeExpiresAt(input.lifetime, issuedAt)
+        : DateTime.add(issuedAt, {
+            milliseconds: Duration.toMillis(input?.ttl ?? DEFAULT_SESSION_TTL),
+          });
       const claims: SessionClaims = {
         v: 1,
         kind: "session",

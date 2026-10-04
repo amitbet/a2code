@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { AuthAdministrativeScopes } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
@@ -16,6 +17,7 @@ import * as EnvironmentAuth from "./EnvironmentAuth.ts";
 
 import * as ServerSecretStore from "./ServerSecretStore.ts";
 import * as SessionStore from "./SessionStore.ts";
+import { NEVER_EXPIRES_AT } from "./sessionLifetime.ts";
 
 /** Pinned so dev-mode cookie tests can assert the port-scoped name. */
 const TEST_SERVER_PORT = 13_773;
@@ -336,6 +338,42 @@ it.layer(NodeServices.layer)("EnvironmentAuth.layer", (it) => {
         "relay:read",
       ]);
       expect(verified.subject).toBe("one-time-token");
+    }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
+  );
+
+  it.effect("applies the pairing link's session lifetime to the redeemed session", () =>
+    Effect.gen(function* () {
+      const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const before = yield* DateTime.now;
+
+      const yearLink = yield* serverAuth.issuePairingCredential({ sessionLifetime: "year" });
+      const yearSession = yield* serverAuth.createBrowserSession(
+        yearLink.credential,
+        requestMetadata,
+      );
+      expect(DateTime.toEpochMillis(yearSession.response.expiresAt)).toBeGreaterThanOrEqual(
+        DateTime.toEpochMillis(DateTime.add(before, { years: 1 })),
+      );
+
+      const foreverLink = yield* serverAuth.issuePairingCredential({ sessionLifetime: "forever" });
+      const foreverToken = yield* serverAuth.exchangeBootstrapCredentialForAccessToken(
+        foreverLink.credential,
+        undefined,
+        requestMetadata,
+      );
+      const foreverSession = yield* serverAuth.authenticateHttpRequest(
+        makeBearerRequest(foreverToken.access_token),
+      );
+      expect(foreverSession.expiresAt).toEqual(NEVER_EXPIRES_AT);
+
+      const defaultLink = yield* serverAuth.issuePairingCredential();
+      const defaultSession = yield* serverAuth.createBrowserSession(
+        defaultLink.credential,
+        requestMetadata,
+      );
+      expect(DateTime.toEpochMillis(defaultSession.response.expiresAt)).toBeLessThan(
+        DateTime.toEpochMillis(DateTime.add(before, { days: 31 })),
+      );
     }).pipe(Effect.provide(makeEnvironmentAuthLayer())),
   );
 

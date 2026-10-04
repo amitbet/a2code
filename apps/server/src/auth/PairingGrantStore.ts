@@ -3,6 +3,7 @@ import {
   AuthStandardClientScopes,
   type AuthEnvironmentScope,
   type AuthPairingLink,
+  type AuthSessionLifetime,
   type ServerAuthBootstrapMethod,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -26,6 +27,8 @@ export interface BootstrapGrant {
   readonly subject: string;
   readonly label?: string;
   readonly proofKeyThumbprint?: string;
+  /** Lifetime of the client session minted when this grant is redeemed. */
+  readonly sessionLifetime?: AuthSessionLifetime;
   readonly expiresAt: DateTime.DateTime;
 }
 
@@ -200,6 +203,7 @@ export class PairingGrantStore extends Context.Service<
       readonly subject?: string;
       readonly label?: string;
       readonly proofKeyThumbprint?: string;
+      readonly sessionLifetime?: AuthSessionLifetime;
       /**
        * "startup" marks the credential the server mints for itself at boot,
        * which gets the long dev TTL when a dev URL is configured.
@@ -404,6 +408,7 @@ export const make = Effect.gen(function* () {
         subject,
         label: input?.label ?? null,
         proofKeyThumbprint: input?.proofKeyThumbprint ?? null,
+        sessionLifetime: input?.sessionLifetime ?? null,
         createdAt: now,
         expiresAt: expiresAt,
       })
@@ -527,6 +532,9 @@ export const make = Effect.gen(function* () {
           ...(consumed.value.label ? { label: consumed.value.label } : {}),
           ...(consumed.value.proofKeyThumbprint
             ? { proofKeyThumbprint: consumed.value.proofKeyThumbprint }
+            : {}),
+          ...(consumed.value.sessionLifetime
+            ? { sessionLifetime: consumed.value.sessionLifetime }
             : {}),
           expiresAt: consumed.value.expiresAt,
         } satisfies BootstrapGrant;
