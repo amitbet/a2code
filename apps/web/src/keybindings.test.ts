@@ -253,6 +253,53 @@ describe("thread undo shortcut", () => {
   });
 });
 
+describe("side question shortcut", () => {
+  const composerContext = {
+    composerFocus: true,
+    terminalFocus: false,
+    draftThreadRoute: false,
+    editableFocus: true,
+  };
+
+  it("asks a side question with mod+shift+b in a started thread", () => {
+    assert.equal(
+      resolveShortcutCommand(
+        event({ key: "b", metaKey: true, shiftKey: true }),
+        DEFAULT_RESOLVED_KEYBINDINGS,
+        { platform: "MacIntel", context: composerContext },
+      ),
+      "thread.askSideQuestion",
+    );
+  });
+
+  it("stays out of drafts, terminals, and the send-and-new-thread chord", () => {
+    assert.notEqual(
+      resolveShortcutCommand(
+        event({ key: "b", ctrlKey: true, shiftKey: true }),
+        DEFAULT_RESOLVED_KEYBINDINGS,
+        { platform: "Win32", context: { ...composerContext, draftThreadRoute: true } },
+      ),
+      "thread.askSideQuestion",
+    );
+    assert.notEqual(
+      resolveShortcutCommand(
+        event({ key: "b", ctrlKey: true, shiftKey: true }),
+        DEFAULT_RESOLVED_KEYBINDINGS,
+        { platform: "Win32", context: { ...composerContext, terminalFocus: true } },
+      ),
+      "thread.askSideQuestion",
+    );
+    assert.equal(
+      resolveShortcutCommand(
+        event({ key: "Enter", metaKey: true, altKey: true }),
+        DEFAULT_RESOLVED_KEYBINDINGS,
+        { platform: "MacIntel", context: composerContext },
+      ),
+      "composer.sendAndNewThread",
+    );
+  });
+});
+
 describe("copy thread reference shortcut", () => {
   it("resolves Cmd+Shift+C on macOS and Ctrl+Shift+C elsewhere", () => {
     assert.equal(

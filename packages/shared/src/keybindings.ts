@@ -63,6 +63,12 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
     command: "composer.sendAndNewThread",
     when: "composerFocus && !draftThreadRoute",
   },
+  // Sends the composer text as a `/btw` side question.
+  {
+    key: "mod+shift+b",
+    command: "thread.askSideQuestion",
+    when: "!terminalFocus && !draftThreadRoute",
+  },
   { key: "mod+n", command: "chat.new", when: "!terminalFocus" },
   { key: "mod+shift+o", command: "chat.new", when: "!terminalFocus" },
   { key: "mod+shift+n", command: "chat.newLocal", when: "!terminalFocus" },

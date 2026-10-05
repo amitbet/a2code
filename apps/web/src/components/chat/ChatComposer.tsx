@@ -1602,6 +1602,8 @@ export interface ChatComposerProps {
   // Context window
   activeContextWindow: ContextWindowSnapshot | null;
   compactThreadUnavailable: boolean;
+  /** A started thread whose server answers `/btw` side questions. */
+  sideQuestionsSupported: boolean;
   compactDisabled: boolean;
   compactDisabledReason: string | null;
 
@@ -1748,6 +1750,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     reportedModelSelection,
     activeContextWindow,
     compactThreadUnavailable,
+    sideQuestionsSupported,
     compactDisabled,
     compactDisabledReason,
     resolvedTheme,
@@ -2564,6 +2567,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     composerPreviewAnnotations.length === 0 &&
     composerReviewComments.length === 0;
 
+  // `/btw` only parses at the start of the prompt.
+  const sideQuestionSlashCommandAvailable =
+    sideQuestionsSupported &&
+    composerTrigger?.kind === "slash-command" &&
+    prompt.slice(0, composerTrigger.rangeStart).trim() === "";
+
   const pullRequestListTargets = useMemo(
     () =>
       composerTriggerKind !== "pull-request" ||
@@ -2704,10 +2713,30 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           (skill.scope ? `${skill.scope} skill` : ""),
       }));
       const visibleProviderSlashCommandItems = providerSlashCommandItems.filter(
-        (item) => item.command.name !== "compact" || compactSlashCommandAvailable,
+        (item) =>
+          (item.command.name !== "compact" || compactSlashCommandAvailable) &&
+          // The composer answers `/btw` itself, so a provider's own `/btw`
+          // (Claude Code has one) would never run.
+          (item.command.name !== "btw" || !sideQuestionsSupported),
       );
+      const sideQuestionSlashCommandItems = sideQuestionSlashCommandAvailable
+        ? ([
+            {
+              id: "slash:btw",
+              type: "slash-command",
+              command: "btw",
+              label: "/btw",
+              description: "Ask a side question without interrupting the agent",
+            },
+          ] as const)
+        : [];
       const slashCommandItems = slashCommandItemsForPromptPosition(
-        [...builtInSlashCommandItems, ...visibleProviderSlashCommandItems, ...skillItems],
+        [
+          ...builtInSlashCommandItems,
+          ...sideQuestionSlashCommandItems,
+          ...visibleProviderSlashCommandItems,
+          ...skillItems,
+        ],
         composerTrigger.rangeStart === 0,
       );
       return searchSlashCommandItems(slashCommandItems, query);
@@ -2783,6 +2812,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     composerTrigger,
     environmentId,
     environmentThreadShells,
+    sideQuestionSlashCommandAvailable,
+    sideQuestionsSupported,
     exactPullRequestLookup.data,
     planModeUiEnabled,
     pullRequestLookup.data,
@@ -3956,6 +3987,25 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         return;
       }
       if (item.type === "slash-command") {
+        if (item.command === "btw") {
+          // The question is typed after the command and sent with Enter.
+          const replacement = "/btw ";
+          const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+            snapshot.value,
+            trigger.rangeEnd,
+            replacement,
+          );
+          const applied = applyPromptReplacement(
+            trigger.rangeStart,
+            replacementRangeEnd,
+            replacement,
+            { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
+          );
+          if (applied) {
+            setComposerHighlightedItemId(null);
+          }
+          return;
+        }
         if (item.command === "model") {
           const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
             expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),

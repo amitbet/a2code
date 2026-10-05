@@ -26,6 +26,7 @@ import {
 } from "./ThreadStatusIndicators";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { ProjectFavicon } from "./ProjectFavicon";
+import { SidebarSideQuestionRows } from "./SidebarSideQuestionRows";
 import { useAtomValue } from "@effect/atom-react";
 import { autoAnimate } from "@formkit/auto-animate";
 import React, { Fragment, useCallback, useEffect, memo, useMemo, useRef, useState } from "react";
@@ -1131,6 +1132,11 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
                 cancelRename={cancelRename}
                 attemptArchiveThread={attemptArchiveThread}
                 openPrLink={openPrLink}
+              />
+              <SidebarSideQuestionRows
+                parentRef={threadRef}
+                activeRouteThreadKey={activeRouteThreadKey}
+                onOpen={navigateToThread}
               />
             </Fragment>
           );

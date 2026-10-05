@@ -32,6 +32,7 @@ import {
   threadWokeAt,
 } from "@t3tools/client-runtime/state/thread-settled";
 import { createInboxReturnTracker } from "@t3tools/client-runtime/state/thread-inbox";
+import { withoutNestedSideQuestions } from "@t3tools/client-runtime/state/side-questions";
 import {
   resolveSettledThreadTimestamp,
   sortSettledThreads,
@@ -2338,7 +2339,13 @@ export default function Sidebar() {
   const machineEnvironmentId = useMachineEnvironmentId();
   const projects = useEnvironmentProjects(machineEnvironmentId);
   const projectOrder = useUiStateStore((store) => store.projectOrder);
-  const threads = useEnvironmentThreadShells(machineEnvironmentId);
+  const environmentThreads = useEnvironmentThreadShells(machineEnvironmentId);
+  // `/btw` side questions surface as chips on their parent thread (and nested
+  // rows in the project-tree sidebar), never as rows of their own here.
+  const threads = useMemo(
+    () => withoutNestedSideQuestions(environmentThreads),
+    [environmentThreads],
+  );
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);

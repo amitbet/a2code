@@ -10,6 +10,7 @@ import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
 import {
   type ChatAttachment,
   EnvironmentId,
+  type ModelSelection,
   type OrchestrationMessageContext,
   type RunId,
   type ScopedThreadRef,
@@ -295,6 +296,12 @@ export function useThreadActions() {
     reportFailure: false,
   });
   const startThreadTurnMutation = useAtomCommand(threadEnvironment.startTurn, {
+    reportFailure: false,
+  });
+  const askSideQuestionMutation = useAtomCommand(threadEnvironment.askSideQuestion, {
+    reportFailure: false,
+  });
+  const promoteSideQuestionMutation = useAtomCommand(threadEnvironment.promoteSideQuestion, {
     reportFailure: false,
   });
   const cancelQueuedRunMutation = useAtomCommand(threadEnvironment.cancelQueuedRun, {
@@ -1073,9 +1080,49 @@ export function useThreadActions() {
     ],
   );
 
+  /**
+   * `/btw`: ask `question` about `target` in a new side-question thread while
+   * its agent keeps working. Succeeds with the side question's ref.
+   */
+  const askSideQuestion = useCallback(
+    async (
+      target: ScopedThreadRef,
+      question: string,
+      options?: { readonly modelSelection?: ModelSelection },
+    ) => {
+      const sideQuestionRef = scopeThreadRef(target.environmentId, newThreadId());
+      const result = await askSideQuestionMutation({
+        environmentId: target.environmentId,
+        input: {
+          sourceThreadId: target.threadId,
+          targetThreadId: sideQuestionRef.threadId,
+          question,
+          messageId: newMessageId(),
+          ...(options?.modelSelection !== undefined
+            ? { modelSelection: options.modelSelection }
+            : {}),
+        },
+      });
+      return result._tag === "Failure" ? result : AsyncResult.success(sideQuestionRef);
+    },
+    [askSideQuestionMutation],
+  );
+
+  /** Keep a side question as a regular thread. */
+  const promoteSideQuestion = useCallback(
+    (target: ScopedThreadRef) =>
+      promoteSideQuestionMutation({
+        environmentId: target.environmentId,
+        input: { threadId: target.threadId },
+      }),
+    [promoteSideQuestionMutation],
+  );
+
   return useMemo(
     () => ({
       archiveThread,
+      askSideQuestion,
+      promoteSideQuestion,
       forkThread,
       forkQueuedRun,
       unarchiveThread,
@@ -1095,6 +1142,8 @@ export function useThreadActions() {
     }),
     [
       archiveThread,
+      askSideQuestion,
+      promoteSideQuestion,
       forkThread,
       forkQueuedRun,
       confirmAndDeleteThread,

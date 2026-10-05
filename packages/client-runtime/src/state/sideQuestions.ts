@@ -35,6 +35,84 @@ export function parseSideQuestionCommand(text: string): { readonly question: str
   return { question: (match[1] ?? "").trim() };
 }
 
+/**
+ * The question a side-question shortcut sends: the composer text, without a
+ * leading `/btw` when the user typed one anyway.
+ */
+export function sideQuestionFromComposerText(text: string): string {
+  return parseSideQuestionCommand(text)?.question ?? text.trim();
+}
+
+/** Why a `/btw` submission could not go ahead. */
+export type SideQuestionRejection =
+  /** No started thread to ask about (a draft, or no thread at all). */
+  | "no-thread"
+  /** The thread's server does not advertise `threadSideQuestions`. */
+  | "unsupported"
+  /** A bare `/btw` with no side question to reopen. */
+  | "nothing-to-open"
+  /** Side questions carry text only; the composer holds attachments or context. */
+  | "text-only";
+
+export type SideQuestionSubmission =
+  | { readonly type: "ask"; readonly question: string }
+  | { readonly type: "open"; readonly threadId: ThreadId }
+  | { readonly type: "rejected"; readonly reason: SideQuestionRejection };
+
+/**
+ * What submitting `/btw <question>` (or the side-question shortcut) does: ask
+ * a new side question, reopen the latest one for a bare `/btw`, or refuse.
+ * Shared by every client so the rules cannot drift between them.
+ */
+export function resolveSideQuestionSubmission(input: {
+  readonly question: string;
+  readonly hasThread: boolean;
+  readonly supported: boolean;
+  readonly hasNonTextContent: boolean;
+  /** The parent's newest unarchived side question, if any. */
+  readonly latestSideQuestionId: ThreadId | null;
+}): SideQuestionSubmission {
+  if (!input.hasThread) return { type: "rejected", reason: "no-thread" };
+  if (!input.supported) return { type: "rejected", reason: "unsupported" };
+  const question = input.question.trim();
+  if (question.length === 0) {
+    return input.latestSideQuestionId === null
+      ? { type: "rejected", reason: "nothing-to-open" }
+      : { type: "open", threadId: input.latestSideQuestionId };
+  }
+  if (input.hasNonTextContent) return { type: "rejected", reason: "text-only" };
+  return { type: "ask", question };
+}
+
+/** User-facing copy for a refused `/btw`. */
+export function sideQuestionRejectionMessage(reason: SideQuestionRejection): {
+  readonly title: string;
+  readonly description: string;
+} {
+  switch (reason) {
+    case "no-thread":
+      return {
+        title: "Start the thread first",
+        description: "A side question asks about an existing conversation.",
+      };
+    case "unsupported":
+      return {
+        title: "Side questions need a newer server",
+        description: "Update this environment's T3 Code server to use /btw.",
+      };
+    case "nothing-to-open":
+      return {
+        title: "Ask a side question",
+        description: "Type /btw followed by your question.",
+      };
+    case "text-only":
+      return {
+        title: "Side questions are text-only",
+        description: "Remove attachments and context from the composer, then ask again.",
+      };
+  }
+}
+
 /** Thread title for a side question: its first line, truncated. */
 export function sideQuestionTitle(question: string): string {
   const firstLine = question.trim().split("\n", 1)[0]?.trim() ?? "";
@@ -65,7 +143,7 @@ export function isSideQuestion(thread: SideQuestionCandidate): boolean {
 }
 
 /** True when `thread` belongs under a parent that `isKnownThread` recognizes. */
-function isNestedSideQuestion(
+export function isNestedSideQuestion(
   thread: SideQuestionCandidate,
   isKnownThread: (threadId: ThreadId) => boolean,
 ): boolean {

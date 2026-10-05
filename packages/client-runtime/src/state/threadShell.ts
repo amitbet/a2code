@@ -11,6 +11,7 @@ import { Atom } from "effect/unstable/reactivity";
 
 import type { EnvironmentThreadShell } from "./models.ts";
 import { presentThreadShell } from "./models.ts";
+import { isNestedSideQuestion } from "./sideQuestions.ts";
 import { type EnvironmentCatalogState, enabledEnvironmentIds } from "./connections.ts";
 import {
   arrayElementsEqual,
@@ -247,13 +248,21 @@ export function createEnvironmentThreadShellAtoms(input: {
     return previousThreadShells;
   }).pipe(Atom.withLabel("environment-thread-shell-list"));
 
+  // Thread lists: no archived threads, no subagents (they live in the parent's
+  // Agents surface), and no `/btw` side questions whose parent is known, even
+  // archived (they open from the parent).
   let previousNavigationShells: ReadonlyArray<EnvironmentThreadShell> = [];
   const navigationThreadShellsAtom = Atom.make((get) => {
     const next: EnvironmentThreadShell[] = [];
     for (const environmentId of get(input.catalogValueAtom).entries.keys()) {
-      for (const thread of get(environmentThreadsAtom(environmentId))) {
+      const threads = get(environmentThreadsAtom(environmentId));
+      const index = threads.some((thread) => (thread.sideQuestionOf ?? null) !== null)
+        ? get(environmentThreadIndexAtom(environmentId))
+        : EMPTY_THREAD_INDEX;
+      for (const thread of threads) {
         if (thread.archivedAt !== null || thread.lineage.relationshipToParent === "subagent")
           continue;
+        if (isNestedSideQuestion(thread, (threadId) => index.has(threadId))) continue;
         next.push(scopedThread(environmentId, thread));
       }
     }

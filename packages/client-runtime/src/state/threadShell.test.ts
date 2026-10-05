@@ -104,6 +104,39 @@ describe("v2 thread shell lists", () => {
     registry.dispose();
   });
 
+  it("lists side questions under their parent, even archived, but keeps orphans", () => {
+    const { registry, threads, snapshotAtom } = makeHarness();
+    const parent = v2ThreadShell;
+    const archivedParent = {
+      ...parent,
+      id: ThreadId.make("archived-parent"),
+      archivedAt: parent.updatedAt,
+    };
+    const sideQuestion = (id: string, parentId: ThreadId) => ({
+      ...parent,
+      id: ThreadId.make(id),
+      lineage: { ...parent.lineage, parentThreadId: parentId },
+      sideQuestionOf: parentId,
+    });
+    registry.set(snapshotAtom(environmentId), {
+      ...v2ShellSnapshot,
+      threads: [
+        parent,
+        archivedParent,
+        sideQuestion("side", parent.id),
+        sideQuestion("side-of-archived", archivedParent.id),
+        sideQuestion("orphan", ThreadId.make("gone")),
+      ],
+    });
+    const dispose = registry.mount(threads.navigationThreadShellsAtom);
+    expect(registry.get(threads.navigationThreadShellsAtom).map((thread) => thread.id)).toEqual([
+      parent.id,
+      "orphan",
+    ]);
+    dispose();
+    registry.dispose();
+  });
+
   it("shares point and list values without retaining an atom for every listed thread", () => {
     const harness = makeHarness();
     const snapshot = {

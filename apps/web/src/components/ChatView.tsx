@@ -87,6 +87,12 @@ import {
 import { readPastedComposerContext } from "./composerInlineTokenPaste";
 import { isPasteAsTextShortcut } from "@t3tools/client-runtime/text-paste";
 import { effectiveSnoozed, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
+import {
+  parseSideQuestionCommand,
+  resolveSideQuestionSubmission,
+  sideQuestionFromComposerText,
+  sideQuestionRejectionMessage,
+} from "@t3tools/client-runtime/state/side-questions";
 import { useAcknowledgeThreadWoke, useThreadActions } from "../hooks/useThreadActions";
 import {
   deriveProviderSubagentStatus,
@@ -275,6 +281,7 @@ import { PullRequestDetailPanel } from "./pullRequest/PullRequestDetailPanel";
 import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
 import { RightPanelTabs } from "./RightPanelTabs";
+import { SideQuestionChips, SideQuestionPanel } from "./chat/SideQuestionPanel";
 import { LinkPullRequestDialogHost } from "./pullRequest/LinkPullRequestDialog";
 import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
 import { useDeviceState } from "~/state/device";
@@ -415,6 +422,7 @@ import {
   resolveThreadDetailRef,
   useProject,
   useProjects,
+  useSideQuestionShells,
   useThreadProjection,
   useThreadStatus,
   useThreadHistory,
@@ -1535,7 +1543,7 @@ export default function ChatView(props: ChatViewProps) {
   } = props;
   const draftId = routeKind === "draft" ? props.draftId : null;
   const handleNewThread = useNewThreadHandler();
-  const { settleThread, pinThread, confirmAndUnpinThread } = useThreadActions();
+  const { settleThread, pinThread, confirmAndUnpinThread, askSideQuestion } = useThreadActions();
   const routeThreadRef = useMemo(
     () => scopeThreadRef(environmentId, threadId),
     [environmentId, threadId],
@@ -5292,6 +5300,82 @@ export default function ChatView(props: ChatViewProps) {
     }
     useRightPanelStore.getState().open(activeThreadRef, "device");
   }, [activeThreadRef, deviceState.onboardingCompleted, deviceState.hostStatus]);
+  const openSideQuestionSurface = useCallback(
+    (sideQuestionThreadId: ThreadId) => {
+      if (!activeThreadRef) return;
+      useRightPanelStore.getState().openSideQuestion(activeThreadRef, sideQuestionThreadId);
+    },
+    [activeThreadRef],
+  );
+  // T3 answers `/btw` only where the server advertises side questions;
+  // elsewhere the name stays the provider's own and is sent through untouched.
+  const serverOffersSideQuestions =
+    serverConfig?.environment.capabilities.threadSideQuestions === true;
+  const sideQuestionsSupported = isServerThread && serverOffersSideQuestions;
+  const sideQuestionShells = useSideQuestionShells(isServerThread ? activeThreadRef : null);
+  // `/btw <question>` and its shortcut: ask a side question about this thread
+  // and show the answer in the right panel. A bare `/btw` reopens the latest.
+  const submitSideQuestion = useCallback(
+    async (question: string, modelSelection: ModelSelection | undefined) => {
+      const submission = resolveSideQuestionSubmission({
+        question,
+        hasThread: isServerThread && activeThreadRef !== null,
+        supported: serverOffersSideQuestions,
+        hasNonTextContent: composerHasNonPromptContent,
+        latestSideQuestionId: sideQuestionShells.at(-1)?.id ?? null,
+      });
+      if (submission.type === "rejected") {
+        toastManager.add(
+          stackedThreadToast({
+            type: submission.reason === "unsupported" ? "warning" : "info",
+            ...sideQuestionRejectionMessage(submission.reason),
+          }),
+        );
+        return;
+      }
+      if (activeThreadRef === null) return;
+      const promptSnapshot = promptRef.current;
+      promptRef.current = "";
+      composerRef.current?.resetCursorState();
+      if (submission.type === "open") {
+        // Only the typed `/btw` goes; anything else in the composer stays.
+        setComposerDraftPrompt(composerDraftTarget, "");
+        openSideQuestionSurface(submission.threadId);
+        return;
+      }
+      clearComposerDraftContent(composerDraftTarget);
+      const result = await askSideQuestion(
+        activeThreadRef,
+        submission.question,
+        modelSelection !== undefined ? { modelSelection } : undefined,
+      );
+      if (result._tag === "Failure") {
+        promptRef.current = promptSnapshot;
+        setComposerDraftPrompt(composerDraftTarget, promptSnapshot);
+        const error = squashAtomCommandFailure(result);
+        setThreadError(
+          activeThreadRef.threadId,
+          error instanceof Error ? error.message : "Failed to ask the side question.",
+        );
+        return;
+      }
+      openSideQuestionSurface(result.value.threadId);
+    },
+    [
+      activeThreadRef,
+      askSideQuestion,
+      clearComposerDraftContent,
+      composerDraftTarget,
+      composerHasNonPromptContent,
+      composerRef,
+      isServerThread,
+      openSideQuestionSurface,
+      serverOffersSideQuestions,
+      setComposerDraftPrompt,
+      setThreadError,
+      sideQuestionShells,
+    ],
+  );
   // A device the agent opens floats over chat like an agent-driven browser,
   // or becomes a panel tab when floating previews are off. Sessions opened by
   // another client arrive the same way; sheet layouts get neither. The first
@@ -7850,6 +7934,18 @@ export default function ChatView(props: ChatViewProps) {
         return;
       }
 
+      if (command === "thread.askSideQuestion") {
+        if (routeKind === "draft") return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (event.repeat) return;
+        void submitSideQuestion(
+          sideQuestionFromComposerText(promptRef.current),
+          composerRef.current?.getSendContext()?.selectedModelSelection,
+        );
+        return;
+      }
+
       if (command === "thread.steerQueuedMessage") {
         if (routeKind === "draft") return;
         if (!queuedRunsControlRef.current?.steerNext(event.repeat)) return;
@@ -7890,6 +7986,7 @@ export default function ChatView(props: ChatViewProps) {
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
   }, [
+    submitSideQuestion,
     activeProject,
     activeRightPanelSurface,
     activeProjectScripts,
@@ -8512,6 +8609,14 @@ export default function ChatView(props: ChatViewProps) {
       interactionMode: sendInteractionMode,
       interactionModeEnabled: sendInteractionModeEnabled,
     } = sendCtx;
+    const sideQuestionCommand =
+      serverOffersSideQuestions && !directAnnotation && multipleModelSelections === null
+        ? parseSideQuestionCommand(promptRef.current)
+        : null;
+    if (sideQuestionCommand !== null) {
+      await submitSideQuestion(sideQuestionCommand.question, ctxSelectedModelSelection);
+      return;
+    }
     const annotationImageAlreadyAttached =
       directAnnotation?.image !== undefined &&
       sendContextImages.some((image) => image.id === directAnnotation.image?.id);
@@ -10654,6 +10759,13 @@ export default function ChatView(props: ChatViewProps) {
       />
     ) : renderedRightPanelSurface?.kind === "pull-requests" && activeThreadRef ? (
       <ThreadPullRequestsPanel threadRef={activeThreadRef} />
+    ) : renderedRightPanelSurface?.kind === "side-question" && activeThreadRef ? (
+      <SideQuestionPanel
+        key={renderedRightPanelSurface.id}
+        environmentId={activeThreadRef.environmentId}
+        sideQuestionThreadId={renderedRightPanelSurface.threadId}
+        onClose={() => closeRightPanelSurface(renderedRightPanelSurface)}
+      />
     ) : renderedRightPanelSurface?.kind === "device" ? (
       <Suspense fallback={null}>
         <DevicePanel
@@ -11163,6 +11275,12 @@ export default function ChatView(props: ChatViewProps) {
                               }
                             />
                           ) : null}
+                          {sideQuestionsSupported && activeThreadRef ? (
+                            <SideQuestionChips
+                              parentRef={activeThreadRef}
+                              onOpen={openSideQuestionSurface}
+                            />
+                          ) : null}
                           {!composerMounted ? null : (
                             <ChatComposer
                               reportedModelSelection={reportedModelSelection}
@@ -11276,6 +11394,7 @@ export default function ChatView(props: ChatViewProps) {
                               activeTasksProgress={activeComposerTasksProgress}
                               activeTaskSteps={activeComposerTaskSteps}
                               compactThreadUnavailable={compactThreadUnavailable}
+                              sideQuestionsSupported={sideQuestionsSupported}
                               compactDisabled={compactDisabled}
                               compactDisabledReason={compactDisabledReason}
                               resolvedTheme={resolvedTheme}

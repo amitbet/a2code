@@ -3,6 +3,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   parseSideQuestionCommand,
+  resolveSideQuestionSubmission,
+  sideQuestionFromComposerText,
   sideQuestionParentId,
   sideQuestionTitle,
   withoutNestedSideQuestions,
@@ -62,5 +64,62 @@ describe("withoutNestedSideQuestions", () => {
   it("returns the same array when nothing nests", () => {
     const plain = [parent];
     expect(withoutNestedSideQuestions(plain)).toBe(plain);
+  });
+});
+
+describe("sideQuestionFromComposerText", () => {
+  it("strips a typed /btw and otherwise sends the text as is", () => {
+    expect(sideQuestionFromComposerText("/btw why?")).toBe("why?");
+    expect(sideQuestionFromComposerText("  why is CI red?  ")).toBe("why is CI red?");
+    expect(sideQuestionFromComposerText("/btw")).toBe("");
+  });
+});
+
+describe("resolveSideQuestionSubmission", () => {
+  const latest = ThreadId.make("side-latest");
+  const base = {
+    question: "why?",
+    hasThread: true,
+    supported: true,
+    hasNonTextContent: false,
+    latestSideQuestionId: latest,
+  };
+
+  it("asks the trimmed question", () => {
+    expect(resolveSideQuestionSubmission({ ...base, question: "  why?  " })).toEqual({
+      type: "ask",
+      question: "why?",
+    });
+  });
+
+  it("reopens the latest side question for a bare /btw", () => {
+    expect(resolveSideQuestionSubmission({ ...base, question: " " })).toEqual({
+      type: "open",
+      threadId: latest,
+    });
+    expect(
+      resolveSideQuestionSubmission({ ...base, question: "", latestSideQuestionId: null }),
+    ).toEqual({ type: "rejected", reason: "nothing-to-open" });
+  });
+
+  it("refuses without a started thread, before checking the server", () => {
+    expect(resolveSideQuestionSubmission({ ...base, hasThread: false, supported: false })).toEqual({
+      type: "rejected",
+      reason: "no-thread",
+    });
+    expect(resolveSideQuestionSubmission({ ...base, supported: false })).toEqual({
+      type: "rejected",
+      reason: "unsupported",
+    });
+  });
+
+  it("refuses attachments for a new question but still reopens with them", () => {
+    expect(resolveSideQuestionSubmission({ ...base, hasNonTextContent: true })).toEqual({
+      type: "rejected",
+      reason: "text-only",
+    });
+    expect(
+      resolveSideQuestionSubmission({ ...base, question: "", hasNonTextContent: true }),
+    ).toEqual({ type: "open", threadId: latest });
   });
 });
