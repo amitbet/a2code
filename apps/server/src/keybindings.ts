@@ -104,6 +104,34 @@ function isSameKeybindingRule(left: KeybindingRule, right: KeybindingRule): bool
   );
 }
 
+// Fork: `/btw` used to default to mod+alt+enter, which upstream now binds to
+// composer.sendAndNewThread. An untouched old rule moves to the current
+// default once (recorded like late defaults); a user-edited rule stays.
+const FORK_SIDE_QUESTION_SHORTCUT_MIGRATION = {
+  id: "fork:thread.askSideQuestion:mod+shift+b",
+  legacy: {
+    key: "mod+alt+enter",
+    command: "thread.askSideQuestion",
+    when: "!terminalFocus",
+  },
+} as const satisfies { readonly id: string; readonly legacy: KeybindingRule };
+
+function migrateForkSideQuestionShortcut(
+  config: ReadonlyArray<KeybindingRule>,
+): ReadonlyArray<KeybindingRule> | null {
+  const current = DEFAULT_KEYBINDINGS.find(
+    (rule) => rule.command === FORK_SIDE_QUESTION_SHORTCUT_MIGRATION.legacy.command,
+  );
+  if (!current) return null;
+  const index = config.findIndex((entry) =>
+    isSameKeybindingRule(entry, FORK_SIDE_QUESTION_SHORTCUT_MIGRATION.legacy),
+  );
+  if (index === -1) return null;
+  const next = [...config];
+  next[index] = current;
+  return next;
+}
+
 // Default rules added to a command after startup sync had already persisted
 // that command. Backfill skips commands a config already has, so startup adds
 // each rule once per config, only next to the untouched earlier default
@@ -530,7 +558,13 @@ const make = Effect.gen(function* () {
         yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
         return;
       }
-      const customConfig = runtimeConfig.keybindings;
+      let customConfig = runtimeConfig.keybindings;
+      let forkMigrationApplied = false;
+      if (!appliedMigrationIds.has(FORK_SIDE_QUESTION_SHORTCUT_MIGRATION.id)) {
+        const migrated = migrateForkSideQuestionShortcut(customConfig);
+        if (migrated !== null) customConfig = migrated;
+        forkMigrationApplied = true;
+      }
       const existingCommands = new Set(customConfig.map((entry) => entry.command));
       const missingDefaults: KeybindingRule[] = [];
       const shortcutConflictWarnings: Array<{
@@ -603,17 +637,18 @@ const make = Effect.gen(function* () {
           commands: skippedDefaults.map((rule) => rule.command),
         });
       }
-      if (defaultsToAppend.length > 0) {
+      if (defaultsToAppend.length > 0 || customConfig !== runtimeConfig.keybindings) {
         yield* writeConfigAtomically([...customConfig, ...defaultsToAppend]);
       }
       // A late default skipped at max entries stays pending for a later start.
       const settledLateDefaults = pendingLateDefaults.filter(
         (late) => !skippedDefaults.includes(late.rule),
       );
-      if (settledLateDefaults.length > 0) {
+      if (settledLateDefaults.length > 0 || forkMigrationApplied) {
         yield* recordAppliedMigrations([
           ...appliedMigrationIds,
           ...settledLateDefaults.map((late) => late.id),
+          ...(forkMigrationApplied ? [FORK_SIDE_QUESTION_SHORTCUT_MIGRATION.id] : []),
         ]);
       }
       yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);

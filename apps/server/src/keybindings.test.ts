@@ -307,6 +307,48 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }).pipe(Effect.provide(makeKeybindingsLayer())),
   );
 
+  it.effect("moves the fork's old /btw shortcut off mod+alt+enter once", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+      const keybindings = yield* Keybindings.Keybindings;
+      const legacy = {
+        key: "mod+alt+enter",
+        command: "thread.askSideQuestion",
+        when: "!terminalFocus",
+      } as const;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [legacy]);
+
+      yield* keybindings.syncDefaultKeybindingsOnStartup;
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.deepStrictEqual(
+        persisted.filter((entry) => entry.command === "thread.askSideQuestion"),
+        [
+          {
+            key: "mod+shift+b",
+            command: "thread.askSideQuestion",
+            when: "!terminalFocus && !draftThreadRoute",
+          },
+        ],
+      );
+      // The freed shortcut goes back to upstream's default.
+      assert.isTrue(
+        persisted.some(
+          (entry) => entry.key === "mod+alt+enter" && entry.command === "composer.sendAndNewThread",
+        ),
+      );
+
+      // A user who later binds /btw back to mod+alt+enter keeps it.
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [legacy]);
+      yield* keybindings.syncDefaultKeybindingsOnStartup;
+      assert.deepStrictEqual(
+        (yield* readKeybindingsConfig(keybindingsConfigPath)).filter(
+          (entry) => entry.command === "thread.askSideQuestion",
+        ),
+        [legacy],
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
   it.effect("leaves a customized command without the late default", () =>
     Effect.gen(function* () {
       const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;

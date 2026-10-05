@@ -1935,6 +1935,10 @@ forks use upstream's portable handoff; see the 2026-10-05 notes for the full-tra
   instructions on every turn until promoted. Context is a ready context handoff built from the
   parent's full projection, **including the running turn**. At most 5 unarchived side questions per
   parent (oldest archived after commit). Capability `threadSideQuestions`.
+- **Shortcut:** `thread.askSideQuestion` defaults to `mod+shift+b` (upstream took `mod+alt+enter` for
+  `composer.sendAndNewThread`); a one-time keybindings migration
+  (`fork:thread.askSideQuestion:mod+shift+b` in `apps/server/src/keybindings.ts`) moves an untouched
+  old rule.
 - **Clients:** `@t3tools/client-runtime/state/side-questions` (parse/title/filter helpers),
   `sideQuestionShellsAtom`, `askSideQuestion` / `promoteSideQuestion` thread commands. Web: chips +
   `side-question` right panel, nested rows in the project tree, hidden from flat lists. Mobile:
