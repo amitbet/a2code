@@ -1297,6 +1297,18 @@ environments leaves a project route that belongs to the previous environment.
 The per-thread environment picker was removed from `ChatView`; project/thread
 records still retain their underlying `environmentId` associations.
 
+- **Why machines are not interchangeable here.** Upstream treats environments as
+  interchangeable workers: load balancing, a per-draft "next machine" keybinding
+  (#15391), no-project drafts that switch machines (#15356), and the per-thread
+  environment picker in `BranchToolbar`. In the fork each machine has its own
+  role and OS install, and a thread runs where it does because of what that
+  machine is, not because it had spare capacity. So upstream's multi-machine work
+  never replaces the machine scope. **Merge rule:** take features that treat a
+  machine as one identity (several routes to one environment #15467, LAN/tailnet
+  address discovery #15468, updating providers on every machine #14678). Keep
+  load balancing off and keep the per-thread picker out. Per-draft machine
+  stepping either stays out or is pointed at the global scope (cycling
+  `MachineSwitcher`) rather than at the draft.
 - **State and selector:** `apps/web/src/state/machineScope.ts` owns the
   persisted selection (`t3code:machine-scope:v1`), fallback resolution, and
   `apps/web/src/components/sidebar/MachineSwitcher.tsx` owns the sidebar UI.
