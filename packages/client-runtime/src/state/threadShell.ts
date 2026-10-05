@@ -22,6 +22,11 @@ import {
 } from "./entities.ts";
 
 const EMPTY_THREADS: ReadonlyArray<OrchestrationV2ThreadShell> = Object.freeze([]);
+const EMPTY_THREAD_SHELLS: ReadonlyArray<EnvironmentThreadShell> = Object.freeze([]);
+const EMPTY_SIDE_QUESTIONS_BY_PARENT: ReadonlyMap<
+  ThreadId,
+  ReadonlyArray<EnvironmentThreadShell>
+> = new Map();
 const EMPTY_SCOPED_THREAD_REFS: ReadonlyArray<ScopedThreadRef> = Object.freeze([]);
 const EMPTY_THREAD_INDEX: ReadonlyMap<ThreadId, OrchestrationV2ThreadShell> = new Map();
 const EMPTY_THREAD_REFS_BY_PROJECT: ReadonlyMap<
@@ -171,6 +176,49 @@ export function createEnvironmentThreadShellAtoms(input: {
     }).pipe(Atom.withLabel(`environment-thread-shells-for-projects:${key}`));
   });
 
+  // Unarchived `/btw` side questions grouped by the thread they were asked
+  // about, oldest first. Grouped once per environment so per-parent reads
+  // (one per thread row or composer) stay O(1) on every shell update.
+  const environmentSideQuestionsByParentAtom = Atom.family((environmentId: EnvironmentId) =>
+    Atom.make((get): ReadonlyMap<ThreadId, ReadonlyArray<EnvironmentThreadShell>> => {
+      const grouped = new Map<ThreadId, EnvironmentThreadShell[]>();
+      for (const thread of get(environmentThreadsAtom(environmentId))) {
+        const parentId = thread.sideQuestionOf ?? null;
+        if (parentId === null || thread.archivedAt !== null) continue;
+        const shell = scopedThread(environmentId, thread);
+        const siblings = grouped.get(parentId);
+        if (siblings === undefined) {
+          grouped.set(parentId, [shell]);
+        } else {
+          siblings.push(shell);
+        }
+      }
+      if (grouped.size === 0) return EMPTY_SIDE_QUESTIONS_BY_PARENT;
+      for (const siblings of grouped.values()) {
+        siblings.sort(
+          (left, right) =>
+            left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+        );
+      }
+      return grouped;
+    }).pipe(Atom.withLabel(`environment-thread-side-questions-by-parent:${environmentId}`)),
+  );
+
+  const sideQuestionShellsAtomFamily = Atom.family((key: string) => {
+    const ref = parseThreadKey(key);
+    let previous: ReadonlyArray<EnvironmentThreadShell> = EMPTY_THREAD_SHELLS;
+    return Atom.make((get) => {
+      const next =
+        get(environmentSideQuestionsByParentAtom(ref.environmentId)).get(ref.threadId) ??
+        EMPTY_THREAD_SHELLS;
+      if (arrayElementsEqual(previous, next)) {
+        return previous;
+      }
+      previous = next;
+      return previous;
+    }).pipe(Atom.withLabel(`environment-thread-side-questions:${key}`));
+  });
+
   let previousThreadRefs: ReadonlyArray<ScopedThreadRef> = [];
   const threadRefsAtom = Atom.make((get) => {
     const refs: ScopedThreadRef[] = [];
@@ -225,5 +273,7 @@ export function createEnvironmentThreadShellAtoms(input: {
     threadShellsForProjectRefsAtom: (refs: ReadonlyArray<ScopedProjectRef>) =>
       threadShellsForProjectRefsAtomFamily(projectRefCollectionKey(refs)),
     threadShellAtom: (ref: ScopedThreadRef) => threadShellAtomFamily(threadKey(ref)),
+    /** Fork-only: the unarchived `/btw` side questions asked about `ref`, oldest first. */
+    sideQuestionShellsAtom: (ref: ScopedThreadRef) => sideQuestionShellsAtomFamily(threadKey(ref)),
   };
 }

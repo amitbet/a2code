@@ -374,6 +374,13 @@ export const OrchestrationV2AppThread = Schema.Struct({
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   historyOrigin: Schema.optional(OrchestrationV2ThreadHistoryOrigin),
   lineage: OrchestrationV2AppThreadLineage,
+  /**
+   * Fork-only: the thread a `/btw` side question was asked about. Set while the
+   * thread is a side question, cleared by `thread.side-question.promote`. The
+   * lineage also names the parent, with a null relationship, so upstream's
+   * fork and subagent paths never treat a side question as either.
+   */
+  sideQuestionOf: Schema.optional(Schema.NullOr(ThreadId)),
   forkedFrom: Schema.NullOr(
     Schema.Union([
       Schema.Struct({ type: Schema.Literal("run"), threadId: ThreadId, runId: RunId }),
@@ -1728,6 +1735,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   /** Pull request discovered from the thread's current branch. */
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   lineage: OrchestrationV2AppThreadLineage,
+  /** Fork-only `/btw` parent; omitted by servers without side questions. */
+  sideQuestionOf: Schema.optional(Schema.NullOr(ThreadId)),
   forkedFrom: Schema.NullOr(OrchestrationV2AppThread.fields.forkedFrom),
   activeProviderThreadId: Schema.NullOr(ProviderThreadId),
   historyOrigin: Schema.optional(OrchestrationV2ThreadHistoryOrigin),
@@ -2850,6 +2859,29 @@ export const OrchestrationV2Command = Schema.Union([
     sourcePoint: OrchestrationV2ThreadForkSourcePoint,
     title: Schema.optional(TrimmedNonEmptyString),
     createdAt: Schema.optional(Schema.DateTimeUtc),
+  }),
+  /**
+   * Fork-only `/btw`: creates `targetThreadId` as a side question of
+   * `sourceThreadId` and starts its first turn with `question`. The side
+   * question sees the source's history, including a turn still running there.
+   */
+  Schema.Struct({
+    type: Schema.Literal("thread.side-question.ask"),
+    ...OrchestrationV2CreationFields,
+    commandId: CommandId,
+    sourceThreadId: ThreadId,
+    targetThreadId: ThreadId,
+    messageId: MessageId,
+    question: TrimmedNonEmptyString,
+    title: Schema.optional(TrimmedNonEmptyString),
+    /** Defaults to the source thread's selection. */
+    modelSelection: Schema.optional(ModelSelection),
+  }),
+  /** Fork-only: turns a side question into a regular thread. */
+  Schema.Struct({
+    type: Schema.Literal("thread.side-question.promote"),
+    commandId: CommandId,
+    threadId: ThreadId,
   }),
   Schema.Struct({
     type: Schema.Literal("thread.merge_back"),

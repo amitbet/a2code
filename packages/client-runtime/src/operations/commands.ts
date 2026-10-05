@@ -8,7 +8,7 @@ import {
   OrchestrationV2CheckpointUnavailableError,
   WS_METHODS,
   type ChatAttachment,
-  type MessageId,
+  MessageId,
   type ModelSelection,
   type OrchestrationV2Command,
   type OrchestrationV2CreationSource,
@@ -32,6 +32,7 @@ import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 
 import { getInitialServerConfig, request } from "../rpc/client.ts";
+import { sideQuestionTitle } from "../state/sideQuestions.ts";
 
 interface CommandMetadata {
   readonly commandId?: CommandId;
@@ -223,6 +224,23 @@ export interface ForkThreadAtLatestInput extends CommandMetadata {
   readonly targetThreadId: ThreadId;
   readonly title?: string;
 }
+
+/**
+ * Fork-only `/btw`: ask `question` about `sourceThreadId` in a new side-question
+ * thread `targetThreadId`, while the source's agent keeps working.
+ */
+export interface AskSideQuestionInput extends CommandMetadata {
+  readonly sourceThreadId: ThreadId;
+  readonly targetThreadId: ThreadId;
+  readonly question: string;
+  /** Generated when omitted. */
+  readonly messageId?: MessageId;
+  /** Defaults to the source thread's model selection on the server. */
+  readonly modelSelection?: ModelSelection;
+}
+
+/** Fork-only: keep a side question as a regular thread. */
+export type PromoteSideQuestionInput = ThreadCommandInput;
 
 export interface MergeThreadBackInput extends CommandMetadata {
   readonly sourceThreadId: ThreadId;
@@ -946,6 +964,34 @@ export const forkThreadAtLatest = Effect.fn("EnvironmentCommands.forkThreadAtLat
     targetThreadId: input.targetThreadId,
     sourcePoint: { type: "latest_stable" },
     ...(input.title === undefined ? {} : { title: input.title }),
+  });
+});
+
+export const askSideQuestion = Effect.fn("EnvironmentCommands.askSideQuestion")(function* (
+  input: AskSideQuestionInput,
+) {
+  const crypto = yield* Crypto.Crypto;
+  return yield* dispatch({
+    type: "thread.side-question.ask",
+    commandId: yield* allocateCommandId(input),
+    createdBy: "user",
+    creationSource: input.creationSource ?? "web",
+    sourceThreadId: input.sourceThreadId,
+    targetThreadId: input.targetThreadId,
+    messageId: input.messageId ?? MessageId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie)),
+    question: input.question.trim(),
+    title: sideQuestionTitle(input.question),
+    ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
+  });
+});
+
+export const promoteSideQuestion = Effect.fn("EnvironmentCommands.promoteSideQuestion")(function* (
+  input: PromoteSideQuestionInput,
+) {
+  return yield* dispatch({
+    type: "thread.side-question.promote",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
   });
 });
 

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   parseSideQuestionCommand,
+  sideQuestionParentId,
   sideQuestionTitle,
   withoutNestedSideQuestions,
 } from "./sideQuestions.ts";
@@ -44,6 +45,18 @@ describe("withoutNestedSideQuestions", () => {
       "parent",
       "orphan",
     ]);
+  });
+
+  it("reads the marker from a presented shell's source", () => {
+    const presentedParent = { id: ThreadId.make("parent"), source: {} };
+    const presentedChild = {
+      id: ThreadId.make("child"),
+      source: { sideQuestionOf: ThreadId.make("parent") },
+    };
+    expect(sideQuestionParentId(presentedChild)).toBe("parent");
+    expect(
+      withoutNestedSideQuestions([presentedParent, presentedChild]).map((thread) => thread.id),
+    ).toEqual(["parent"]);
   });
 
   it("returns the same array when nothing nests", () => {

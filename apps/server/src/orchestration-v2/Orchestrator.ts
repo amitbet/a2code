@@ -119,6 +119,12 @@ import {
   ThreadForkServiceV2,
 } from "./ThreadForkService.ts";
 import { planThreadDeletion } from "./ThreadDeletion.ts";
+import {
+  isSideQuestionThread,
+  makeSideQuestionThread,
+  sideQuestionHandoffCoverage,
+  sideQuestionsOverCap,
+} from "./SideQuestion.ts";
 
 export class OrchestratorDispatchError extends Schema.TaggedError<OrchestratorDispatchError>()(
   "OrchestratorDispatchError",
@@ -419,6 +425,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "checkpoint.rollback.fail":
     case "thread.background-work.settle":
     case "provider.switch":
+    case "thread.side-question.promote":
       return command.threadId;
     case "delegated_task.request":
     case "delegated_task.wake-policy":
@@ -428,6 +435,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
       return command.parentThreadId;
     case "thread.fork":
     case "thread.merge_back":
+    case "thread.side-question.ask":
       return command.targetThreadId;
   }
 }
@@ -2336,6 +2344,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           | "thread.runtime-mode.set"
           | "thread.interaction-mode.set"
           | "thread.model-selection.set"
+          | "thread.side-question.promote"
           | "provider.switch";
       }
     >,
@@ -2358,6 +2367,28 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cause: `Thread ${command.threadId} is deleted.`,
       });
     }
+    if (command.type === "thread.side-question.promote" && !isSideQuestionThread(thread)) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Thread ${command.threadId} is not a side question.`,
+      });
+    }
+    // A promoted side question takes the parent's runtime mode back; a parent
+    // that is gone leaves the side question's approval-required mode in place.
+    const promotedRuntimeMode =
+      command.type === "thread.side-question.promote" && thread.sideQuestionOf != null
+        ? yield* projectionStore.getThread(thread.sideQuestionOf).pipe(
+            Effect.map((parent) =>
+              parent.deletedAt === null ? parent.runtimeMode : thread.runtimeMode,
+            ),
+            Effect.orElseSucceed(() => thread.runtimeMode),
+          )
+        : thread.runtimeMode;
+    const runtimeModeChanges =
+      command.type === "thread.runtime-mode.set" ||
+      (command.type === "thread.side-question.promote" &&
+        promotedRuntimeMode !== thread.runtimeMode);
     if (
       command.type === "thread.pull-request.watch" &&
       command.watching &&
@@ -2550,7 +2581,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
 
     const needsProviderState =
-      command.type === "thread.runtime-mode.set" ||
+      runtimeModeChanges ||
       command.type === "thread.model-selection.set" ||
       command.type === "provider.switch" ||
       command.type === "thread.archive" ||
@@ -3057,6 +3088,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             : thread;
         case "thread.runtime-mode.set":
           return { ...thread, runtimeMode: command.runtimeMode, updatedAt: now };
+        case "thread.side-question.promote":
+          return {
+            ...thread,
+            sideQuestionOf: null,
+            runtimeMode: promotedRuntimeMode,
+            updatedAt: now,
+          };
         case "thread.interaction-mode.set":
           return { ...thread, interactionMode: command.interactionMode, updatedAt: now };
         case "thread.model-selection.set":
@@ -3107,6 +3145,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return "thread.pull-request-synced" as const;
         case "thread.runtime-mode.set":
           return "thread.runtime-mode-updated" as const;
+        case "thread.side-question.promote":
+          return runtimeModeChanges
+            ? ("thread.runtime-mode-updated" as const)
+            : ("thread.metadata-updated" as const);
         case "thread.interaction-mode.set":
           return "thread.interaction-mode-updated" as const;
         case "thread.model-selection.set":
@@ -3213,7 +3255,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             command.worktreePath !== undefined &&
             command.worktreePath !== thread.worktreePath
           ? (providerContext?.providerSessions ?? []).map((session) => session.id)
-          : command.type === "thread.runtime-mode.set"
+          : runtimeModeChanges
             ? (providerContext?.providerSessions ?? [])
                 .filter(
                   (session) => !session.capabilities.sessions.supportsRuntimeModeSwitchInSession,
@@ -3251,7 +3293,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                       ? "Thread settled."
                       : command.type === "thread.metadata.update"
                         ? "Workspace changed."
-                        : command.type === "thread.runtime-mode.set"
+                        : runtimeModeChanges
                           ? "Runtime mode changed."
                           : "Provider or model selection changed.",
               },
@@ -3270,7 +3312,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                       ? "Thread settled."
                       : command.type === "thread.metadata.update"
                         ? "Workspace changed."
-                        : command.type === "thread.runtime-mode.set"
+                        : runtimeModeChanges
                           ? "Runtime mode changed."
                           : "Provider or model selection changed.",
                 // Terminal detaches revoke the thread's MCP credentials; other
@@ -3438,6 +3480,212 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       payload: transfer,
     });
   });
+
+  // Fork-only `/btw`: creates the side-question thread beside its parent and
+  // starts the question in the same decision. The parent's visible history,
+  // including a run still in flight, rides on the first run as a context
+  // handoff that ProviderTurnStartService delivers like any other.
+  const dispatchSideQuestionAsk = Effect.fn("orchestrationV2.dispatch.sideQuestionAsk")(function* (
+    command: Extract<OrchestrationV2Command, { readonly type: "thread.side-question.ask" }>,
+    events: Ref.Ref<Array<OrchestrationV2DomainEvent>>,
+    effects: Ref.Ref<Array<PendingOrchestrationEffectV2>>,
+  ) {
+    yield* Effect.annotateCurrentSpan({
+      "orchestration_v2.command_id": command.commandId,
+      "orchestration_v2.command_type": command.type,
+      "orchestration_v2.source_thread_id": command.sourceThreadId,
+      "orchestration_v2.target_thread_id": command.targetThreadId,
+    });
+    const reject = (cause: string) =>
+      new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause,
+      });
+    if (command.sourceThreadId === command.targetThreadId) {
+      return yield* reject("A side question needs a new thread id.");
+    }
+    const existingTarget = yield* projectionStore
+      .getThread(command.targetThreadId)
+      .pipe(Effect.option);
+    if (Option.isSome(existingTarget)) {
+      return yield* reject(`Thread ${command.targetThreadId} already exists.`);
+    }
+    const parent = yield* projectionStore.getThreadProjection(command.sourceThreadId).pipe(
+      Effect.mapError(
+        (cause) =>
+          new OrchestratorProjectionError({
+            threadId: command.sourceThreadId,
+            cause,
+          }),
+      ),
+    );
+    if (parent.thread.deletedAt !== null) {
+      return yield* reject(`Thread ${command.sourceThreadId} is deleted.`);
+    }
+    if (isSideQuestionThread(parent.thread)) {
+      return yield* reject(
+        "Ask side questions from the main thread, not from another side question.",
+      );
+    }
+    const modelSelection = command.modelSelection ?? parent.thread.modelSelection;
+    const adapter = yield* providerAdapters.get(modelSelection.instanceId).pipe(
+      Effect.mapError(
+        (cause) =>
+          new OrchestratorProviderAdapterError({
+            commandId: command.commandId,
+            providerInstanceId: modelSelection.instanceId,
+            cause,
+          }),
+      ),
+    );
+    const parentItems = parent.visibleTurnItems.map((row) => row.item);
+    if (parentItems.length > 0) {
+      const capabilities = yield* adapter.getCapabilities().pipe(
+        Effect.mapError(
+          (cause) =>
+            new OrchestratorProviderAdapterError({
+              commandId: command.commandId,
+              providerInstanceId: modelSelection.instanceId,
+              cause,
+            }),
+        ),
+      );
+      yield* enforceCommandPolicy(command)(
+        commandPolicy.ensureContextHandoff({
+          commandId: command.commandId,
+          threadId: command.targetThreadId,
+          providerInstanceId: modelSelection.instanceId,
+          capabilities,
+          strategy: "full_thread_summary",
+        }),
+      );
+    }
+    const now = yield* DateTime.now;
+    const sideThread = makeSideQuestionThread({
+      parent: parent.thread,
+      threadId: command.targetThreadId,
+      title: command.title,
+      modelSelection,
+      createdBy: command.createdBy,
+      creationSource: command.creationSource,
+      now,
+    });
+    const emitEvent = emit(events, command);
+    yield* emitEvent({
+      type: "thread.created",
+      threadId: command.targetThreadId,
+      driver: adapter.driver,
+      providerInstanceId: modelSelection.instanceId,
+      occurredAt: now,
+      payload: sideThread,
+    });
+    yield* dispatchMessage(
+      {
+        type: "message.dispatch",
+        createdBy: command.createdBy,
+        creationSource: command.creationSource,
+        commandId: command.commandId,
+        threadId: command.targetThreadId,
+        messageId: command.messageId,
+        text: command.question,
+        attachments: [],
+        modelSelection,
+        dispatchMode: { type: "start_immediately" },
+      },
+      events,
+      effects,
+    );
+
+    const sideProjection = yield* getProjectionWithPendingEvents(command.targetThreadId, events);
+    const run = sideProjection.runs[0];
+    const providerThread =
+      run === undefined ? undefined : providerThreadForRun(sideProjection, run);
+    if (run === undefined || providerThread === undefined) {
+      return yield* reject(`Side question ${command.targetThreadId} did not start a run.`);
+    }
+    if (parentItems.length === 0) return;
+    const parentRunOrdinals = parent.runs.map((candidate) => candidate.ordinal);
+    const handoff = yield* contextHandoffService
+      .prepareProviderHandoff({
+        threadId: command.targetThreadId,
+        targetRunId: run.id,
+        transferId: null,
+        fromProviderThreadIds: parent.providerThreads
+          .filter(
+            (candidate) =>
+              candidate.appThreadId === parent.thread.id && candidate.ownerNodeId === null,
+          )
+          .map((candidate) => candidate.id),
+        toProviderThreadId: providerThread.id,
+        fromProviderInstanceId: parent.thread.providerInstanceId,
+        toProviderInstanceId: modelSelection.instanceId,
+        coveredRunOrdinals: {
+          from: 1,
+          to: Math.max(1, ...parentRunOrdinals),
+        },
+        strategy: "full_thread_summary",
+        items: parentItems,
+        runs: parent.runs,
+        coverage: sideQuestionHandoffCoverage(parent.thread),
+        createdAt: now,
+      })
+      .pipe(mapDispatchError(command));
+    yield* emitEvent({
+      type: "context-handoff.updated",
+      threadId: command.targetThreadId,
+      runId: run.id,
+      providerInstanceId: modelSelection.instanceId,
+      occurredAt: now,
+      payload: handoff,
+    });
+    yield* emitEvent({
+      type: "provider-thread.updated",
+      threadId: command.targetThreadId,
+      driver: adapter.driver,
+      providerInstanceId: modelSelection.instanceId,
+      occurredAt: now,
+      payload: {
+        ...providerThread,
+        handoffIds: appendContextHandoffId(providerThread.handoffIds, handoff.id),
+      },
+    });
+    yield* emitEvent({
+      type: "run.updated",
+      threadId: command.targetThreadId,
+      runId: run.id,
+      providerInstanceId: modelSelection.instanceId,
+      occurredAt: now,
+      payload: { ...run, contextHandoffId: handoff.id },
+    });
+  });
+
+  // Keeps a parent at SIDE_QUESTION_MAX_UNARCHIVED_PER_PARENT side questions by
+  // archiving the oldest. Runs after the ask commits and outside its lock:
+  // each archive is an ordinary command under its own thread's lock.
+  const archiveSideQuestionsOverCap = (
+    command: Extract<OrchestrationV2Command, { readonly type: "thread.side-question.ask" }>,
+  ) =>
+    projectionStore.getSideQuestionThreadIds(command.sourceThreadId).pipe(
+      Effect.flatMap((oldestFirst) =>
+        Effect.forEach(
+          sideQuestionsOverCap(oldestFirst),
+          (threadId) =>
+            dispatchWithReceipt({
+              type: "thread.archive",
+              commandId: CommandId.make(`${command.commandId}:side-question-cap:${threadId}`),
+              threadId,
+            }),
+          { discard: true },
+        ),
+      ),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Failed to archive side questions over the per-thread cap", {
+          parentThreadId: command.sourceThreadId,
+          cause,
+        }),
+      ),
+    );
 
   const dispatchThreadMergeBack = Effect.fn("orchestrationV2.dispatch.threadMergeBack")(function* (
     command: Extract<OrchestrationV2Command, { readonly type: "thread.merge_back" }>,
@@ -9526,6 +9774,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.runtime-mode.set":
       case "thread.interaction-mode.set":
       case "thread.model-selection.set":
+      case "thread.side-question.promote":
       case "provider.switch":
         yield* dispatchThreadMutation(command, events, effects);
         break;
@@ -9659,6 +9908,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         break;
       case "thread.fork":
         yield* dispatchThreadFork(command, events);
+        break;
+      case "thread.side-question.ask":
+        yield* dispatchSideQuestionAsk(command, events, effects);
         break;
       case "thread.merge_back":
         yield* dispatchThreadMergeBack(command, events);
@@ -9873,8 +10125,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     } satisfies OrchestratorV2DispatchResult;
   });
 
-  const dispatchWithReceipt = (command: OrchestrationV2ServerCommand) =>
-    threadDispatch.withLock(commandThreadId(command), dispatchWithReceiptEffect(command));
+  const dispatchWithReceipt = (
+    command: OrchestrationV2ServerCommand,
+  ): Effect.Effect<OrchestratorV2DispatchResult, OrchestratorV2Error> =>
+    threadDispatch
+      .withLock(commandThreadId(command), dispatchWithReceiptEffect(command))
+      .pipe(
+        Effect.tap(() =>
+          command.type === "thread.side-question.ask"
+            ? archiveSideQuestionsOverCap(command)
+            : Effect.void,
+        ),
+      );
 
   const handleTerminalRun = (stored: OrchestrationV2StoredEvent) =>
     Effect.gen(function* () {

@@ -53,6 +53,7 @@ export function withCreationProvenance(
     case "message.dispatch":
     case "thread.fork":
     case "thread.merge_back":
+    case "thread.side-question.ask":
     case "delegated_task.request":
       return { ...command, ...provenance };
     default:
@@ -74,6 +75,7 @@ export function existingThreadIdsForCommand(
     case "thread.mark-unread":
       return [];
     case "thread.fork":
+    case "thread.side-question.ask":
       return [command.sourceThreadId];
     case "thread.merge_back":
       return command.sourceThreadId === command.targetThreadId

@@ -450,6 +450,10 @@ export interface ProjectionStoreV2Shape {
   readonly getRecoveryThreadIds: (
     kind: ProjectionRecoveryKind,
   ) => Effect.Effect<ReadonlyArray<ThreadId>, ProjectionStoreV2Error>;
+  /** Fork-only: a parent's unarchived, undeleted `/btw` side questions, oldest first. */
+  readonly getSideQuestionThreadIds: (
+    parentThreadId: ThreadId,
+  ) => Effect.Effect<ReadonlyArray<ThreadId>, ProjectionStoreV2Error>;
   readonly getUnreadableThreadIds: () => Effect.Effect<
     ReadonlyArray<ThreadId>,
     ProjectionStoreV2Error
@@ -1370,6 +1374,9 @@ export function threadShellFromProjection(
       ? {}
       : { activeOrderKey: projection.thread.activeOrderKey }),
     lineage: projection.thread.lineage,
+    ...(projection.thread.sideQuestionOf == null
+      ? {}
+      : { sideQuestionOf: projection.thread.sideQuestionOf }),
     forkedFrom: projection.thread.forkedFrom,
     activeProviderThreadId: projection.thread.activeProviderThreadId,
     ...(projection.thread.historyOrigin === undefined
@@ -1606,6 +1613,9 @@ function shellFromState(input: {
       ? {}
       : { activeOrderKey: input.state.thread.activeOrderKey }),
     lineage: input.state.thread.lineage,
+    ...(input.state.thread.sideQuestionOf == null
+      ? {}
+      : { sideQuestionOf: input.state.thread.sideQuestionOf }),
     forkedFrom: input.state.thread.forkedFrom,
     activeProviderThreadId: input.state.thread.activeProviderThreadId,
     ...(input.state.thread.historyOrigin === undefined
@@ -5214,6 +5224,23 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         )
         .pipe(Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })));
 
+    const getSideQuestionThreadIds: ProjectionStoreV2Shape["getSideQuestionThreadIds"] = (
+      parentThreadId,
+    ) =>
+      sql<{ readonly thread_id: ThreadId }>`
+        SELECT thread_id
+        FROM orchestration_v2_projection_threads
+        WHERE deleted_at IS NULL
+          AND archived_at IS NULL
+          AND CASE WHEN json_valid(payload_json)
+            THEN json_extract(payload_json, '$.sideQuestionOf') = ${parentThreadId}
+            ELSE 0 END
+        ORDER BY created_at ASC, thread_id ASC
+      `.pipe(
+        Effect.map((rows) => rows.map((row) => row.thread_id)),
+        Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
+      );
+
     const getThreadsWithPullRequests: ProjectionStoreV2Shape["getThreadsWithPullRequests"] = (
       threadId,
     ) =>
@@ -5563,6 +5590,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getProviderControlContext,
       getLimitRecoveryCandidates,
       getRecoveryThreadIds,
+      getSideQuestionThreadIds,
       getUnreadableThreadIds,
       getThreadSnapshot,
       getThreadSnapshotWindow,
@@ -5743,6 +5771,25 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 );
               })
               .toSorted((left, right) => left.id.localeCompare(right.id)),
+          ),
+        ),
+      getSideQuestionThreadIds: (parentThreadId) =>
+        Ref.get(replayState).pipe(
+          Effect.map((state) =>
+            [...state.projections.values()]
+              .map(({ thread }) => thread)
+              .filter(
+                (thread) =>
+                  thread.sideQuestionOf === parentThreadId &&
+                  thread.archivedAt === null &&
+                  thread.deletedAt === null,
+              )
+              .toSorted(
+                (left, right) =>
+                  DateTime.toEpochMillis(left.createdAt) -
+                    DateTime.toEpochMillis(right.createdAt) || left.id.localeCompare(right.id),
+              )
+              .map((thread) => thread.id),
           ),
         ),
       getRecoveryThreadIds: (kind) =>

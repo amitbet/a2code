@@ -29,6 +29,8 @@ import {
   type MarkThreadUnreadInput,
   type ForkThreadAtLatestInput,
   type ForkThreadFromRunInput,
+  type AskSideQuestionInput,
+  type PromoteSideQuestionInput,
   type MergeThreadBackInput,
   type PromoteQueuedRunInput,
   type ReorderQueuedRunInput,
@@ -63,6 +65,8 @@ import {
   interruptThreadTurn,
   forkThreadAtLatest,
   forkThreadFromRun,
+  askSideQuestion,
+  promoteSideQuestion,
   markThreadUnread,
   mergeThreadBack,
   promoteQueuedRun,
@@ -111,6 +115,8 @@ export type {
   MarkThreadUnreadInput,
   ForkThreadAtLatestInput,
   ForkThreadFromRunInput,
+  AskSideQuestionInput,
+  PromoteSideQuestionInput,
   MergeThreadBackInput,
   PromoteQueuedRunInput,
   ReorderQueuedRunInput,
@@ -337,6 +343,23 @@ export function createThreadEnvironmentAtoms<R, E>(
         key: ({ environmentId, input }) => JSON.stringify([environmentId, input.sourceThreadId]),
       },
     }),
+    // Fork-only `/btw`. Serialized per parent so asks keep their order and the
+    // server's per-parent cap archives the oldest deterministically.
+    askSideQuestion: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:ask-side-question",
+      execute: (input: AskSideQuestionInput) => askSideQuestion(input),
+      scheduler,
+      concurrency: {
+        mode: "serial",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.sourceThreadId]),
+      },
+    }),
+    promoteSideQuestion: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:promote-side-question",
+      execute: (input: PromoteSideQuestionInput) => promoteSideQuestion(input),
+      scheduler,
+      concurrency,
+    }),
     mergeBack: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:merge-back",
       execute: (input: MergeThreadBackInput) => mergeThreadBack(input),
@@ -494,6 +517,10 @@ export function createThreadEnvironmentAtoms<R, E>(
     reorderActive: optimistic.wrap(commands.reorderActive, (thread, input) => ({
       ...thread,
       activeOrderKey: input.orderKey,
+    })),
+    promoteSideQuestion: optimistic.wrap(commands.promoteSideQuestion, (thread) => ({
+      ...thread,
+      sideQuestionOf: null,
     })),
   };
 }

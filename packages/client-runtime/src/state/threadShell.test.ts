@@ -4,6 +4,7 @@ import {
   ThreadId,
   type OrchestrationV2ShellSnapshot,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import { Atom, AtomRegistry } from "effect/unstable/reactivity";
 import { describe, expect, it } from "vite-plus/test";
@@ -197,5 +198,50 @@ describe("v2 thread shell lists", () => {
       disposeList();
       harness.registry.dispose();
     }
+  });
+});
+
+describe("side question shells", () => {
+  it("lists a parent's unarchived side questions oldest first and stays stable", () => {
+    const { registry, threads, snapshotAtom } = makeHarness();
+    const parent = v2ThreadShell;
+    const later = DateTime.add(parent.createdAt, { minutes: 1 });
+    const side = (id: string, createdAt: DateTime.Utc, archived = false) => ({
+      ...parent,
+      id: ThreadId.make(id),
+      sideQuestionOf: parent.id,
+      createdAt,
+      archivedAt: archived ? createdAt : null,
+    });
+    const snapshot = {
+      ...v2ShellSnapshot,
+      threads: [
+        parent,
+        side("side-newer", later),
+        side("side-older", parent.createdAt),
+        side("side-archived", parent.createdAt, true),
+        { ...parent, id: ThreadId.make("unrelated") },
+      ],
+    };
+    registry.set(snapshotAtom(environmentId), snapshot);
+    const atom = threads.sideQuestionShellsAtom({ environmentId, threadId: parent.id });
+    const dispose = registry.mount(atom);
+    const before = registry.get(atom);
+    expect(before.map((thread) => thread.id)).toEqual(["side-older", "side-newer"]);
+    registry.set(
+      snapshotAtom(environmentId),
+      applyShellStreamEvent(snapshot, {
+        kind: "thread.updated",
+        location: "active",
+        sequence: 1,
+        thread: { ...snapshot.threads[4]!, title: "Updated" },
+      }),
+    );
+    expect(registry.get(atom)).toBe(before);
+    expect(
+      registry.get(threads.sideQuestionShellsAtom({ environmentId, threadId: ThreadId.make("x") })),
+    ).toEqual([]);
+    dispose();
+    registry.dispose();
   });
 });
