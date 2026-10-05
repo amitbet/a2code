@@ -175,6 +175,47 @@ it.layer(TestLayer)("ThreadSearch", (it) => {
     }),
   );
 
+  it.effect("restricts matches to one project before applying the limit", () =>
+    Effect.gen(function* () {
+      const projections = yield* ProjectionStore.ProjectionStoreV2;
+      const search = yield* ThreadSearch.ThreadSearch;
+      const home = ProjectId.make("project:scope-home");
+      const other = ProjectId.make("project:scope-other");
+      yield* createProject(home);
+      yield* createProject(other);
+      const homeThread = ThreadId.make("thread:scope-home");
+      const otherThread = ThreadId.make("thread:scope-other");
+      yield* Effect.forEach(
+        [
+          thread(homeThread, home),
+          message(homeThread, "scope-home", "assistant", "scopeword at home"),
+          // The other project's user match outranks the home assistant match globally.
+          thread(otherThread, other),
+          message(otherThread, "scope-other", "user", "scopeword elsewhere"),
+        ],
+        projections.apply,
+        { discard: true },
+      );
+
+      assert.deepEqual(
+        (yield* search.search({ query: "scopeword", limit: 1, projectId: home })).matches.map(
+          (match) => match.threadId,
+        ),
+        [homeThread],
+      );
+      assert.deepEqual(
+        (yield* search.search({ query: "scopeword" })).matches.map((match) => [
+          match.threadId,
+          match.projectId,
+        ]),
+        [
+          [otherThread, other],
+          [homeThread, home],
+        ],
+      );
+    }),
+  );
+
   it.effect("reports an unreadable match as a decode failure", () =>
     Effect.gen(function* () {
       const projections = yield* ProjectionStore.ProjectionStoreV2;

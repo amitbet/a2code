@@ -26,7 +26,11 @@ export class ThreadSearchError extends Schema.TaggedError<ThreadSearchError>()(
   }
 }
 
-const SearchRequest = Schema.Struct({ pattern: Schema.String, limit: Schema.Int });
+const SearchRequest = Schema.Struct({
+  pattern: Schema.String,
+  limit: Schema.Int,
+  projectId: Schema.NullOr(ProjectId),
+});
 const SearchRow = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
@@ -63,13 +67,14 @@ function buildSearchSnippet(text: string, query: string): string {
 /**
  * Searches the finished user and assistant messages of active V2 threads in
  * active projects. Legacy V1 transcripts that have not been imported yet are
- * not searched.
+ * not searched. A `projectId` restricts the search to that project before
+ * ranking, so the limit applies to the project's own matches.
  */
 export class ThreadSearch extends Context.Service<
   ThreadSearch,
   {
     readonly search: (
-      input: OrchestrationSearchThreadsInput,
+      input: OrchestrationSearchThreadsInput & { readonly projectId?: ProjectId | undefined },
     ) => Effect.Effect<OrchestrationSearchThreadsResult, ThreadSearchError>;
   }
 >()("t3/orchestration-v2/ThreadSearch") {}
@@ -83,7 +88,7 @@ export const make = Effect.gen(function* () {
   const searchRows = SqlSchema.findAll({
     Request: SearchRequest,
     Result: SearchRow,
-    execute: ({ pattern, limit }) => sql`
+    execute: ({ pattern, limit, projectId }) => sql`
       WITH candidate AS (
         SELECT
           threads.thread_id,
@@ -101,6 +106,7 @@ export const make = Effect.gen(function* () {
         WHERE threads.deleted_at IS NULL
           AND threads.archived_at IS NULL
           AND projects.deleted_at IS NULL
+          AND (${projectId} IS NULL OR threads.project_id = ${projectId})
           AND messages.streaming = 0
           AND messages.role IN ('user', 'assistant')
           AND json_extract(messages.payload_json, '$.text') LIKE ${pattern} ESCAPE '!'
@@ -141,6 +147,7 @@ export const make = Effect.gen(function* () {
       const rows = yield* searchRows({
         pattern: `%${escapeLikePattern(input.query)}%`,
         limit: input.limit ?? 50,
+        projectId: input.projectId ?? null,
       }).pipe(
         Effect.mapError(
           (cause) =>

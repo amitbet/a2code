@@ -233,8 +233,11 @@ const ThreadTransfersTool = Tool.make("t3_thread_transfers", {
 const ThreadSearchTool = Tool.make("t3_thread_search", {
   ...commandTool,
   description:
-    "Search active thread titles and content with the app's existing bounded search. Returns matches in the calling project from the global top matches; other-project matches are omitted, so this may return fewer than limit. No pagination or exhaustive-result guarantee.",
-  parameters: OrchestrationSearchThreadsInput,
+    "Search active thread titles and content with the app's existing bounded search, newest-relevant first. scope='project' (default) searches the calling project; scope='all' searches every project on this server. Each match carries its projectId; read a match with t3_thread_read. Prefer current-project results and widen to scope='all' only when they do not answer the question. No pagination or exhaustive-result guarantee.",
+  parameters: Schema.Struct({
+    ...OrchestrationSearchThreadsInput.fields,
+    scope: Schema.optional(Schema.Literals(["project", "all"])),
+  }),
   success: OrchestrationSearchThreadsResult,
   dependencies: [...commandTool.dependencies, ThreadSearch.ThreadSearch],
 })

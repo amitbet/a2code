@@ -829,49 +829,24 @@ const make = Effect.gen(function* () {
     });
 
   /**
-   * A thread the user attached as context (a `thread` record on one of their own messages)
-   * is readable even outside the calling project. Only records the user authored count:
-   * an agent cannot widen its own reach by writing a record.
+   * Any non-deleted thread on this server is readable by an orchestration-capable caller,
+   * including threads in other projects (found with `t3_thread_search` scope "all", or
+   * attached by the user as context). Reading has no side effects outside the caller's
+   * own direct children, so the project boundary only applies to mutations.
    */
-  const userAttachedThreadIds = (
-    parent: Pick<OrchestrationV2ThreadProjection, "messages">,
-  ): Set<ThreadId> => {
-    const ids = new Set<ThreadId>();
-    for (const message of parent.messages) {
-      if (message.role !== "user" || message.createdBy !== "user") continue;
-      for (const record of message.context?.records ?? []) {
-        if (record.kind === "thread" && "threadId" in record) ids.add(record.threadId);
-      }
-    }
-    return ids;
-  };
-
   const loadReadableThread = (scope: McpInvocationScope, threadId: ThreadId) =>
     Effect.gen(function* () {
       yield* requireCapability(scope);
       const parent = yield* loadProjection(scope.threadId);
-      const loadTarget = () =>
-        threadManagement
-          .getThreadRecords(threadId, ["runs", "runtimeRequests", "contextTransfers"])
-          .pipe(Effect.mapError(threadManagementFailure));
-      if (threadId === scope.threadId) return { parent, target: yield* loadTarget() } as const;
-      const target = yield* threadManagement
-        .getProjectThreadRecords({ projectId: parent.thread.projectId, threadId }, [
-          "runs",
-          "runtimeRequests",
-          "contextTransfers",
-        ])
-        .pipe(
-          Effect.mapError(threadManagementFailure),
-          Effect.catchIf(
-            (error) =>
-              error.code === "thread_not_found" && userAttachedThreadIds(parent).has(threadId),
-            loadTarget,
-          ),
-        );
-      if (target.thread.deletedAt !== null) {
-        return yield* failure("thread_not_found", `Thread ${threadId} is no longer available.`);
+      const shell = yield* threadManagement
+        .getThreadShell(threadId)
+        .pipe(Effect.mapError(threadManagementFailure));
+      if (shell === null || shell.deletedAt !== null) {
+        return yield* failure("thread_not_found", `Thread ${threadId} is not available.`);
       }
+      const target = yield* threadManagement
+        .getThreadRecords(threadId, ["runs", "runtimeRequests", "contextTransfers"])
+        .pipe(Effect.mapError(threadManagementFailure));
       return { parent, target } as const;
     });
 

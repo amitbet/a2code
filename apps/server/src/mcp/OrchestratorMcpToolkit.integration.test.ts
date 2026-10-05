@@ -2335,10 +2335,18 @@ describe("orchestrator MCP toolkit", () => {
             });
             expect((yield* orchestrator.getThreadShell(foreignThreadId))?.pinnedAt).toBeNull();
 
+            // Reads cross the project boundary; mutations above and below do not.
             const foreignReadCall = yield* invoke("t3_thread_read", {
               threadId: foreignThreadId,
             });
+            expect(foreignReadCall.isError).toBe(false);
             expect(foreignReadCall.structuredContent).toMatchObject({
+              thread: { threadId: foreignThreadId },
+            });
+            const missingReadCall = yield* invoke("t3_thread_read", {
+              threadId: ThreadId.make("thread:mcp-missing"),
+            });
+            expect(missingReadCall.structuredContent).toMatchObject({
               _tag: "OrchestratorMcpFailure",
               code: "thread_not_found",
             });
