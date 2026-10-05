@@ -188,7 +188,7 @@ describe("thread.side-question.ask", () => {
       assert.strictEqual(side.thread.projectId, ProjectId.make("side-question-project"));
       assert.strictEqual(side.thread.branch, "feature/side");
       assert.deepStrictEqual(side.thread.modelSelection, modelSelection);
-      assert.strictEqual(side.thread.runtimeMode, "approval-required");
+      assert.strictEqual(side.thread.runtimeMode, "full-access");
       assert.strictEqual(side.thread.interactionMode, "default");
 
       assert.lengthOf(side.runs, 1);

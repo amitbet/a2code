@@ -48,8 +48,8 @@ export function sideQuestionTurnNote(
 
 /**
  * The side-question thread for `parent`: same project and checkout, the
- * parent's model unless overridden, approval-required (the parent usually
- * edits the same checkout) and the default interaction mode.
+ * parent's model unless overridden, the parent's runtime mode (permissions)
+ * and the default interaction mode.
  */
 export function makeSideQuestionThread(input: {
   readonly parent: OrchestrationV2AppThread;
@@ -68,7 +68,7 @@ export function makeSideQuestionThread(input: {
     title: input.title ?? SIDE_QUESTION_DEFAULT_TITLE,
     providerInstanceId: input.modelSelection.instanceId,
     modelSelection: input.modelSelection,
-    runtimeMode: "approval-required",
+    runtimeMode: input.parent.runtimeMode,
     interactionMode: "default",
     branch: input.parent.branch,
     worktreePath: input.parent.worktreePath,

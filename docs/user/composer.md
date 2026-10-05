@@ -63,11 +63,12 @@ agent is doing right now, including the turn in progress. On web and desktop it 
 conversation, and each side question shows as a chip above the composer. On mobile, tap the chip
 to open it.
 
-A side question reads files freely but asks before it edits anything or runs commands, because
-the main agent is usually working in the same checkout. Follow-ups stay in the same side
-question. **Keep as thread** turns it into a regular fork with the parent's permissions; dismissing
-it archives it. `/btw` on its own reopens the latest side question, and `Cmd+Alt+Enter` on macOS
-or `Ctrl+Alt+Enter` on Windows and Linux asks the composer text as a side question
+A side question runs with the same permissions as its thread, so a full-access thread's side
+question doesn't stop for approvals. It is told to answer without changing files, because the
+main agent is usually working in the same checkout. Follow-ups stay in the same side question.
+**Keep as thread** turns it into a regular fork with the parent's permissions; dismissing it
+archives it. `/btw` on its own reopens the latest side question, and `Cmd+Shift+B` on macOS or
+`Ctrl+Shift+B` on Windows and Linux asks the composer text as a side question
 (`thread.askSideQuestion` in **Settings → Keybindings**). Side questions are text only.
 
 ## Queue messages offline on mobile

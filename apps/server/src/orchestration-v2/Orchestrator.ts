@@ -2374,8 +2374,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         cause: `Thread ${command.threadId} is not a side question.`,
       });
     }
-    // A promoted side question takes the parent's runtime mode back; a parent
-    // that is gone leaves the side question's approval-required mode in place.
+    // A promoted side question takes the parent's current runtime mode; a
+    // parent that is gone leaves the side question's own mode in place.
     const promotedRuntimeMode =
       command.type === "thread.side-question.promote" && thread.sideQuestionOf != null
         ? yield* projectionStore.getThread(thread.sideQuestionOf).pipe(
