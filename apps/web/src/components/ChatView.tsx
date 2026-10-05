@@ -420,6 +420,7 @@ import { environmentShell } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { createPageScrollController, type PageScrollKey } from "./chat/pageScrollController";
 import { isTimelineScrollTarget } from "./chat/timelineScrollTarget";
+import { isUserUpwardScroll, type TimelineScrollSample } from "./chat/timelineManualScroll";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
@@ -6077,6 +6078,8 @@ export default function ChatView(props: ChatViewProps) {
   const showScrollDebouncer = useRef(
     new Debouncer(() => setShowScrollToBottom(true), { wait: 150 }),
   );
+  // Last list scroll position, for the upward-scroll backstop in onIsAtEndChange.
+  const timelineScrollSampleRef = useRef<TimelineScrollSample | null>(null);
   const timelineScrollIntentRef = useRef<"toward-end" | "away-from-end" | null>(null);
   const timelineScrollModeRef = useRef<TimelineScrollMode>("following-end");
   // State mirror of the follow mode refs. LegendList's maintainScrollAtEnd
@@ -6100,6 +6103,7 @@ export default function ChatView(props: ChatViewProps) {
   const cancelTimelineLiveFollowForUserNavigation = useCallback(() => {
     cancelPositionRestoreRef.current?.();
     anchorUserScrollGenerationRef.current += 1;
+    timelineScrollSampleRef.current = null;
     const wasProgrammaticScrollMode = timelineScrollModeRef.current !== "free-scrolling";
     timelineScrollModeRef.current = "free-scrolling";
     liveFollowUserScrollGenerationRef.current = null;
@@ -6229,6 +6233,7 @@ export default function ChatView(props: ChatViewProps) {
   const scrollToEnd = useCallback((animated = false) => {
     cancelPositionRestoreRef.current?.();
     isAtEndRef.current = true;
+    timelineScrollSampleRef.current = null;
     timelineScrollModeRef.current = "following-end";
     liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;
     setTimelineLiveFollowEnabled(true);
@@ -6495,7 +6500,37 @@ export default function ChatView(props: ChatViewProps) {
     composerRef.current?.restoreAfterTimelineReachedEnd();
   }, [composerRef]);
 
+  // Fires on every list scroll event, so it doubles as the sampling point for
+  // the upward-scroll backstop: wheel, touch, pointer and key listeners cover
+  // most gestures, but any they miss (a remounted scroll node, scrollbar
+  // interactions without pointer events) must still stop live-follow.
   const onIsAtEndChange = useCallback((isAtEnd: boolean) => {
+    const state = legendListRef.current?.getState();
+    if (state) {
+      const sample: TimelineScrollSample = {
+        offset: state.scroll,
+        contentLength: state.contentLength,
+        scrollLength: state.scrollLength,
+      };
+      const previousSample = timelineScrollSampleRef.current;
+      timelineScrollSampleRef.current = sample;
+      // Anchor positioning drives its own scrolls; only treat upward movement
+      // as user navigation while the timeline is plainly following the end.
+      const anchorSettling =
+        pendingTimelineAnchorRef.current !== null ||
+        (positionedTimelineAnchorRef.current !== null &&
+          settledTimelineAnchorRef.current !== positionedTimelineAnchorRef.current);
+      if (
+        !anchorSettling &&
+        timelineScrollModeRef.current === "following-end" &&
+        isUserUpwardScroll(previousSample, sample)
+      ) {
+        cancelTimelineLiveFollowForUserNavigationRef.current();
+        showScrollDebouncer.current.maybeExecute();
+        isAtEndRef.current = false;
+        return;
+      }
+    }
     if (
       !isAtEnd &&
       liveFollowUserScrollGenerationRef.current === anchorUserScrollGenerationRef.current
@@ -6551,6 +6586,7 @@ export default function ChatView(props: ChatViewProps) {
     setPullRequestDialogState(null);
     const followEnd = readTimelinePosition(routeThreadKey)?.atEnd !== false;
     isAtEndRef.current = followEnd;
+    timelineScrollSampleRef.current = null;
     timelineScrollIntentRef.current = null;
     timelineScrollModeRef.current = followEnd ? "following-end" : "free-scrolling";
     liveFollowUserScrollGenerationRef.current = followEnd
