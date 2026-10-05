@@ -79,6 +79,7 @@ import type {
 } from "react-markdown";
 import ReactMarkdown from "react-markdown";
 import { toHtml } from "hast-util-to-html";
+import type { DiffsHighlighter } from "@pierre/diffs";
 import { createIncrementalMarkdownPlugin } from "../markdown-incremental";
 import { defaultUrlTransform } from "react-markdown";
 import rehypeRaw from "rehype-raw";
@@ -136,7 +137,7 @@ import { openInEditorMenuLabel } from "../editorLabels";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
 import { fnv1a32 } from "../lib/diffRendering";
 import { LRUCache } from "../lib/lruCache";
-import { getSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
+import { getOptionalSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
 import { GitHubIcon } from "./Icons";
 import { createIncrementalHighlightedDocument } from "../lib/incrementalHighlighting";
 import { HighlightedCodeLines } from "./chat/HighlightedCodeLines";
@@ -1212,11 +1213,102 @@ function MarkdownMermaidCodeBlock({
   );
 }
 
+function selectionIntersectsElement(element: HTMLElement | null): boolean {
+  if (!element || typeof window === "undefined" || typeof window.getSelection !== "function") {
+    return false;
+  }
+
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+    return false;
+  }
+
+  for (let index = 0; index < selection.rangeCount; index += 1) {
+    try {
+      if (selection.getRangeAt(index).intersectsNode(element)) {
+        return true;
+      }
+    } catch {
+      // Ignore stale ranges from DOM that was removed while React was updating.
+    }
+  }
+
+  return false;
+}
+
+function waitForSelectionOutsideElement(shouldWait: () => boolean): Promise<void> {
+  if (!shouldWait()) {
+    return Promise.resolve();
+  }
+
+  if (typeof document === "undefined") {
+    return Promise.resolve();
+  }
+
+  const doc = document;
+  const win = typeof window === "undefined" ? null : window;
+  if (typeof doc.addEventListener !== "function") {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve) => {
+    let frame = 0;
+    let settled = false;
+
+    const cleanup = () => {
+      if (frame !== 0 && win && typeof win.cancelAnimationFrame === "function") {
+        win.cancelAnimationFrame(frame);
+      }
+      frame = 0;
+      doc.removeEventListener("selectionchange", scheduleCheck);
+      win?.removeEventListener("pointerup", scheduleCheck);
+      win?.removeEventListener("keyup", scheduleCheck);
+      win?.removeEventListener("blur", scheduleCheck);
+    };
+
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve();
+    };
+
+    const check = () => {
+      frame = 0;
+      if (!shouldWait()) {
+        finish();
+      }
+    };
+
+    function scheduleCheck() {
+      if (settled || frame !== 0) {
+        return;
+      }
+      if (win && typeof win.requestAnimationFrame === "function") {
+        frame = win.requestAnimationFrame(check);
+        return;
+      }
+      queueMicrotask(check);
+    }
+
+    doc.addEventListener("selectionchange", scheduleCheck);
+    win?.addEventListener("pointerup", scheduleCheck);
+    win?.addEventListener("keyup", scheduleCheck);
+    win?.addEventListener("blur", scheduleCheck);
+    scheduleCheck();
+  });
+}
+
 interface SuspenseShikiCodeBlockProps {
   className: string | undefined;
   code: string;
   themeName: DiffThemeName;
   isStreaming: boolean;
+  shouldDeferAsyncHighlight: () => boolean;
+  /** Unhighlighted rendering of this fence, shown until highlighting can land. */
+  plain: ReactNode;
 }
 
 function SuspenseShikiCodeBlock({
@@ -1224,6 +1316,8 @@ function SuspenseShikiCodeBlock({
   code,
   themeName,
   isStreaming,
+  shouldDeferAsyncHighlight,
+  plain,
 }: SuspenseShikiCodeBlockProps) {
   const [hasStreamed, setHasStreamed] = useState(isStreaming);
   if (isStreaming && !hasStreamed) setHasStreamed(true);
@@ -1250,10 +1344,14 @@ function SuspenseShikiCodeBlock({
       themeName={themeName}
       cacheKey={cacheKey}
       isStreaming={isStreaming}
+      shouldDeferAsyncHighlight={shouldDeferAsyncHighlight}
+      plain={plain}
       preserveLines={isStreaming || hasStreamed}
     />
   );
 }
+
+type HighlightedRoot = ReturnType<DiffsHighlighter["codeToHast"]>;
 
 interface UncachedShikiCodeBlockProps {
   code: string;
@@ -1261,6 +1359,8 @@ interface UncachedShikiCodeBlockProps {
   themeName: DiffThemeName;
   cacheKey: string;
   isStreaming: boolean;
+  shouldDeferAsyncHighlight: () => boolean;
+  plain: ReactNode;
   preserveLines: boolean;
 }
 
@@ -1270,15 +1370,22 @@ function UncachedShikiCodeBlock({
   themeName,
   cacheKey,
   isStreaming,
+  shouldDeferAsyncHighlight,
+  plain,
   preserveLines,
 }: UncachedShikiCodeBlockProps) {
-  const highlighter = use(getSyntaxHighlighterPromise(language));
+  // Resolves to null rather than rejecting: a rejection during render reaches
+  // the enclosing boundary, and every catch replaces this block's live DOM.
+  const highlighter = use(getOptionalSyntaxHighlighterPromise(language));
   const incrementalHighlight = useMemo(
     () =>
-      preserveLines ? createIncrementalHighlightedDocument(highlighter, language, themeName) : null,
+      highlighter !== null && preserveLines
+        ? createIncrementalHighlightedDocument(highlighter, language, themeName)
+        : null,
     [highlighter, preserveLines, language, themeName],
   );
-  const highlighted = useMemo(() => {
+  const highlighted = useMemo((): string | HighlightedRoot | null => {
+    if (highlighter === null) return null;
     try {
       if (incrementalHighlight) return incrementalHighlight(code);
       return preserveLines
@@ -1297,8 +1404,31 @@ function UncachedShikiCodeBlock({
     }
   }, [code, highlighter, incrementalHighlight, language, preserveLines, themeName]);
 
+  // Replacing this block's markup destroys any selection inside it, so the swap
+  // waits for the selection to leave. Waiting cannot suspend: a boundary that
+  // falls back hides the very nodes the selection points at, which is the loss
+  // the wait exists to prevent.
+  const [shown, setShown] = useState(() => (shouldDeferAsyncHighlight() ? null : highlighted));
   useEffect(() => {
-    if (!isStreaming) {
+    if (shown === highlighted) return;
+    // Keyed line rendering preserves the completed lines' DOM, so once lines
+    // are mounted a newer line document can land without waiting for the
+    // selection to leave. Only a swap that replaces markup wholesale waits.
+    if (shown !== null && typeof shown !== "string" && typeof highlighted !== "string") {
+      setShown(highlighted);
+      return;
+    }
+    let cancelled = false;
+    void waitForSelectionOutsideElement(shouldDeferAsyncHighlight).then(() => {
+      if (!cancelled) setShown(highlighted);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [highlighted, shouldDeferAsyncHighlight, shown]);
+
+  useEffect(() => {
+    if (!isStreaming && highlighted !== null) {
       const highlightedHtml = typeof highlighted === "string" ? highlighted : toHtml(highlighted);
       highlightedCodeCache.set(
         cacheKey,
@@ -1308,11 +1438,12 @@ function UncachedShikiCodeBlock({
     }
   }, [cacheKey, code, highlighted, isStreaming]);
 
-  return typeof highlighted === "string" ? (
-    <div className="chat-markdown-shiki" dangerouslySetInnerHTML={{ __html: highlighted }} />
+  if (shown === null) return plain;
+  return typeof shown === "string" ? (
+    <div className="chat-markdown-shiki" dangerouslySetInnerHTML={{ __html: shown }} />
   ) : (
     <div className="chat-markdown-shiki">
-      <HighlightedCodeLines root={highlighted} />
+      <HighlightedCodeLines root={shown} />
     </div>
   );
 }
@@ -2582,6 +2713,12 @@ function useChatMarkdownState({
     if (isWindowsDrivePathHref(href)) return href;
     return rewriteMarkdownFileUriHref(href) ?? defaultUrlTransform(href);
   }, []);
+  // Swapping highlighted markup in destroys a selection inside this message,
+  // so the code blocks hold their plain rendering while one is live here.
+  const shouldDeferAsyncHighlight = useCallback(
+    () => selectionIntersectsElement(markdownRef.current),
+    [],
+  );
   // Re-emit highlighted content as markdown so copying out of the rendered
   // view keeps links, emphasis, lists, and code fences intact.
   const handleCopy = useCallback((event: ReactClipboardEvent<HTMLDivElement>) => {
@@ -2823,6 +2960,7 @@ function useChatMarkdownState({
     () => ({
       cwd,
       diffThemeName,
+      shouldDeferAsyncHighlight,
       environmentId,
       expandMedia,
       fileLinkChip,
@@ -2854,6 +2992,7 @@ function useChatMarkdownState({
     [
       cwd,
       diffThemeName,
+      shouldDeferAsyncHighlight,
       environmentId,
       expandMedia,
       fileLinkChip,
@@ -3411,9 +3550,15 @@ const CHAT_MARKDOWN_COMPONENTS = {
     return <MarkdownDetails open={detailsOpen}>{children}</MarkdownDetails>;
   },
   pre: function MarkdownPre({ node, children, ...props }) {
-    const { resolvedTheme, diffThemeName, expandMedia, isStreaming, onRunShellCommand, text } = use(
-      ChatMarkdownRendererContext,
-    );
+    const {
+      resolvedTheme,
+      diffThemeName,
+      expandMedia,
+      isStreaming,
+      shouldDeferAsyncHighlight,
+      onRunShellCommand,
+      text,
+    } = use(ChatMarkdownRendererContext);
     const codeBlock = extractCodeBlock(children);
     if (!codeBlock) {
       return <pre {...props}>{children}</pre>;
@@ -3440,6 +3585,8 @@ const CHAT_MARKDOWN_COMPONENTS = {
             code={codeBlock.code}
             themeName={diffThemeName}
             isStreaming={isStreaming}
+            shouldDeferAsyncHighlight={shouldDeferAsyncHighlight}
+            plain={<pre {...props}>{children}</pre>}
           />
         </Suspense>
       </RenderErrorBoundary>
