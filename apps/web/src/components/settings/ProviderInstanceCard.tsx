@@ -26,6 +26,7 @@ import {
   type EnvironmentId,
   type ProjectId,
   type ProviderDriverKind,
+  type ProviderOptionSelection,
   type ServerProvider,
   type ServerProviderModel,
 } from "@t3tools/contracts";
@@ -50,6 +51,7 @@ import type { DriverOption, ProviderEnvironmentFieldDefinition } from "./provide
 import { deriveProviderSettingsFields, ProviderSettingsForm } from "./ProviderSettingsForm";
 import { ProviderModelsSection } from "./ProviderModelsSection";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
+import { TraitsPicker } from "../chat/TraitsPicker";
 import { ProviderAccentColorPicker } from "./ProviderAccentColorPicker";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import { SettingsRow, SettingsSection } from "./settingsLayout";
@@ -499,9 +501,13 @@ interface ProviderInstanceCardProps {
   readonly hiddenModels: ReadonlyArray<string>;
   readonly favoriteModels: ReadonlyArray<string>;
   readonly modelOrder: ReadonlyArray<string>;
+  readonly defaultModelOptions: ReadonlyArray<ProviderOptionSelection> | undefined;
   readonly onHiddenModelsChange: (next: ReadonlyArray<string>) => void;
   readonly onFavoriteModelsChange: (next: ReadonlyArray<string>) => void;
   readonly onModelOrderChange: (next: ReadonlyArray<string>) => void;
+  readonly onDefaultModelOptionsChange: (
+    next: ReadonlyArray<ProviderOptionSelection> | undefined,
+  ) => void;
   readonly onRunUpdate?: (() => void) | undefined;
   readonly onInstallRecommended?: (() => void) | undefined;
   readonly isUpdating?: boolean | undefined;
@@ -557,6 +563,8 @@ export function ProviderInstanceCard({
   onHiddenModelsChange,
   onFavoriteModelsChange,
   onModelOrderChange,
+  defaultModelOptions,
+  onDefaultModelOptionsChange,
   onRunUpdate,
   onInstallRecommended,
   isUpdating = false,
@@ -637,6 +645,11 @@ export function ProviderInstanceCard({
     liveModels: liveProvider?.models,
     customModels,
   });
+  const defaultTraitsModel =
+    liveProvider?.models.find((model) => (model.capabilities?.optionDescriptors?.length ?? 0) > 0)
+      ?.slug ?? null;
+  const hasDefaultModelOptions = (defaultModelOptions?.length ?? 0) > 0;
+
   const updateDisplayName = (value: string) => {
     const trimmed = value.trim();
     const { displayName: _omit, ...rest } = instance;
@@ -1131,6 +1144,46 @@ export function ProviderInstanceCard({
               Favorites, visibility, and ordering are saved on this device. Custom models are saved
               on the selected environment.
             </p>
+            {driverKind !== null && defaultTraitsModel !== null ? (
+              <div className="mb-4 rounded-lg border border-border/60 px-4 py-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-foreground">Default traits</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Used for new threads on this provider when no sticky or project default
+                      options apply.
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+                    {hasDefaultModelOptions ? (
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="ghost-muted"
+                        onClick={() => onDefaultModelOptionsChange(undefined)}
+                      >
+                        Reset
+                      </Button>
+                    ) : null}
+                    <TraitsPicker
+                      provider={driverKind}
+                      instanceId={instanceId}
+                      models={liveProvider?.models ?? []}
+                      model={defaultTraitsModel}
+                      prompt=""
+                      onPromptChange={() => {}}
+                      modelOptions={defaultModelOptions}
+                      allowPromptInjectedEffort={false}
+                      // Provider defaults are set outside a thread, so the plan-mode
+                      // trait rows never apply here.
+                      planModeEnabled={false}
+                      triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
+                      onModelOptionsChange={onDefaultModelOptionsChange}
+                    />
+                  </div>
+                </div>
+              </div>
+            ) : null}
             <ProviderModelsSection
               instanceId={instanceId}
               driverKind={driverKind}

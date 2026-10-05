@@ -15,6 +15,7 @@ import {
   ProviderDriverKind,
   type ProviderInstanceConfig,
   type ProviderInstanceId,
+  type ProviderOptionSelection,
   resolveEnvironmentMachineKind,
   resolveProviderInstanceEnabled,
 } from "@t3tools/contracts";
@@ -833,7 +834,9 @@ export function EnvironmentProviderSettings({
     // the driver must still render even when the slot has nothing to show.
     if (effectiveInstance !== undefined) {
       const isDirty =
-        explicitInstance !== undefined || !Equal.equals(legacyConfig, defaultLegacyConfig);
+        explicitInstance !== undefined ||
+        settings.providerModelDefaults?.[defaultInstanceId] !== undefined ||
+        !Equal.equals(legacyConfig, defaultLegacyConfig);
       if (
         driver === "codex" ||
         driver === "claudeAgent" ||
@@ -920,6 +923,15 @@ export function EnvironmentProviderSettings({
       });
       return;
     }
+    // Fork: per-instance default traits die with the instance.
+    if (settings.providerModelDefaults?.[row.instanceId] !== undefined) {
+      updateSettings({
+        providerModelDefaults: withoutProviderInstanceKey(
+          settings.providerModelDefaults,
+          row.instanceId,
+        ),
+      });
+    }
 
     if (row.driver !== ProviderDriverKind.make("acpRegistry")) return;
     const agentId = providerConfigString(row.instance.config, "agentId");
@@ -940,6 +952,18 @@ export function EnvironmentProviderSettings({
         description: error instanceof Error ? error.message : "Managed binary cleanup failed.",
       });
     }
+  };
+
+  // Fork: default traits for new threads on one provider instance.
+  const updateProviderModelDefaults = (
+    instanceId: ProviderInstanceId,
+    nextOptions: ReadonlyArray<ProviderOptionSelection> | null | undefined,
+  ) => {
+    const rest = withoutProviderInstanceKey(settings.providerModelDefaults, instanceId);
+    updateSettings({
+      providerModelDefaults:
+        nextOptions && nextOptions.length > 0 ? { ...rest, [instanceId]: nextOptions } : rest,
+    });
   };
 
   const updateProviderModelPreferences = (
@@ -1029,6 +1053,7 @@ export function EnvironmentProviderSettings({
       hiddenModels: [],
       modelOrder: [],
     };
+    const defaultModelOptions = settings.providerModelDefaults?.[row.instanceId];
     const favoriteModels = Arr.filterMap(settings.favorites ?? [], (favorite) =>
       favorite.provider === row.instanceId ? Result.succeed(favorite.model) : Result.failVoid,
     );
@@ -1150,6 +1175,7 @@ export function EnvironmentProviderSettings({
         hiddenModels={modelPreferences.hiddenModels}
         favoriteModels={favoriteModels}
         modelOrder={modelPreferences.modelOrder}
+        defaultModelOptions={defaultModelOptions}
         onHiddenModelsChange={(hiddenModels) =>
           updateProviderModelPreferences(row.instanceId, {
             ...modelPreferences,
@@ -1162,6 +1188,9 @@ export function EnvironmentProviderSettings({
             ...modelPreferences,
             modelOrder,
           })
+        }
+        onDefaultModelOptionsChange={(nextOptions) =>
+          updateProviderModelDefaults(row.instanceId, nextOptions)
         }
         onInstallRecommended={
           !readOnly &&
