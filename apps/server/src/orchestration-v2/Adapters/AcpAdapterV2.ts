@@ -974,13 +974,27 @@ export function acpToolCallDiffPatch(content: unknown): string | undefined {
   return v1Patches.length === 0 ? undefined : formatPatch(v1Patches, FILE_HEADERS_ONLY);
 }
 
-function pathFromToolCall(toolCall: AcpToolCallState): string | undefined {
+/**
+ * The file a tool call acts on. Some agents send edits with an empty `rawInput`
+ * and no `locations`; the ACP diff content block's `path` is then the only place
+ * the edited file is named.
+ */
+export function pathFromToolCall(toolCall: AcpToolCallState): string | undefined {
   const locations = toolCall.data.locations;
   if (Array.isArray(locations)) {
     for (const location of locations) {
       const path = unknownRecord(location)?.path;
       if (typeof path === "string" && path.trim().length > 0) {
         return path.trim();
+      }
+    }
+  }
+  const content = toolCall.data.content;
+  if (Array.isArray(content)) {
+    for (const entry of content) {
+      const diff = unknownRecord(entry);
+      if (diff?.type === "diff" && typeof diff.path === "string" && diff.path.trim().length > 0) {
+        return diff.path.trim();
       }
     }
   }

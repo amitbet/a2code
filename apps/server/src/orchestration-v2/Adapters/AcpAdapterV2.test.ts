@@ -86,6 +86,7 @@ import {
   acpToolCallDiffPatch,
   acpTurnStartShouldPreserveContinuation,
   makeAcpAdapterV2,
+  pathFromToolCall,
   type AcpAdapterV2ExtensionContext,
   type AcpAdapterV2Flavor,
   type AcpAdapterV2RuntimeInput,
@@ -123,6 +124,39 @@ describe("acpProjectedCommandExitCode", () => {
     assert.equal(acpProjectedCommandExitCode("completed", failedOutput), 1);
     assert.equal(acpProjectedCommandExitCode("failed", failedOutput), 1);
     assert.equal(acpProjectedCommandExitCode("completed", {}), undefined);
+  });
+});
+
+describe("pathFromToolCall", () => {
+  it("names an edit from its diff content when rawInput and locations are empty", () => {
+    assert.equal(
+      pathFromToolCall({
+        toolCallId: "edit-1",
+        kind: "edit",
+        data: {
+          rawInput: {},
+          content: [
+            { type: "content", content: { type: "text", text: "Applied" } },
+            { type: "diff", path: " /repo/src/app.ts ", oldText: "a\n", newText: "b\n" },
+          ],
+        },
+      }),
+      "/repo/src/app.ts",
+    );
+  });
+
+  it("prefers reported locations over diff paths", () => {
+    assert.equal(
+      pathFromToolCall({
+        toolCallId: "edit-2",
+        kind: "edit",
+        data: {
+          locations: [{ path: "/repo/located.ts" }],
+          content: [{ type: "diff", path: "/repo/diffed.ts", newText: "x" }],
+        },
+      }),
+      "/repo/located.ts",
+    );
   });
 });
 
