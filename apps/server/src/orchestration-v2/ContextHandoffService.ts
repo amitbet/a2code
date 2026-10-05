@@ -13,8 +13,12 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
+import * as ServerConfig from "../config.ts";
+import { resolveAttachmentPath } from "../attachmentStore.ts";
 import {
   DEFAULT_HANDOFF_TOKEN_CAP,
+  describeHandoffAttachments,
+  type HandoffAttachmentPath,
   handoffTokenCapConfig,
   handoffCoverage,
   historicalMessage,
@@ -103,12 +107,25 @@ function compactText(text: string, maxLength = 240): string {
   return `${compacted.slice(0, maxLength - 3)}...`;
 }
 
-function summarizeDeltaItem(item: OrchestrationV2TurnItem): string | null {
+/** Attachments are appended after compaction so the 240-char cap cannot drop them. */
+function withAttachments(
+  line: string,
+  item: Extract<OrchestrationV2TurnItem, { type: "user_message" | "assistant_message" }>,
+  attachmentPath: HandoffAttachmentPath,
+): string {
+  const attachments = describeHandoffAttachments(item.attachments, attachmentPath);
+  return attachments === null ? line : `${line} ${attachments}`;
+}
+
+function summarizeDeltaItem(
+  item: OrchestrationV2TurnItem,
+  attachmentPath: HandoffAttachmentPath,
+): string | null {
   switch (item.type) {
     case "user_message":
-      return `- User: ${compactText(item.text)}`;
+      return withAttachments(`- User: ${compactText(item.text)}`, item, attachmentPath);
     case "assistant_message":
-      return `- Assistant: ${compactText(item.text)}`;
+      return withAttachments(`- Assistant: ${compactText(item.text)}`, item, attachmentPath);
     case "command_execution":
       return `- Command: ${compactText(item.input)}`;
     case "file_change":
@@ -127,9 +144,10 @@ function makeForkDeltaSummary(input: {
   readonly targetThreadId: ThreadId;
   readonly coveredRunOrdinals: OrchestrationV2ContextHandoff["coveredRunOrdinals"];
   readonly deltaItems: ReadonlyArray<OrchestrationV2TurnItem>;
+  readonly attachmentPath: HandoffAttachmentPath;
 }): string {
   const itemLines = input.deltaItems.flatMap((item) => {
-    const line = summarizeDeltaItem(item);
+    const line = summarizeDeltaItem(item, input.attachmentPath);
     return line === null ? [] : [line];
   });
   return [
@@ -234,6 +252,9 @@ const makeContextHandoffService = Effect.fn("orchestrationV2.ContextHandoffServi
     const tokenCap = yield* handoffTokenCapConfig.pipe(
       Effect.orElseSucceed(() => DEFAULT_HANDOFF_TOKEN_CAP),
     );
+    const { attachmentsDir } = yield* ServerConfig.ServerConfig;
+    const attachmentPath: HandoffAttachmentPath = (attachment) =>
+      resolveAttachmentPath({ attachmentsDir, attachment });
 
     const prepareLegacyImport = Effect.fn("orchestrationV2.contextHandoff.prepareLegacyImport")(
       function* (input: {
@@ -265,7 +286,7 @@ const makeContextHandoffService = Effect.fn("orchestrationV2.ContextHandoffServi
         const coverage = handoffCoverage({ ...input, coveredRunOrdinals: { from: 1, to: 1 } });
         const selected = selectHistory({
           messages: input.items.flatMap((item) => {
-            const message = historicalMessage(item);
+            const message = historicalMessage(item, attachmentPath);
             return message === null ? [] : [message];
           }),
           coverage,
@@ -378,7 +399,7 @@ const makeContextHandoffService = Effect.fn("orchestrationV2.ContextHandoffServi
         });
         const selected = selectHistory({
           messages: input.deltaItems.flatMap((item) => {
-            const message = historicalMessage(item);
+            const message = historicalMessage(item, attachmentPath);
             return message === null ? [] : [message];
           }),
           coverage,
@@ -395,7 +416,7 @@ const makeContextHandoffService = Effect.fn("orchestrationV2.ContextHandoffServi
           strategy: "fork_delta_summary",
           status: "ready",
           summaryMessageId: null,
-          summaryText: makeForkDeltaSummary(input),
+          summaryText: makeForkDeltaSummary({ ...input, attachmentPath }),
           history: {
             messages: selected.messages,
             coverage,
@@ -451,7 +472,7 @@ const makeContextHandoffService = Effect.fn("orchestrationV2.ContextHandoffServi
       const coverage = input.coverage ?? handoffCoverage(input);
       const selected = selectHistory({
         messages: input.items.flatMap((item) => {
-          const message = historicalMessage(item);
+          const message = historicalMessage(item, attachmentPath);
           return message === null
             ? []
             : [
@@ -497,5 +518,8 @@ const makeContextHandoffService = Effect.fn("orchestrationV2.ContextHandoffServi
   },
 );
 
-export const layer: Layer.Layer<ContextHandoffServiceV2, never, IdAllocator.IdAllocatorV2> =
-  Layer.effect(ContextHandoffServiceV2, makeContextHandoffService());
+export const layer: Layer.Layer<
+  ContextHandoffServiceV2,
+  never,
+  IdAllocator.IdAllocatorV2 | ServerConfig.ServerConfig
+> = Layer.effect(ContextHandoffServiceV2, makeContextHandoffService());

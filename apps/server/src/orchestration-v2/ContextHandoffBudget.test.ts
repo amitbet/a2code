@@ -2,6 +2,7 @@ import type { ProviderAdapterV2HistoricalContext } from "./ProviderAdapter.ts";
 import { assert, describe, it } from "@effect/vitest";
 import {
   ContextHandoffId,
+  MessageId,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -176,6 +177,60 @@ describe("handoff budget", () => {
     assert.deepEqual(selected.messages, messages);
     assert.equal(selected.omittedItems, 2);
     assert.isAtMost(historyCost(selected.messages, selected.context), 3_000);
+  });
+
+  it("prefers messages naming attachments over newer plain history", () => {
+    const first = message("first", "user", "Original request");
+    const withImage = message(
+      "with-image",
+      "user",
+      `${"See the screenshot. ".repeat(10)}\n[Attachments: shot.png (image/png, id shot-1) at /state/attachments/shot-1.png]`,
+    );
+    const newer = message("newer", "assistant", "n".repeat(withImage.text.length));
+    const latestUser = message("latest-user", "user", "Continue");
+    const latestAssistant = message("latest-assistant", "assistant", "Working");
+    const candidates = [first, withImage, newer, latestUser, latestAssistant];
+    const expected = [first, withImage, latestUser, latestAssistant];
+    const budget = historyCost(expected, "x".repeat(400)) + Math.floor(withImage.text.length / 2);
+    const selected = selectHistory({ messages: candidates, coverage: "History", budget });
+    assert.deepEqual(selected.messages, expected);
+    assert.isAtMost(historyCost(selected.messages, selected.context), budget);
+  });
+
+  it("names a message's attachments with their resolved paths", () => {
+    const text = historicalMessage(
+      {
+        id: TurnItemId.make("item:attached"),
+        threadId,
+        runId: RunId.make("run:source"),
+        nodeId: null,
+        providerThreadId: providerThread.id,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 1,
+        status: "completed",
+        title: null,
+        startedAt: now,
+        completedAt: now,
+        updatedAt: now,
+        createdBy: "user",
+        creationSource: "web",
+        type: "user_message",
+        messageId: MessageId.make("message:attached"),
+        inputIntent: "turn_start",
+        text: "Compare these",
+        attachments: [
+          { type: "image", id: "img-1", name: "a.png", mimeType: "image/png", sizeBytes: 1 },
+          { type: "file", id: "file-1", name: "b.txt", mimeType: "text/plain", sizeBytes: 1 },
+        ],
+      },
+      (attachment) => (attachment.type === "image" ? `/abs/${attachment.id}.png` : null),
+    )?.text;
+    assert.equal(
+      text,
+      "Compare these\n[Attachments: a.png (image/png, id img-1) at /abs/img-1.png; b.txt (text/plain, id file-1)]",
+    );
   });
 
   it("counts JSON escaping and UTF-8 bytes across many messages", () => {

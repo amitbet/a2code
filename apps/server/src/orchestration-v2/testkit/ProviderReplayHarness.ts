@@ -324,7 +324,7 @@ export function makeOrchestratorV2ReplayLayerWithRegistry<Error>(
     Layer.provide(Layer.mergeAll(checkpointStoreLayer, IdAllocator.layer)),
   );
   const contextHandoffServiceProvided = ContextHandoffService.layer.pipe(
-    Layer.provide(IdAllocator.layer),
+    Layer.provide(Layer.mergeAll(IdAllocator.layer, serverConfigLayer)),
   );
   const persistenceLayer = Layer.mergeAll(
     storesLayer,
