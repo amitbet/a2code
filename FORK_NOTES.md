@@ -76,10 +76,21 @@ scope (`components/sidebar/machineItems.ts`, shared with `MachineSwitcher`). `Br
   shells loop on a payload they cannot start. Known gaps: the Cursor SDK's platform helpers and
   self-spawned `t3 acp-mcp-bridge` processes from a payload.
 
+### Fork additions on upstream's v2 surfaces
+
+- `t3_thread_search` takes `scope: "project" | "all"` (project filter applied in SQL before the
+  limit); `t3_thread_read` reads any non-deleted thread on the server. Mutations stay
+  project-bound.
+- Portable handoffs (provider switch, cross-provider fork, merge-back, `/btw`) list each message's
+  attachments on its own summary line — name, type, id, absolute path — after the 240-char cut, and
+  keep attachment-bearing messages first when the budget trims. Forks name the source thread for
+  `t3_thread_read`. No transcript file: full history is readable through MCP.
+- Codex `imageGeneration` items become "Generated image" rows with `viewedImagePath` = `savedPath`.
+- `AcpAdapterV2.pathFromToolCall` reads diff-block paths (Grok/Antigravity/registry agents; Cursor
+  now runs through `@cursor/sdk`).
+
 ### Still open after this merge
 
-- Generated images, Cursor diff paths, cross-project thread search and full-transcript provider
-  handoffs were in flight in follow-up commits; check `git log` before assuming.
 - Mobile: thread/detail routes still do not reject another machine's thread.
 
 ## 2026-09-30 upstream merge (lint-enforced UI rules, legacy mobile list retired, Codex tool context) — migration notes
