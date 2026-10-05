@@ -144,6 +144,10 @@ jobs:
         env:
           T3CODE_PAYLOAD_VERSION: ${{ needs.preflight.outputs.version }}
           T3CODE_PAYLOAD_SIGNING_KEY: ${{ secrets.T3CODE_PAYLOAD_SIGNING_KEY }}
+          # Orchestration v2 (0.0.153) needs shell-side module resolution and new
+          # external packages; older shells must install the full app instead of
+          # pulling a payload they cannot start. Raise again on the next native change.
+          T3CODE_PAYLOAD_MIN_SHELL_VERSION: "0.0.153"
         run: |
           vp run dist:payload:asset
 

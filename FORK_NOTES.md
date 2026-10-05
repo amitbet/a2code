@@ -72,8 +72,10 @@ scope (`components/sidebar/machineItems.ts`, shared with `MachineSwitcher`). `Br
   (`DesktopUserData.ts`).
 - Payload backends resolve bare packages from the installed shell through an `--import` hook
   (`apps/desktop/src/updates/payloadModuleResolution.ts`): upstream made `@cursor/sdk` & co.
-  external. **Raise `T3CODE_PAYLOAD_MIN_SHELL_VERSION` for the first post-merge release**, or older
-  shells loop on a payload they cannot start. Known gaps: the Cursor SDK's platform helpers and
+  external. `release.yml` pins `T3CODE_PAYLOAD_MIN_SHELL_VERSION: "0.0.153"` (the first v2 release),
+  so older shells ask for a full install instead of looping on a payload they cannot start; raise it
+  on the next native/Electron change. (A deliberate fork workflow change — keep it when checking
+  that workflows match the fork tip.) Known gaps: the Cursor SDK's platform helpers and
   self-spawned `t3 acp-mcp-bridge` processes from a payload.
 
 ### Fork additions on upstream's v2 surfaces
