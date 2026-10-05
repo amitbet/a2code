@@ -403,7 +403,14 @@ import { vcsEnvironment } from "../state/vcs";
 import { sourceControlEnvironment } from "../state/sourceControl";
 import { useProjectClone } from "../state/projectClones";
 import { projectCloneDisplayName, projectCloneProgressSummary } from "@t3tools/contracts";
-import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
+import {
+  isEnvironmentInMachineScope,
+  setMachineEnvironmentId,
+  useEnvironments,
+  useMachineEnvironmentId,
+  usePrimaryEnvironment,
+} from "../state/environments";
+import { machineItemsFromEnvironments, nextMachineEnvironmentId } from "./sidebar/machineItems";
 import {
   resolveThreadDetailRef,
   useProject,
@@ -1728,6 +1735,7 @@ export default function ChatView(props: ChatViewProps) {
       : null;
   }, [citationLocation.href, citationLocation.key, environmentId, threadId]);
   const { resolvedTheme } = useTheme();
+  const machineEnvironmentId = useMachineEnvironmentId();
   // Granular store selectors — avoid subscribing to prompt changes.
   const composerRuntimeMode = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.runtimeMode ?? null,
@@ -7816,17 +7824,15 @@ export default function ChatView(props: ChatViewProps) {
       }
 
       if (command === "composer.cycleHost") {
-        if (envLocked || !draftId || !hasMultipleEnvironments) return;
+        // Fork: machines have roles, so a draft never hops machines on its own.
+        // The key steps the global machine scope instead, like the sidebar picker.
+        const machines = machineItemsFromEnvironments(environments);
+        if (machines.length < 2) return;
         event.preventDefault();
         event.stopPropagation();
         if (event.repeat) return;
-        // Step from where a pending switch is heading, so repeated presses keep advancing.
-        const currentId = environmentChangeRef.current?.environmentId ?? environmentId;
-        const index = logicalProjectEnvironments.findIndex(
-          (env) => env.environmentId === currentId,
-        );
-        const next = logicalProjectEnvironments[(index + 1) % logicalProjectEnvironments.length];
-        if (next) onEnvironmentChange(next.environmentId);
+        const next = nextMachineEnvironmentId(machines, machineEnvironmentId);
+        if (next) setMachineEnvironmentId(next);
         return;
       }
 
@@ -7922,9 +7928,8 @@ export default function ChatView(props: ChatViewProps) {
     draftId,
     environmentId,
     envLocked,
-    hasMultipleEnvironments,
-    logicalProjectEnvironments,
-    onEnvironmentChange,
+    environments,
+    machineEnvironmentId,
   ]);
 
   // Paste-to-focus: the resting composer blurs on a click into the timeline,
@@ -10730,15 +10735,10 @@ export default function ChatView(props: ChatViewProps) {
     isGitRepo,
     envLocked,
     availableEnvironments: logicalProjectEnvironments,
+    // Fork: no per-thread machine picker; the global machine scope owns it.
     autoEnvironmentLabel,
-    onAutoEnvironment:
-      draftId &&
-      !envLocked &&
-      canAutoBalanceEnvironments &&
-      loadBalancingSettings.loadBalancingEnabled
-        ? onAutoEnvironment
-        : undefined,
-    onEnvironmentChange,
+    onAutoEnvironment: undefined,
+    onEnvironmentChange: undefined,
     onEnvModeChange,
     envMode,
     ...(canOverrideServerThreadEnvMode
@@ -11388,16 +11388,7 @@ export default function ChatView(props: ChatViewProps) {
                                 {...(canCheckoutPullRequestIntoThread
                                   ? { onCheckoutPullRequestRequest: openPullRequestDialog }
                                   : {})}
-                                {...(hasMultipleEnvironments ? { onEnvironmentChange } : {})}
                                 autoEnvironmentLabel={autoEnvironmentLabel}
-                                onAutoEnvironment={
-                                  draftId &&
-                                  !envLocked &&
-                                  canAutoBalanceEnvironments &&
-                                  loadBalancingSettings.loadBalancingEnabled
-                                    ? onAutoEnvironment
-                                    : undefined
-                                }
                                 availableEnvironments={logicalProjectEnvironments}
                                 composerControlsHostRef={setRestingComposerControlsHost}
                                 contextStripVisible={showComposerContextStrip}

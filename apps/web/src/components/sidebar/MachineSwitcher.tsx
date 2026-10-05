@@ -12,6 +12,7 @@ import {
   useMachineEnvironmentId,
   useMachineOverviewActive,
 } from "../../state/environments";
+import { machineItemsFromEnvironments } from "./machineItems";
 import { cn } from "../../lib/utils";
 import {
   Select,
@@ -48,20 +49,7 @@ export function MachineSwitcher({ onBackdrop }: { readonly onBackdrop: boolean }
       : routeTarget?.kind === "draft"
         ? draftEnvironmentId
         : null;
-  const machineItems = useMemo(
-    () =>
-      environments
-        .map((environment) => ({
-          environmentId: environment.environmentId,
-          label: environment.label,
-          isPrimary: environment.entry.target._tag === "PrimaryConnectionTarget",
-        }))
-        .sort((left, right) => {
-          if (left.isPrimary !== right.isPrimary) return left.isPrimary ? -1 : 1;
-          return left.label.localeCompare(right.label);
-        }),
-    [environments],
-  );
+  const machineItems = useMemo(() => machineItemsFromEnvironments(environments), [environments]);
   const activeMachine =
     machineItems.find((machine) => machine.environmentId === machineEnvironmentId) ??
     machineItems[0] ??
@@ -95,10 +83,8 @@ export function MachineSwitcher({ onBackdrop }: { readonly onBackdrop: boolean }
   const overviewAvailable = machineItems.length > 1;
 
   const MachineIcon = activeMachine.isPrimary ? MonitorIcon : CloudIcon;
-  const triggerClassName = cn(
-    "ml-auto min-w-0 max-w-44 shrink font-medium",
-    onBackdrop ? "text-white/90 hover:text-white" : "text-muted-foreground hover:text-foreground",
-  );
+  // Layout only: the ghost trigger owns its color and type.
+  const triggerClassName = "ml-auto min-w-0 max-w-44 shrink";
 
   if (!overviewAvailable) {
     return (

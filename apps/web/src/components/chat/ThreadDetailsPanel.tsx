@@ -55,7 +55,8 @@ export interface ThreadDetailsPanelProps extends Pick<
   availableEnvironments: readonly EnvironmentOption[];
   autoEnvironmentLabel?: string | undefined;
   onAutoEnvironment?: (() => void) | undefined;
-  onEnvironmentChange: (environmentId: EnvironmentId) => void;
+  /** Fork: omitted, since the global machine scope owns which machine a thread runs on. */
+  onEnvironmentChange?: ((environmentId: EnvironmentId) => void) | undefined;
   onEnvModeChange: (mode: EnvMode) => void;
   /** The thread's env mode as ChatView resolves it. */
   envMode: EnvMode;
@@ -158,7 +159,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                   envLocked={props.envLocked}
                   environmentId={props.environmentId}
                   availableEnvironments={props.availableEnvironments}
-                  {...(canPickEnvironment
+                  {...(canPickEnvironment && props.onEnvironmentChange
                     ? { onEnvironmentChange: props.onEnvironmentChange }
                     : {})}
                 />
