@@ -135,6 +135,7 @@ import {
 } from "../threadSelectionStore";
 import { useAcknowledgeThreadWoke, useThreadActions } from "../hooks/useThreadActions";
 import { useThreadExportDownload } from "../hooks/useThreadActionMenu";
+import { copyThreadReferenceToClipboard } from "../lib/threadReferenceClipboard";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useTerminalFocus } from "../hooks/useTerminalFocus";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
@@ -250,7 +251,6 @@ import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { getTriggerDisplayModelLabel } from "./chat/providerIconUtils";
 import { fetchEnvironmentThreadExport } from "@t3tools/client-runtime/state/thread-export";
-import { formatThreadReference } from "@t3tools/shared/threadReference";
 import { runtime } from "../lib/runtime";
 import { readPreparedConnection } from "../state/session";
 import {
@@ -2399,26 +2399,6 @@ export default function Sidebar() {
         stackedThreadToast({
           type: "error",
           title: "Failed to copy branch",
-          description: error instanceof Error ? error.message : "An error occurred.",
-        }),
-      );
-    },
-  });
-  const { copyToClipboard: copyThreadRefToClipboard } = useCopyToClipboard<{
-    threadRef: string;
-  }>({
-    onCopy: ({ threadRef }) => {
-      toastManager.add({
-        type: "success",
-        title: "Thread ref copied",
-        description: threadRef,
-      });
-    },
-    onError: (error) => {
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Failed to copy thread ref",
           description: error instanceof Error ? error.message : "An error occurred.",
         }),
       );
@@ -4680,14 +4660,22 @@ export default function Sidebar() {
             return;
           }
           case "copy-thread-ref": {
-            // Always environment-qualified: copy happens before the paste
-            // target is known, so an unqualified token only resolves by luck
-            // once more than one machine is connected.
-            const threadRefToken = formatThreadReference({
-              environmentId: threadRef.environmentId,
-              threadId: thread.id,
-            });
-            copyThreadRefToClipboard(threadRefToken, { threadRef: threadRefToken });
+            try {
+              await copyThreadReferenceToClipboard(threadRef, thread.title);
+              toastManager.add({
+                type: "success",
+                title: "Thread reference copied",
+                description: "Paste it into a composer to give that agent this thread.",
+              });
+            } catch (error) {
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Failed to copy thread reference",
+                  description: error instanceof Error ? error.message : "An error occurred.",
+                }),
+              );
+            }
             return;
           }
           case "export-zip": {
@@ -4768,7 +4756,6 @@ export default function Sidebar() {
       copyPathToClipboard,
       downloadThreadExport,
       copyThreadIdToClipboard,
-      copyThreadRefToClipboard,
       forkThread,
       deleteThread,
       handleMultiSelectContextMenu,

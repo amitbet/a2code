@@ -7,7 +7,10 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import { fetchEnvironmentThreadExport } from "@t3tools/client-runtime/state/thread-export";
+import {
+  fetchEnvironmentThreadExport,
+  fetchEnvironmentThreadTranscript,
+} from "@t3tools/client-runtime/state/thread-export";
 import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { useRouter } from "@tanstack/react-router";
@@ -65,6 +68,40 @@ const exportThreadZipCommand = createRuntimeCommand(connectionAtomRuntime, {
   execute: (input: Parameters<typeof fetchEnvironmentThreadExport>[0]) =>
     fetchEnvironmentThreadExport(input),
 });
+
+const fetchThreadTranscriptCommand = createRuntimeCommand(connectionAtomRuntime, {
+  label: "web:thread:fetch-transcript",
+  execute: (input: Parameters<typeof fetchEnvironmentThreadTranscript>[0]) =>
+    fetchEnvironmentThreadTranscript(input),
+});
+
+/**
+ * Fork: a thread on another machine as a Markdown file attachment. The agent's
+ * `t3_thread_read` only reaches threads on its own server, so a thread
+ * reference that crosses machines carries the transcript itself.
+ */
+export function useThreadTranscriptFile() {
+  const runFetch = useAtomCommand(fetchThreadTranscriptCommand, { reportFailure: false });
+  return useCallback(
+    async (threadRef: ScopedThreadRef, title: string): Promise<File | null> => {
+      const prepared = readPreparedConnection(threadRef.environmentId);
+      if (!prepared) {
+        failureToast("Could not attach thread", new Error("That machine is not connected."));
+        return null;
+      }
+      const result = await runFetch({ prepared, threadId: threadRef.threadId });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          failureToast("Could not attach thread", squashAtomCommandFailure(result));
+        }
+        return null;
+      }
+      const safeTitle = title.replace(/[^\w.-]+/g, "-").replace(/^-+|-+$/g, "") || "thread";
+      return new File([result.value], `thread-${safeTitle}.md`, { type: "text/markdown" });
+    },
+    [runFetch],
+  );
+}
 
 function downloadBlob(blob: Blob, fileName: string) {
   const objectUrl = URL.createObjectURL(blob);

@@ -52,7 +52,7 @@ import { resolveAttachmentPathById } from "./attachmentStore.ts";
 import { isThreadNotFound } from "./orchestration-v2/http.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
 import { collectThreadTranscriptAttachments } from "@t3tools/shared/threadTranscript";
-import { buildThreadExportZip } from "./threadExport.ts";
+import { buildThreadExportZip, buildThreadTranscriptMarkdown } from "./threadExport.ts";
 
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const THREAD_EXPORT_ROUTE_PREFIX = "/api/thread-export";
@@ -479,6 +479,21 @@ export const threadExportRouteLayer = HttpRouter.add(
     );
     if (Option.isNone(projection)) {
       return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+
+    // `?format=markdown` returns transcript.md alone, for cross-machine thread references.
+    if (url.value.searchParams.get("format") === "markdown") {
+      return HttpServerResponse.text(
+        buildThreadTranscriptMarkdown({
+          title: projection.value.thread.title,
+          source: projection.value,
+        }),
+        {
+          status: 200,
+          contentType: "text/markdown; charset=utf-8",
+          headers: { "Cache-Control": "no-store" },
+        },
+      );
     }
 
     const config = yield* ServerConfig.ServerConfig;

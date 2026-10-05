@@ -50,4 +50,41 @@ export const fetchEnvironmentThreadExport = Effect.fn(
   return new Uint8Array(bytes);
 });
 
+/**
+ * Fetch one thread's transcript as Markdown from the environment that owns it.
+ * Used to attach a thread on another machine as context, where the agent's
+ * `t3_thread_read` cannot reach.
+ */
+export const fetchEnvironmentThreadTranscript = Effect.fn(
+  "clientRuntime.state.fetchEnvironmentThreadTranscript",
+)(function* (input: {
+  readonly prepared: PreparedConnection;
+  readonly threadId: ThreadId;
+  readonly timeoutMs?: number;
+}) {
+  const signer = yield* Effect.serviceOption(ManagedRelay.ManagedRelayDpopSigner);
+  const remoteAuthorization = yield* Effect.serviceOption(
+    RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization,
+  );
+  const client = yield* HttpClient.HttpClient;
+  return yield* executeAuthenticatedEnvironmentRawHttpRequest({
+    prepared: input.prepared,
+    signer,
+    remoteAuthorization,
+    method: "GET",
+    url: (httpBaseUrl) => {
+      // environmentEndpointUrl drops the query, so the format is set afterwards.
+      const url = new URL(environmentEndpointUrl(httpBaseUrl, threadExportPath(input.threadId)));
+      url.searchParams.set("format", "markdown");
+      return url.toString();
+    },
+    timeoutMs: input.timeoutMs ?? DEFAULT_THREAD_EXPORT_TIMEOUT_MS,
+    request: ({ requestUrl, headers }) =>
+      client.get(requestUrl, { headers }).pipe(
+        Effect.flatMap(HttpClientResponse.filterStatusOk),
+        Effect.flatMap((response) => response.text),
+      ),
+  });
+});
+
 export type FetchEnvironmentThreadExportError = RemoteEnvironmentRequestError;

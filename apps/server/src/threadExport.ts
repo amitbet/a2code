@@ -65,3 +65,15 @@ export function buildThreadExportZip(input: BuildThreadExportZipInput): Uint8Arr
 
   return zipSync(files);
 }
+
+/**
+ * The transcript alone, for attaching one thread's history to a message on
+ * another machine (where `t3_thread_read` cannot reach). Attachments are listed
+ * but not bundled.
+ */
+export function buildThreadTranscriptMarkdown(input: {
+  readonly title: string;
+  readonly source: ThreadTranscriptSource;
+}): string {
+  return buildThreadTranscript(input.source, { heading: `# ${input.title}` });
+}

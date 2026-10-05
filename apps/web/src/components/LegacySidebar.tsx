@@ -78,7 +78,6 @@ import {
   type SidebarThreadPreviewCount,
   type SidebarThreadSortOrder,
 } from "@t3tools/contracts/settings";
-import { formatThreadReference } from "@t3tools/shared/threadReference";
 import { isDesktopLocalConnectionTarget, isWslConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { isElectron } from "../env";
@@ -127,6 +126,7 @@ import { useDesktopUpdateState } from "../state/desktopUpdate";
 
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useThreadExportDownload } from "../hooks/useThreadActionMenu";
+import { copyThreadReferenceToClipboard } from "../lib/threadReferenceClipboard";
 import { projectEnvironment } from "../state/projects";
 import { threadEnvironment, useEnvironmentThread } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
@@ -1277,26 +1277,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       );
     },
   });
-  const { copyToClipboard: copyThreadRefToClipboard } = useCopyToClipboard<{
-    threadRef: string;
-  }>({
-    onCopy: (ctx) => {
-      toastManager.add({
-        type: "success",
-        title: "Thread reference copied",
-        description: ctx.threadRef,
-      });
-    },
-    onError: (error) => {
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Failed to copy thread reference",
-          description: error instanceof Error ? error.message : "An error occurred.",
-        }),
-      );
-    },
-  });
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{
     path: string;
   }>({
@@ -2437,14 +2417,22 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         return;
       }
       if (clicked === "copy-thread-ref") {
-        // Always environment-qualified: copy happens before the paste target is
-        // known, so an unqualified token only resolves by luck once more than
-        // one machine is connected.
-        const threadRefToken = formatThreadReference({
-          environmentId: threadRef.environmentId,
-          threadId: thread.id,
-        });
-        copyThreadRefToClipboard(threadRefToken, { threadRef: threadRefToken });
+        try {
+          await copyThreadReferenceToClipboard(threadRef, thread.title);
+          toastManager.add({
+            type: "success",
+            title: "Thread reference copied",
+            description: "Paste it into a composer to give that agent this thread.",
+          });
+        } catch (error) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Failed to copy thread reference",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        }
         return;
       }
       if (clicked === "export-zip") {
@@ -2481,7 +2469,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       copyPathToClipboard,
       downloadThreadExport,
       copyThreadIdToClipboard,
-      copyThreadRefToClipboard,
       deleteThread,
       forkThread,
       pinThread,

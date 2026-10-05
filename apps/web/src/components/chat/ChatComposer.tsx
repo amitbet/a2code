@@ -248,6 +248,7 @@ import type {
 import { resolveAssetUrl } from "~/assets/assetUrls";
 import { assetEnvironment } from "~/state/assets";
 import { readPreparedConnection } from "~/state/session";
+import { useThreadTranscriptFile } from "../../hooks/useThreadActionMenu";
 import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
 import {
   pullRequestEnvironment,
@@ -3325,8 +3326,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             break;
           }
           case "thread": {
-            // The agent can only read threads on its own server; a pasted foreign one is dropped.
-            if (record.environmentId !== environmentId) break;
+            // The agent can only read threads on its own server; a thread from
+            // another machine is attached as its transcript instead (fork).
+            if (record.environmentId !== environmentId) {
+              void attachForeignThreadsRef.current([
+                { environmentId: record.environmentId, threadId: record.threadId },
+              ]);
+              break;
+            }
             addComposerDraftThreadContexts(composerDraftTarget, [record], {
               appendReference: false,
             });
@@ -5900,6 +5907,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     }
     return insertedAny;
   };
+  const threadTranscriptFile = useThreadTranscriptFile();
+  const attachForeignThreads = async (refs: ReadonlyArray<ScopedThreadRef>) => {
+    const files: File[] = [];
+    for (const ref of refs) {
+      const title = readThreadShell(ref)?.title ?? "thread";
+      const file = await threadTranscriptFile(ref, title);
+      if (file) files.push(file);
+    }
+    if (files.length > 0) await addComposerAttachments(files);
+  };
+  const attachForeignThreadsRef = useRef(attachForeignThreads);
+  attachForeignThreadsRef.current = attachForeignThreads;
 
   /**
    * Chips for freshly attached files land at the caret; when the editor cannot take
@@ -6165,15 +6184,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     const form = composerFormRef.current;
     if (!form) return;
     const onThreadDrop = (event: Event) => {
-      const refs = (event as CustomEvent<ReadonlyArray<ScopedThreadRef>>).detail;
-      if (refs.some((ref) => ref.environmentId !== environmentId)) {
-        toastManager.add({
-          type: "error",
-          title: "Use threads from this environment",
-          description: "The agent can only read threads on its own server.",
-        });
-        return;
-      }
+      const dropped = (event as CustomEvent<ReadonlyArray<ScopedThreadRef>>).detail;
+      // Fork: threads from another machine travel as transcript files.
+      const foreign = dropped.filter((ref) => ref.environmentId !== environmentId);
+      if (foreign.length > 0) void attachForeignThreadsRef.current(foreign);
+      const refs = dropped.filter((ref) => ref.environmentId === environmentId);
       const records = refs.flatMap((ref) => {
         const shell = readThreadShell(ref);
         return shell ? [threadContextRecord(ref, shell.title)] : [];
