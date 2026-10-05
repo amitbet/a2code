@@ -29,8 +29,8 @@ const FORK_LEDGER_MARKER = { id: 33, name: "ProjectionThreadsForkedFrom" } as co
 /**
  * Rewrites a pre-split fork ledger into upstream ids, once.
  *
- * Every fork migration up to the recorded maximum ran in order, so the upstream
- * migrations among them are a prefix of upstream's list. They are re-recorded
+ * Every fork migration up to the recorded maximum ran, so the upstream
+ * migrations among them are exactly upstream's first N. They are re-recorded
  * under upstream's ids; the fork-only ones that still exist move to
  * `fork_sql_migrations`, and retired fork-only ones are dropped from the ledger
  * (their v1 tables stay as legacy import data). Without this, upstream's
@@ -73,6 +73,9 @@ export const reconcileForkMigrationLedger = Effect.fn("reconcileForkMigrationLed
         }
         upstreamIds.push([upstreamId, upstreamName]);
       }
+      // The fork ran some upstream migrations out of upstream's order (its own
+      // pinning migration predates upstream's), so compare the applied set.
+      upstreamIds.sort(([a], [b]) => a - b);
       const isPrefix = upstreamIds.every(([id], index) => id === index + 1);
       if (!isPrefix) {
         return yield* new Migrator.MigrationError({
