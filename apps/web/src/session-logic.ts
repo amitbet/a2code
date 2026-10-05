@@ -32,6 +32,11 @@ import type {
 import type { ThreadRunSummary, ThreadRuntimeSummary } from "@t3tools/client-runtime/state/shell";
 import { threadRuntimeHasInterruptibleRun } from "@t3tools/client-runtime/state/thread-execution";
 import { turnItemIsWorkspacePreparation } from "@t3tools/client-runtime/state/turn-item-presentation";
+import {
+  buildUserInputExchangeAnswers,
+  hasQuestionAnswer,
+  type UserInputExchangeAnswer,
+} from "@t3tools/client-runtime/work-log/user-input";
 
 import {
   isImageAttachment,
@@ -142,10 +147,37 @@ export type TimelineEntry = (
       readonly createdAt: string;
       readonly projectedItem: OrchestrationV2ProjectedTurnItem;
     }
+  | {
+      readonly id: string;
+      readonly kind: "user-input";
+      readonly createdAt: string;
+      readonly exchange: UserInputExchange;
+      readonly projectedItem: OrchestrationV2ProjectedTurnItem;
+    }
 ) & {
   /** V2 identity resolved from the item's execution node, when locally available. */
   readonly attempt?: TimelineAttempt;
 };
+
+/**
+ * An answered question request. The fork shows it as its own conversation row
+ * (questions and the chosen answers in full) instead of a work-log line.
+ */
+export interface UserInputExchange {
+  readonly requestId: string;
+  readonly runId: RunId | null;
+  readonly answers: ReadonlyArray<UserInputExchangeAnswer>;
+}
+
+function answeredUserInputExchange(item: OrchestrationV2TurnItem): UserInputExchange | null {
+  if (item.type !== "user_input_request" || !item.questionAnswer) return null;
+  if (!hasQuestionAnswer(item.questionAnswer)) return null;
+  return {
+    requestId: item.requestId,
+    runId: item.runId,
+    answers: buildUserInputExchangeAnswers(item.questions, item.questionAnswer),
+  };
+}
 
 export function workLogEntryIsToolLike(entry: WorkLogEntry): boolean {
   return (
@@ -680,6 +712,19 @@ export function deriveTimelineEntriesFromVisibleTurnItems(
         kind: "proposed-plan",
         createdAt,
         proposedPlan,
+        ...attemptMetadata,
+      });
+      continue;
+    }
+
+    const exchange = answeredUserInputExchange(item);
+    if (exchange !== null) {
+      entries.push({
+        id: item.id,
+        kind: "user-input",
+        createdAt,
+        exchange,
+        projectedItem: row,
         ...attemptMetadata,
       });
       continue;

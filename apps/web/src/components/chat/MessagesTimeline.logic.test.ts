@@ -791,6 +791,117 @@ describe("deriveMessagesTimelineRows", () => {
     });
   });
 
+  it("keeps an answered question as its own row outside the work log and the turn fold", () => {
+    const fixture = makeStreamingTimelineFixture();
+    const source = fixture.visibleTurnItems[0]!;
+    const common = {
+      ...source.item,
+      threadId: fixture.threadId,
+      runId: fixture.runId,
+      nodeId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      nativeItemRef: null,
+      parentItemId: null,
+      status: "completed" as const,
+    };
+    const requestId = RuntimeRequestId.make("question-request");
+    const items: OrchestrationV2ProjectedTurnItem["item"][] = [
+      {
+        ...common,
+        id: TurnItemId.make("prompt"),
+        type: "user_message",
+        messageId: MessageId.make("prompt"),
+        text: "Set up the service",
+        attachments: [],
+        inputIntent: "turn_start",
+        createdBy: "user",
+        creationSource: "web",
+      },
+      {
+        ...common,
+        id: TurnItemId.make("before"),
+        type: "command_execution",
+        input: "ls",
+        output: "",
+      },
+      {
+        ...common,
+        id: TurnItemId.make("question"),
+        type: "user_input_request",
+        requestId,
+        questions: [
+          {
+            id: "db",
+            header: "Database",
+            question: "Which database?",
+            options: [{ label: "Postgres", description: "Relational" }],
+          },
+        ],
+        questionAnswer: { requestId, answers: { db: "Postgres" }, attachmentsByQuestionId: {} },
+      },
+      {
+        ...common,
+        id: TurnItemId.make("after"),
+        type: "command_execution",
+        input: "pwd",
+        output: "",
+      },
+      {
+        ...common,
+        id: TurnItemId.make("final"),
+        type: "assistant_message",
+        messageId: MessageId.make("final"),
+        text: "Done",
+        streaming: false,
+      },
+    ];
+    const entries = deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: items.map((item, position) => ({
+        ...source,
+        item,
+        position,
+        sourceItemId: item.id,
+      })),
+      optimisticMessages: [],
+    });
+    const settled = {
+      timelineEntries: entries,
+      isWorking: false,
+      latestRun: {
+        runId: fixture.runId,
+        status: "completed" as const,
+        startedAt: fixture.time(0),
+        completedAt: fixture.time(10),
+      },
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
+    };
+    expect(deriveMessagesTimelineRows(settled).map((row) => row.kind)).toEqual([
+      "message",
+      "turn-fold",
+      "user-input",
+      "message",
+    ]);
+    const expandedRows = deriveMessagesTimelineRows({
+      ...settled,
+      expandedRunIds: new Set([fixture.runId]),
+    });
+    expect(expandedRows.map((row) => row.kind)).toEqual([
+      "message",
+      "turn-fold",
+      "work",
+      "user-input",
+      "work",
+      "message",
+    ]);
+    expect(
+      expandedRows.flatMap((row) =>
+        row.kind === "work" ? row.groupedEntries.map((entry) => entry.itemType) : [],
+      ),
+    ).toEqual(["command_execution", "command_execution"]);
+  });
+
   it.each(["waiting", "completed"] as const)(
     "groups approval and user-input requests with commands without expanding them when %s",
     (status) => {

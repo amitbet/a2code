@@ -31,6 +31,7 @@ import {
   workEntryIndicatesToolNeutralStatus,
   workLogEntryIsToolLike,
   type TimelineEntry,
+  type UserInputExchange,
   type WorkLogEntry,
 } from "../../session-logic";
 import { type ChatMessage, type ProposedPlan, type TurnDiffSummary } from "../../types";
@@ -587,6 +588,14 @@ type MessagesTimelineRowContent =
       id: string;
       createdAt: string;
       proposedPlan: ProposedPlan;
+    }
+  | {
+      /** An answered question request, shown as its own conversation row. */
+      kind: "user-input";
+      id: string;
+      createdAt: string;
+      exchange: UserInputExchange;
+      projectedItem: OrchestrationV2ProjectedTurnItem;
     };
 
 export interface StableMessagesTimelineRowsState {
@@ -708,6 +717,8 @@ function deriveSupersededAttemptFolds(
       entry.attempt?.status !== "superseded" ||
       unfoldedRunIds.has(entry.attempt.runId) ||
       (entry.kind === "message" && entry.message.role === "user") ||
+      // Answers are user input too; a superseded attempt must not hide them.
+      entry.kind === "user-input" ||
       timelineEntryIsPersistentResourceCard(entry) ||
       (entry.kind === "work" && entry.entry.itemType === "system_notice")
     ) {
@@ -1606,6 +1617,17 @@ export function deriveMessagesTimelineRows(input: {
       continue;
     }
 
+    if (timelineEntry.kind === "user-input") {
+      nextRows.push({
+        kind: "user-input",
+        id: timelineEntry.id,
+        createdAt: timelineEntry.createdAt,
+        exchange: timelineEntry.exchange,
+        projectedItem: timelineEntry.projectedItem,
+      });
+      continue;
+    }
+
     if (timelineEntry.kind === "event") {
       const previous = nextRows.at(-1);
       if (
@@ -2015,6 +2037,10 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
 
     case "proposed-plan":
       return a.proposedPlan === (b as typeof a).proposedPlan;
+
+    // The exchange is rebuilt with its entry; the projected item is stable.
+    case "user-input":
+      return a.projectedItem === (b as typeof a).projectedItem;
 
     case "event":
       return (

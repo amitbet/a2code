@@ -1035,15 +1035,83 @@ describe("native provider presentation in the v2 timeline", () => {
         .entries,
     ).toEqual(deriveTimelineEntriesFromVisibleTurnItems(questionAfterReply));
 
+    // Fork: an answered request is its own conversation row, not a work-log entry.
     expect(next.entries[0]).toMatchObject({
-      kind: "work",
-      entry: { questionAnswer: question.questionAnswer },
+      kind: "user-input",
+      exchange: {
+        requestId,
+        answers: [{ questionId: "color", question: "color", values: ["Blue"] }],
+      },
     });
     // A separately paged reply stays visible until its question history is available.
     expect(
       deriveTimelineEntriesFromVisibleTurnItems({ ...input, visibleTurnItems: [visible(reply)] })[0]
         ?.kind,
     ).toBe("message");
+  });
+
+  it("shows an answered request as a user-input row with its questions and answers", () => {
+    const requestId = RuntimeRequestId.make("pick");
+    const pending: OrchestrationV2TurnItem = {
+      ...base,
+      type: "user_input_request",
+      requestId,
+      questions: [
+        {
+          id: "db",
+          header: "Database",
+          question: "Which database should the service use?",
+          options: [
+            { label: "Postgres", description: "Relational", value: "pg" },
+            { label: "SQLite", description: "Embedded" },
+          ],
+        },
+      ],
+    };
+    const pendingEntries = deriveTimelineEntriesFromVisibleTurnItems({
+      visibleTurnItems: [visible(pending)],
+      optimisticMessages: [],
+    });
+    expect(pendingEntries.map((entry) => entry.kind)).toEqual(["work"]);
+
+    const answered: OrchestrationV2TurnItem = {
+      ...pending,
+      questionAnswer: { requestId, answers: { db: "pg" }, attachmentsByQuestionId: {} },
+    };
+    const previous = deriveTimelineEntriesFromVisibleTurnItemsWithState({
+      visibleTurnItems: [visible(pending)],
+      optimisticMessages: [],
+    });
+    const next = deriveTimelineEntriesFromVisibleTurnItemsWithState(
+      { visibleTurnItems: [visible(answered)], optimisticMessages: [] },
+      previous,
+    );
+    expect(next.entries).toHaveLength(1);
+    expect(next.entries[0]).toMatchObject({
+      kind: "user-input",
+      exchange: {
+        answers: [
+          {
+            header: "Database",
+            question: "Which database should the service use?",
+            values: ["Postgres"],
+            custom: false,
+          },
+        ],
+      },
+    });
+
+    // A resolution with nothing submitted (an aborted request) stays in the work log.
+    const empty: OrchestrationV2TurnItem = {
+      ...pending,
+      questionAnswer: { requestId, answers: {}, attachmentsByQuestionId: {} },
+    };
+    expect(
+      deriveTimelineEntriesFromVisibleTurnItems({
+        visibleTurnItems: [visible(empty)],
+        optimisticMessages: [],
+      })[0]?.kind,
+    ).toBe("work");
   });
 
   it("excludes checkpoint-only work from the timeline", () => {
