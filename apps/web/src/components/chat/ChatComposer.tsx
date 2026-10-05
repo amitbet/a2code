@@ -240,7 +240,11 @@ import { THREAD_CONTEXT_DROP_EVENT, threadContextDropTargetProps } from "./threa
 import { readThreadShell, useThreadShells } from "~/state/entities";
 import { requestConfirmDialog } from "~/confirmDialog";
 import { encodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
-import type { ComposerContextClipboardFragment, ComposerContextRecord } from "@t3tools/contracts";
+import type {
+  ComposerContextClipboardFragment,
+  ComposerContextRecord,
+  ServerProviderUsageLimits,
+} from "@t3tools/contracts";
 import { resolveAssetUrl } from "~/assets/assetUrls";
 import { assetEnvironment } from "~/state/assets";
 import { readPreparedConnection } from "~/state/session";
@@ -289,6 +293,8 @@ import {
   renderProviderTraitsPicker,
 } from "./composerProviderState";
 import { ContextWindowMeter, ContextWindowMeterPlaceholder } from "./ContextWindowMeter";
+import { RateLimitMeter } from "./RateLimitMeter";
+import { shouldShowRateLimitMeter } from "../../lib/rateLimits";
 import {
   providerSupportsManualCompaction,
   resolveContextWindowModelDisplayName,
@@ -1349,6 +1355,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
 const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
   compact: boolean;
   activeContextWindow: ContextWindowSnapshot | null;
+  activeRateLimits: ServerProviderUsageLimits | null;
   reserveContextWindowMeter: boolean;
   activeThreadModelDisplayName: string | null;
   isPreparingWorktree: boolean;
@@ -1382,8 +1389,15 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   compactDisabled: boolean;
   compactDisabledReason: string | null;
 }) {
+  const visibleRateLimits = shouldShowRateLimitMeter(props.activeRateLimits)
+    ? props.activeRateLimits
+    : null;
+
   return (
     <>
+      {visibleRateLimits ? (
+        <RateLimitMeter limits={visibleRateLimits} isRunning={props.isRunning} />
+      ) : null}
       {props.activeContextWindow ? (
         <ContextWindowMeter
           usage={props.activeContextWindow}
@@ -2348,6 +2362,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     () => resolveContextWindowModelDisplayName(activeThreadModelSelection, modelOptionsByInstance),
     [activeThreadModelSelection, modelOptionsByInstance],
   );
+  // Fork: quota describes the subscription, not this conversation, so it is read
+  // from the selected provider instance's server snapshot and shown always.
+  const activeRateLimits = selectedProviderEntry?.snapshot.usageLimits ?? null;
   const reserveContextWindowMeter = shouldReserveContextWindowMeter({
     meterEnabled: settings.contextWindowMeterEnabled,
     detailLoading: props.threadSyncPhase === "loading",
@@ -7511,6 +7528,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     activeContextWindow={
                       settings.contextWindowMeterEnabled ? activeContextWindow : null
                     }
+                    activeRateLimits={activeRateLimits}
                     reserveContextWindowMeter={reserveContextWindowMeter}
                     activeThreadModelDisplayName={activeThreadModelDisplayName}
                     pendingAction={pendingPrimaryAction}
