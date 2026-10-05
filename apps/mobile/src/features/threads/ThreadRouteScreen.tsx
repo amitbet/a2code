@@ -17,9 +17,12 @@ import * as Option from "effect/Option";
 import {
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
+  MessageId,
   ThreadId,
+  type ModelSelection,
   type ProjectScript,
 } from "@t3tools/contracts";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
   projectScriptCwd,
   projectScriptRuntimeEnv,
@@ -342,6 +345,10 @@ function ThreadRouteContent(
   const gitActions = useSelectedThreadGitActions();
   const requests = useSelectedThreadRequests();
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, "thread interrupt");
+  const askSideQuestion = useAtomCommand(threadEnvironment.askSideQuestion, {
+    label: "side question",
+    reportFailure: false,
+  });
   const loadEarlierHistory = useAtomCommand(threadEnvironment.loadEarlierHistory, {
     label: "load earlier thread history",
     reportFailure: false,
@@ -685,6 +692,35 @@ function ThreadRouteContent(
       },
     });
   }, [composer.interruptibleRunId, interruptThreadTurn, selectedThread]);
+
+  // `/btw <question>`: ask a side question about this thread. The user stays
+  // here; the side question shows up as a chip above the composer.
+  const handleAskSideQuestion = useCallback(
+    async (question: string, modelSelection: ModelSelection) => {
+      if (!selectedThread) return false;
+      const metadata = makeTurnCommandMetadata();
+      const result = await askSideQuestion({
+        environmentId: selectedThread.environmentId,
+        input: {
+          sourceThreadId: selectedThread.id,
+          targetThreadId: ThreadId.make(metadata.threadId),
+          messageId: MessageId.make(metadata.messageId),
+          question,
+          modelSelection,
+        },
+      });
+      if (result._tag === "Failure") {
+        const error = squashAtomCommandFailure(result);
+        Alert.alert(
+          "Could not ask side question",
+          error instanceof Error ? error.message : "The side question could not be started.",
+        );
+        return false;
+      }
+      return true;
+    },
+    [askSideQuestion, selectedThread],
+  );
 
   const handleOpenTerminal = useCallback(
     (nextTerminalId?: string | null) => {
@@ -1067,6 +1103,7 @@ function ThreadRouteContent(
           serverConfig={serverConfig}
           onStopThread={awaitingBootstrapTurn ? handleCancelWorktreeSetup : handleStopThread}
           onSendMessage={composer.onSendMessage}
+          onAskSideQuestion={handleAskSideQuestion}
           onReconnectEnvironment={handleReconnectEnvironment}
           canSwitchThreadProvider={composer.canSwitchThreadProvider}
           onUpdateThreadModelSelection={composer.onUpdateModelSelection}

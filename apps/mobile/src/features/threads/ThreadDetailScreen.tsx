@@ -1,5 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useThreadReportedModelSelection } from "../../state/entities";
+import { useSideQuestionShells, useThreadReportedModelSelection } from "../../state/entities";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { UsageLimitRecoveryCard } from "./UsageLimitRecoveryCard";
 import { useNavigation } from "@react-navigation/native";
 import type { WorktreeSetupCardProps } from "./worktree-setup-card";
@@ -133,6 +134,7 @@ import {
   ThreadComposer,
 } from "./ThreadComposer";
 import { ThreadFeed, type ThreadFeedHistoryControls } from "./ThreadFeed";
+import { SideQuestionChips } from "./SideQuestionChips";
 import { useThreadTurnSubagents } from "./ThreadAgentsSheet";
 import { ComposerQueuedEditBanner } from "./ComposerQueuedEdit";
 import { useThreadQueuedCount } from "./ThreadQueueControl";
@@ -209,6 +211,11 @@ export interface ThreadDetailScreenProps {
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
   readonly onSendMessage: (followUp?: ActiveTurnComposerAction) => Promise<MessageId | null>;
+  /** Asks a `/btw` side question about this thread; resolves true once accepted. */
+  readonly onAskSideQuestion: (
+    question: string,
+    modelSelection: ModelSelection,
+  ) => Promise<boolean>;
   readonly onReconnectEnvironment: () => void;
   /** Whether the model picker may offer providers other than this thread's. */
   readonly canSwitchThreadProvider: boolean;
@@ -368,6 +375,23 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const navigationHeaderHeight = useContext(HeaderHeightContext) || insets.top + 44;
   const agentLabel = `${props.selectedThread.modelSelection.instanceId} agent`;
   const selectedThreadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
+  const sideQuestions = useSideQuestionShells(
+    useMemo(
+      () => scopeThreadRef(props.environmentId, props.selectedThread.id),
+      [props.environmentId, props.selectedThread.id],
+    ),
+  );
+  // A side question opens as a normal thread; the parent stays one back.
+  const openSideQuestion = useCallback(
+    (threadId: ThreadId) => {
+      Keyboard.dismiss();
+      navigation.navigate("Thread", {
+        environmentId: String(props.environmentId),
+        threadId: String(threadId),
+      });
+    },
+    [navigation, props.environmentId],
+  );
   const composerError = useAtomValue(threadComposerErrorsAtom)[selectedThreadKey]?.message ?? null;
   const queuedCount = useThreadQueuedCount({
     environmentId: props.environmentId,
@@ -1323,6 +1347,9 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   </View>
                 ) : (
                   <>
+                    <View className="w-full self-center" style={{ maxWidth: contentMaxWidth }}>
+                      <SideQuestionChips sideQuestions={sideQuestions} onOpen={openSideQuestion} />
+                    </View>
                     <ThreadComposer
                       reportedModelSelection={reportedModelSelection}
                       editorRef={composerEditorRef}
@@ -1368,6 +1395,9 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                       onStopThread={props.onStopThread}
                       onSendMessage={handleSendMessage}
                       onShowUsageLimits={showUsageLimits}
+                      onAskSideQuestion={props.onAskSideQuestion}
+                      latestSideQuestionId={sideQuestions.at(-1)?.id ?? null}
+                      onOpenSideQuestion={openSideQuestion}
                       canSwitchProvider={props.canSwitchThreadProvider}
                       onUpdateModelSelection={props.onUpdateThreadModelSelection}
                       onUpdateRuntimeMode={props.onUpdateThreadRuntimeMode}

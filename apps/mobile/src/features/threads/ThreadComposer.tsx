@@ -14,8 +14,14 @@ import {
   type ProviderInteractionMode,
   type RuntimeMode,
   type ServerConfig as T3ServerConfig,
+  type ThreadId,
   type UsageLimitsReport,
 } from "@t3tools/contracts";
+import {
+  parseSideQuestionCommand,
+  resolveSideQuestionSubmission,
+  sideQuestionRejectionMessage,
+} from "@t3tools/client-runtime/state/side-questions";
 import {
   collectProviderUsageLimits,
   hasProviderUsageLimits,
@@ -191,6 +197,17 @@ export interface ThreadComposerProps {
   readonly onSendMessage: (followUp?: ActiveTurnComposerAction) => Promise<MessageId | null>;
   /** `/usage-limits` resolves locally; the host decides where the report shows. Null clears it. */
   readonly onShowUsageLimits: (report: UsageLimitsReport | null) => void;
+  /**
+   * `/btw <question>` asks a side question about this thread. Resolves true
+   * once the server accepted it; on false the composer restores the draft.
+   */
+  readonly onAskSideQuestion: (
+    question: string,
+    modelSelection: ModelSelection,
+  ) => Promise<boolean>;
+  /** Bare `/btw`: open the newest side question, or null when there is none. */
+  readonly latestSideQuestionId: ThreadId | null;
+  readonly onOpenSideQuestion: (threadId: ThreadId) => void;
   /**
    * Whether the model picker may offer providers other than this thread's.
    * False keeps the catalog on the instance the thread's session runs on.
@@ -458,7 +475,15 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       draftKey: composerDraftKey,
     });
   };
-  const { onSendMessage, onChangeDraftMessage, onShowUsageLimits } = props;
+  const {
+    onSendMessage,
+    onChangeDraftMessage,
+    onShowUsageLimits,
+    onAskSideQuestion,
+    onOpenSideQuestion,
+  } = props;
+  const sideQuestionsOffered =
+    props.serverConfig?.environment.capabilities.threadSideQuestions === true;
   // T3 owns /usage-limits only where Limits has data for the selected provider;
   // elsewhere the name stays the provider's own and is sent through untouched.
   const usageLimitsOffered =
@@ -503,6 +528,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         ? undefined
         : props.onUpdateInteractionMode,
     offersUsageLimits: usageLimitsOffered,
+    offersSideQuestions: sideQuestionsOffered,
     // With attachments aboard the pick just inserts the text, so it sends as a prompt.
     onUsageLimits:
       usageLimitsOffered && props.draftAttachments.length === 0 ? openUsageLimits : undefined,
@@ -606,6 +632,43 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         return;
       }
       const threadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
+      // T3 answers `/btw` only where the server offers side questions;
+      // elsewhere it goes to the provider like any other prompt.
+      const sideQuestionCommand = sideQuestionsOffered
+        ? parseSideQuestionCommand(props.draftMessage)
+        : null;
+      if (sideQuestionCommand !== null) {
+        const submission = resolveSideQuestionSubmission({
+          question: sideQuestionCommand.question,
+          hasThread: true,
+          supported: true,
+          hasNonTextContent:
+            props.draftAttachments.length > 0 ||
+            (getComposerDraftSnapshot(composerDraftKey).context?.records.length ?? 0) > 0,
+          latestSideQuestionId: props.latestSideQuestionId,
+        });
+        if (submission.type === "rejected") {
+          const message = sideQuestionRejectionMessage(submission.reason);
+          Alert.alert(message.title, message.description);
+          return;
+        }
+        if (submission.type === "open") {
+          onChangeDraftMessage("");
+          onOpenSideQuestion(submission.threadId);
+          return;
+        }
+        if (inFlightThreadIdsRef.current.has(threadKey)) return;
+        inFlightThreadIdsRef.current.add(threadKey);
+        const draftSnapshot = props.draftMessage;
+        onChangeDraftMessage("");
+        try {
+          const asked = await onAskSideQuestion(submission.question, currentModelSelection);
+          if (!asked) onChangeDraftMessage(draftSnapshot);
+        } finally {
+          inFlightThreadIdsRef.current.delete(threadKey);
+        }
+        return;
+      }
       if (inFlightThreadIdsRef.current.has(threadKey)) return;
       inFlightThreadIdsRef.current.add(threadKey);
       try {
@@ -632,6 +695,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       onChangeDraftMessage,
       openUsageLimits,
       usageLimitsOffered,
+      sideQuestionsOffered,
+      composerDraftKey,
+      currentModelSelection,
+      onAskSideQuestion,
+      onOpenSideQuestion,
+      props.latestSideQuestionId,
       onSendMessage,
       props.environmentId,
       props.environmentLabel,
