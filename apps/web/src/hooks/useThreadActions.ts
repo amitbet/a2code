@@ -7,7 +7,14 @@ import {
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import { canSnooze, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
 import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
-import { EnvironmentId, type ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import {
+  type ChatAttachment,
+  EnvironmentId,
+  type OrchestrationMessageContext,
+  type RunId,
+  type ScopedThreadRef,
+  ThreadId,
+} from "@t3tools/contracts";
 import { resolveWorktreeCleanup } from "@t3tools/shared/projectSettings";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
@@ -41,7 +48,7 @@ import {
   readThreadShells,
   waitForThreadShell,
 } from "../state/entities";
-import { newThreadId } from "../lib/utils";
+import { newMessageId, newThreadId } from "../lib/utils";
 import { useUiStateStore } from "../uiStateStore";
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
@@ -285,6 +292,12 @@ export function useThreadActions() {
   });
   const markThreadUnread = useMarkThreadUnread();
   const forkThreadAtLatestMutation = useAtomCommand(threadEnvironment.forkAtLatest, {
+    reportFailure: false,
+  });
+  const startThreadTurnMutation = useAtomCommand(threadEnvironment.startTurn, {
+    reportFailure: false,
+  });
+  const cancelQueuedRunMutation = useAtomCommand(threadEnvironment.cancelQueuedRun, {
     reportFailure: false,
   });
   const stopThreadSession = useAtomCommand(threadEnvironment.stopSession);
@@ -991,10 +1004,80 @@ export function useThreadActions() {
     [forkThreadAtLatestMutation, resolveThreadTarget, router],
   );
 
+  /**
+   * Fork: run a queued message in a fork instead of waiting for the current run.
+   * Forks from the latest stable point (the in-flight run is not included),
+   * sends the message there, then removes it from the source queue. Each step
+   * stops on failure, so a failed fork or send leaves the message queued.
+   */
+  const forkQueuedRun = useCallback(
+    async (
+      target: ScopedThreadRef,
+      queued: {
+        readonly runId: RunId;
+        readonly text: string;
+        readonly attachments: ReadonlyArray<ChatAttachment>;
+        readonly context?: OrchestrationMessageContext | undefined;
+      },
+    ) => {
+      const resolved = resolveThreadTarget(target);
+      if (!resolved) return AsyncResult.success(undefined);
+      const forkRef = scopeThreadRef(target.environmentId, newThreadId());
+      const forked = await forkThreadAtLatestMutation({
+        environmentId: target.environmentId,
+        input: {
+          sourceThreadId: target.threadId,
+          targetThreadId: forkRef.threadId,
+          title: `${resolved.thread.title} fork`,
+        },
+      });
+      if (forked._tag === "Failure") return forked;
+      if (!(await waitForThreadShell(forkRef))) {
+        return AsyncResult.failure(
+          Cause.fail(new Error("The fork was created, but it has not reached this client yet.")),
+        );
+      }
+      const forkShell = readThreadShell(forkRef);
+      const sent = await startThreadTurnMutation({
+        environmentId: target.environmentId,
+        input: {
+          threadId: forkRef.threadId,
+          message: {
+            messageId: newMessageId(),
+            role: "user",
+            text: queued.text,
+            attachments: queued.attachments,
+            ...(queued.context ? { context: queued.context } : {}),
+          },
+          runtimeMode: forkShell?.runtimeMode ?? resolved.thread.runtimeMode,
+          interactionMode: forkShell?.interactionMode ?? resolved.thread.interactionMode,
+        },
+      });
+      if (sent._tag === "Failure") return sent;
+      const cancelled = await cancelQueuedRunMutation({
+        environmentId: target.environmentId,
+        input: { threadId: target.threadId, runId: queued.runId },
+      });
+      await router.navigate({
+        to: "/$environmentId/$threadId",
+        params: buildThreadRouteParams(forkRef),
+      });
+      return cancelled;
+    },
+    [
+      cancelQueuedRunMutation,
+      forkThreadAtLatestMutation,
+      resolveThreadTarget,
+      router,
+      startThreadTurnMutation,
+    ],
+  );
+
   return useMemo(
     () => ({
       archiveThread,
       forkThread,
+      forkQueuedRun,
       unarchiveThread,
       deleteThread,
       confirmAndDeleteThread,
@@ -1013,6 +1096,7 @@ export function useThreadActions() {
     [
       archiveThread,
       forkThread,
+      forkQueuedRun,
       confirmAndDeleteThread,
       confirmAndUnpinThread,
       deleteThread,

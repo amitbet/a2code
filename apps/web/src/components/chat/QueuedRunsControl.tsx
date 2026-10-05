@@ -11,6 +11,7 @@ import type {
 import {
   Clock3Icon,
   CornerUpRightIcon,
+  GitForkIcon,
   GripVerticalIcon,
   ListOrderedIcon,
   PencilIcon,
@@ -21,6 +22,12 @@ import { useAssetUrls } from "../../assets/assetUrls";
 import { threadEnvironment } from "../../state/threads";
 import { useThreadProjection } from "../../state/entities";
 import { useAtomCommand } from "../../state/use-atom-command";
+import { useThreadActions } from "../../hooks/useThreadActions";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@t3tools/client-runtime/state/runtime";
+import { stackedThreadToast, toastManager } from "../ui/toast";
 import { isImageAttachment, type ChatMessage } from "../../types";
 import { cn } from "~/lib/utils";
 import { ComposerBanner } from "./ComposerBanner";
@@ -70,6 +77,7 @@ export function QueuedRunsControl({
   const reorder = useAtomCommand(threadEnvironment.reorderQueuedRun);
   const promote = useAtomCommand(threadEnvironment.promoteQueuedRun);
   const cancel = useAtomCommand(threadEnvironment.cancelQueuedRun);
+  const { forkQueuedRun } = useThreadActions();
   const [expanded, setExpanded] = useState(true);
   const queueListId = useId();
   const [busyRunId, setBusyRunId] = useState<RunId | null>(null);
@@ -200,6 +208,36 @@ export function QueuedRunsControl({
       });
     } finally {
       steerInFlightRef.current = false;
+      setBusyRunId(null);
+    }
+  };
+
+  // Fork: run this message in a fork now instead of waiting behind the active run.
+  const forkQueued = async (item: {
+    readonly runId: RunId;
+    readonly text: string;
+    readonly attachments: ReadonlyArray<ContractChatAttachment>;
+  }) => {
+    const queuedRun = queued.find((entry) => entry.run.id === item.runId);
+    setBusyRunId(item.runId);
+    try {
+      const result = await forkQueuedRun(scopeThreadRef(props.environmentId, props.threadId), {
+        runId: item.runId,
+        text: item.text,
+        attachments: item.attachments,
+        context: queuedRun?.context,
+      });
+      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not fork the queued message",
+            description: error instanceof Error ? error.message : "It is still queued.",
+          }),
+        );
+      }
+    } finally {
       setBusyRunId(null);
     }
   };
@@ -441,6 +479,28 @@ export function QueuedRunsControl({
                           <TooltipPopup>
                             {`Edit in the composer${item.serverIndex === queued.length - 1 && props.editShortcutLabel ? ` (${props.editShortcutLabel})` : ""}`}
                           </TooltipPopup>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger render={<span className="flex shrink-0" />}>
+                            <Button
+                              size="xs"
+                              variant="ghost-muted"
+                              disabled={item.runId === null || busyRunId !== null}
+                              onClick={() => {
+                                if (item.runId !== null) {
+                                  void forkQueued({
+                                    runId: item.runId,
+                                    text: item.text,
+                                    attachments: item.attachments,
+                                  });
+                                }
+                              }}
+                            >
+                              <GitForkIcon />
+                              Fork
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipPopup>Run it now in a fork of this thread</TooltipPopup>
                         </Tooltip>
                         <Tooltip>
                           <TooltipTrigger render={<span className="flex shrink-0" />}>
