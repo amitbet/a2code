@@ -7,67 +7,56 @@ import * as PlatformError from "effect/PlatformError";
 
 import { resolveUserDataPath } from "./DesktopUserData.ts";
 
-it.effect("identifies a failed source read and preserves its cause", () => {
-  const sourceState = "/profiles/t3code/Local State";
+it.effect("identifies a failed legacy profile probe and preserves its cause", () => {
+  const legacyPath = "/profiles/A2 Code";
   const cause = PlatformError.systemError({
     _tag: "PermissionDenied",
     module: "FileSystem",
-    method: "readFileString",
-    pathOrDescriptor: sourceState,
+    method: "exists",
+    pathOrDescriptor: legacyPath,
   });
   return Effect.gen(function* () {
     const error = yield* resolveUserDataPath({
       appDataDirectory: "/profiles",
       isDevelopment: false,
-      platform: "win32",
     }).pipe(Effect.flip);
-    assert.equal(error.operation, "read");
-    assert.equal(error.resourcePath, sourceState);
+    assert.equal(error.operation, "inspect");
+    assert.equal(error.resourcePath, legacyPath);
     assert.equal(error.category, "PermissionDenied");
     assert.strictEqual(error.cause, cause);
   }).pipe(
     Effect.provideService(
       FileSystem.FileSystem,
-      FileSystem.makeNoop({
-        exists: (path) => Effect.succeed(path === sourceState),
-        readFileString: () => Effect.fail(cause),
-      }),
+      FileSystem.makeNoop({ exists: () => Effect.fail(cause) }),
     ),
     Effect.provide(NodeServices.layer),
   );
 });
 
-it.effect.each(["t3code", "T3 Code (Alpha)"])(
-  "preserves Windows credential keys from %s without copying browser databases",
-  (sourceName) =>
+it.effect.each([
+  { isDevelopment: false, legacy: "A2 Code", current: "a2code" },
+  { isDevelopment: true, legacy: "A2 Code (Dev)", current: "a2code-dev" },
+])(
+  "prefers the $legacy profile when it exists, else $current",
+  ({ isDevelopment, legacy, current }) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-v2-profile-" });
-      const source = path.join(directory, sourceName);
-      const destination = path.join(directory, "t3code-v2");
-      const state = '{"os_crypt":{"encrypted_key":"test-encrypted-key"}}';
-      yield* fs.makeDirectory(path.join(directory, "T3 Code (Alpha)"), { recursive: true });
-      yield* fs.makeDirectory(path.join(source, "IndexedDB"), { recursive: true });
-      yield* fs.writeFileString(path.join(source, "Local State"), state);
-      yield* fs.writeFileString(path.join(source, "IndexedDB", "LOCK"), "V1 owns this database");
-      yield* resolveUserDataPath({
-        appDataDirectory: directory,
-        isDevelopment: false,
-        platform: "win32",
-      });
-      assert.equal(yield* fs.readFileString(path.join(destination, "Local State")), state);
-      assert.equal(yield* fs.readFileString(path.join(source, "Local State")), state);
-      assert.isFalse(yield* fs.exists(path.join(destination, "IndexedDB")));
-      yield* fs.writeFileString(path.join(destination, "Local State"), "existing V2 state");
-      yield* resolveUserDataPath({
-        appDataDirectory: directory,
-        isDevelopment: false,
-        platform: "win32",
-      });
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "a2-profile-" });
+      // An upstream T3 Code profile on the same machine is never adopted.
+      yield* fs.makeDirectory(path.join(directory, "t3code"), { recursive: true });
+      yield* fs.writeFileString(path.join(directory, "t3code", "Local State"), "t3 keys");
+
       assert.equal(
-        yield* fs.readFileString(path.join(destination, "Local State")),
-        "existing V2 state",
+        yield* resolveUserDataPath({ appDataDirectory: directory, isDevelopment }),
+        path.join(directory, current),
+      );
+      assert.isFalse(yield* fs.exists(path.join(directory, current)));
+
+      yield* fs.makeDirectory(path.join(directory, legacy));
+      assert.equal(
+        yield* resolveUserDataPath({ appDataDirectory: directory, isDevelopment }),
+        path.join(directory, legacy),
       );
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

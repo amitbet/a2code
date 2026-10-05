@@ -241,6 +241,7 @@ describe("DesktopBackendConfiguration", () => {
           environment.backendEntryPath,
         ]);
         assert.equal(first.entryPath, environment.backendEntryPath);
+        assert.notInclude(first.args, "--import");
         assert.equal(first.cwd, environment.backendCwd);
         assert.equal(first.captureOutput, true);
         assert.equal(first.env.ELECTRON_RUN_AS_NODE, "1");
@@ -261,6 +262,37 @@ describe("DesktopBackendConfiguration", () => {
         assert.equal(first.bootstrap.tailscaleServePort, 8443);
         assert.match(first.bootstrap.desktopBootstrapToken, /^[0-9a-f]{48}$/i);
         assert.equal(second.bootstrap.desktopBootstrapToken, first.bootstrap.desktopBootstrapToken);
+      }),
+    ),
+  );
+
+  it.effect("resolvePrimary launches an active payload with shell module resolution", () =>
+    withHarness(
+      Effect.gen(function* () {
+        const environment = yield* DesktopEnvironment.DesktopEnvironment;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
+        const payloadEntryPath = `${environment.payloadsDir}/1.2.4/bin.mjs`;
+        yield* fileSystem.makeDirectory(`${environment.payloadsDir}/1.2.4`, { recursive: true });
+        yield* fileSystem.writeFileString(payloadEntryPath, "");
+        yield* fileSystem.writeFileString(
+          environment.activePayloadPointerPath,
+          JSON.stringify({
+            version: "1.2.4",
+            minShellVersion: "1.2.3",
+            sha256: "abc",
+            stagedAt: "2026-07-02T00:00:00.000Z",
+          }),
+        );
+
+        const config = yield* configuration.resolvePrimary;
+
+        assert.equal(config.entryPath, payloadEntryPath);
+        assert.deepEqual(config.args.slice(0, 2), ["--require", environment.compileCachePath]);
+        assert.equal(config.args[2], "--import");
+        assert.match(config.args[3] ?? "", /^data:text\/javascript,/);
+        assert.deepEqual(config.args.slice(4, 6), [payloadEntryPath, "--bootstrap-fd"]);
+        assert.equal(config.env.T3CODE_SERVER_VERSION, "1.2.4");
       }),
     ),
   );

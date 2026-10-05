@@ -22,9 +22,9 @@ const defaultEnvironmentInput = {
   platform: "darwin",
   processArch: "arm64",
   appVersion: "1.2.3",
-  appPath: "/Applications/T3 Code.app/Contents/Resources/app.asar",
+  appPath: "/Applications/A2 Code.app/Contents/Resources/app.asar",
   isPackaged: true,
-  resourcesPath: "/Applications/T3 Code.app/Contents/Resources",
+  resourcesPath: "/Applications/A2 Code.app/Contents/Resources",
   runningUnderArm64Translation: false,
 } satisfies DesktopEnvironment.MakeDesktopEnvironmentInput;
 
@@ -41,7 +41,7 @@ interface ElectronAppCalls {
 const makeElectronAppLayer = (calls: ElectronAppCalls) =>
   Layer.succeed(ElectronApp.ElectronApp, {
     metadata: Effect.die("unexpected metadata read"),
-    name: Effect.succeed("T3 Code"),
+    name: Effect.succeed("A2 Code"),
     systemLocale: Effect.succeed("en-US"),
     whenReady: Effect.void,
     quit: Effect.void,
@@ -113,6 +113,7 @@ const withIdentity = <A, E, R>(
     readonly legacyPathExists?: boolean;
     readonly legacyPathProbeError?: PlatformError.PlatformError;
     readonly packageJson?: string;
+    readonly payloadFiles?: Record<string, string>;
     readonly pngIconPath?: Option.Option<string>;
   } = {},
 ) => {
@@ -132,10 +133,23 @@ const withIdentity = <A, E, R>(
               input.legacyPathProbeError
                 ? Effect.fail(input.legacyPathProbeError)
                 : Effect.succeed(
-                    input.legacyPathExists === true && /T3 Code \((Alpha|Dev)\)/.test(path),
+                    (input.legacyPathExists === true && /A2 Code( \(Dev\))?$/.test(path)) ||
+                      input.payloadFiles?.[path] !== undefined,
                   ),
-            readFileString: () =>
-              Effect.succeed(input.packageJson ?? '{"t3codeCommitHash":"abcdef1234567890"}'),
+            readFileString: (path) =>
+              Effect.succeed(
+                input.payloadFiles?.[path] ??
+                  input.packageJson ??
+                  '{"t3codeCommitHash":"abcdef1234567890"}',
+              ),
+            writeFileString: (path, content) =>
+              Effect.sync(() => {
+                if (input.payloadFiles) input.payloadFiles[path] = content;
+              }),
+            remove: (path) =>
+              Effect.sync(() => {
+                if (input.payloadFiles) delete input.payloadFiles[path];
+              }),
           }),
         ),
         Layer.provideMerge(makeAssetsLayer(input.pngIconPath ?? Option.none())),
@@ -147,15 +161,27 @@ const withIdentity = <A, E, R>(
 };
 
 describe("DesktopAppIdentity", () => {
-  it.effect("isolates the V2 profile even when the legacy V1 profile exists", () =>
+  it.effect("keeps using the legacy userData path when it already exists", () =>
     withIdentity(
       Effect.gen(function* () {
         const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
         const userDataPath = yield* identity.resolveUserDataPath;
 
-        assert.equal(userDataPath, "/Users/alice/Library/Application Support/t3code-v2");
+        assert.equal(userDataPath, "/Users/alice/Library/Application Support/A2 Code");
       }),
       { legacyPathExists: true },
+    ),
+  );
+
+  it.effect("uses the a2code userData path when no legacy profile exists", () =>
+    withIdentity(
+      Effect.gen(function* () {
+        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
+        assert.equal(
+          yield* identity.resolveUserDataPath,
+          "/Users/alice/Library/Application Support/a2code",
+        );
+      }),
     ),
   );
 
@@ -165,7 +191,7 @@ describe("DesktopAppIdentity", () => {
         const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
         assert.equal(
           yield* identity.resolveUserDataPath,
-          "/Users/alice/Library/Application Support/T3 Code (Dev)",
+          "/Users/alice/Library/Application Support/A2 Code (Dev)",
         );
       }),
       {
@@ -176,7 +202,7 @@ describe("DesktopAppIdentity", () => {
   );
 
   it.effect("preserves failures while inspecting the legacy userData path", () => {
-    const legacyPath = "/Users/alice/Library/Application Support/T3 Code (Dev)";
+    const legacyPath = "/Users/alice/Library/Application Support/A2 Code (Dev)";
     const cause = PlatformError.systemError({
       _tag: "PermissionDenied",
       module: "FileSystem",
@@ -217,10 +243,12 @@ describe("DesktopAppIdentity", () => {
         const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
         yield* identity.configure;
 
-        assert.deepEqual(calls.setName, ["T3 Code (Alpha)"]);
-        assert.equal(calls.setAboutPanelOptions[0]?.applicationName, "T3 Code (Alpha)");
-        assert.equal(calls.setAboutPanelOptions[0]?.applicationVersion, "1.2.3");
-        assert.equal(calls.setAboutPanelOptions[0]?.version, "0123456789ab");
+        assert.deepEqual(calls.setName, ["A2 Code"]);
+        assert.equal(calls.setAboutPanelOptions[0]?.applicationName, "A2 Code");
+        // No payload applied in the test env, so the running content version is
+        // the shell version; the build line carries the shell version + commit.
+        assert.equal(calls.setAboutPanelOptions[0]?.applicationVersion, "content 1.2.3");
+        assert.equal(calls.setAboutPanelOptions[0]?.version, "shell 1.2.3 · 0123456789ab");
         // Packaged: the bundle's own icon stands, so a custom one the user
         // attached survives.
         assert.deepEqual(calls.setDockIcon, []);
@@ -234,6 +262,57 @@ describe("DesktopAppIdentity", () => {
         },
         pngIconPath: Option.some("/icon.png"),
       },
+    );
+  });
+
+  it.effect("configures the macOS About panel from a pending payload selected for launch", () => {
+    const calls: ElectronAppCalls = {
+      setAboutPanelOptions: [],
+      setDockIcon: [],
+      setName: [],
+    };
+    const payloadFiles: Record<string, string> = {
+      "/Users/alice/.a2code/userdata/payloads/pending.json": JSON.stringify({
+        version: "1.2.4",
+        minShellVersion: "1.2.3",
+        sha256: "abc",
+        stagedAt: "2026-07-02T00:00:00.000Z",
+      }),
+      "/Users/alice/.a2code/userdata/payloads/1.2.4/bin.mjs": "",
+    };
+
+    return withIdentity(
+      Effect.gen(function* () {
+        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
+        yield* identity.configure;
+
+        assert.equal(calls.setAboutPanelOptions[0]?.applicationVersion, "content 1.2.4");
+        assert.equal(calls.setAboutPanelOptions[0]?.version, "shell 1.2.3 · abcdef123456");
+        assert.property(payloadFiles, "/Users/alice/.a2code/userdata/payloads/active.json");
+        assert.notProperty(payloadFiles, "/Users/alice/.a2code/userdata/payloads/pending.json");
+      }),
+      { calls, payloadFiles },
+    );
+  });
+
+  it.effect("refreshes the macOS About panel from the supplied running content version", () => {
+    const calls: ElectronAppCalls = {
+      setAboutPanelOptions: [],
+      setDockIcon: [],
+      setName: [],
+    };
+
+    return withIdentity(
+      Effect.gen(function* () {
+        const identity = yield* DesktopAppIdentity.DesktopAppIdentity;
+        yield* identity.configure;
+        yield* identity.configureAboutPanel("1.2.5");
+
+        assert.equal(calls.setAboutPanelOptions[0]?.applicationVersion, "content 1.2.3");
+        assert.equal(calls.setAboutPanelOptions[1]?.applicationVersion, "content 1.2.5");
+        assert.equal(calls.setAboutPanelOptions[1]?.version, "shell 1.2.3 · abcdef123456");
+      }),
+      { calls },
     );
   });
 

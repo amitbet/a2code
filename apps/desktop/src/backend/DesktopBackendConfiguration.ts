@@ -18,6 +18,7 @@ import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopServerExposure from "./DesktopServerExposure.ts";
 import * as DesktopPayloadLayout from "../updates/payloadLayout.ts";
+import { makePayloadModuleResolutionImport } from "../updates/payloadModuleResolution.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 import * as DesktopWslServerTree from "../wsl/DesktopWslServerTree.ts";
@@ -596,6 +597,16 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       // backend starts.
       args: [
         ...(environment.isPackaged ? ["--require", environment.compileCachePath] : []),
+        // A payload resolves the bundle's external packages from the shell.
+        ...(entryPath === environment.bundledBackendEntryPath
+          ? []
+          : [
+              "--import",
+              makePayloadModuleResolutionImport({
+                bundledEntryPath: environment.bundledBackendEntryPath,
+                payloadsDir: environment.payloadsDir,
+              }),
+            ]),
         entryPath,
         "--bootstrap-fd",
         "3",
