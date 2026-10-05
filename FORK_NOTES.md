@@ -3,14 +3,84 @@
 This file tracks fork-specific divergences that are likely to conflict when
 merging `upstream/main`.
 
-## Pairing-link session lifetime (fork feature) — migration 060
+## Pairing-link session lifetime (fork feature) — fork migration 1
 
 Settings → Connections → Create link has a session expiry picker (1 month, 1 year, 10 years,
-never). The choice is stored in `auth_pairing_links.session_lifetime` (fork migration
-**060_AuthPairingSessionLifetime**, so the **next free id is 61**). It is applied in
-`SessionStore.issue` via `sessionLifetimeExpiresAt` (`apps/server/src/auth/sessionLifetime.ts`).
-Expect conflicts in `AuthPairingLinks.ts`, `PairingGrantStore.ts`, `EnvironmentAuth.ts` and the
+never). The choice is stored in `auth_pairing_links.session_lifetime`, added by **fork migration 1**
+(`apps/server/src/persistence/ForkMigrations/001_AuthPairingSessionLifetime.ts`, see "Fork schema
+lives in its own migration ledger" below). It is applied in `SessionStore.issue` via
+`sessionLifetimeExpiresAt` (`apps/server/src/auth/sessionLifetime.ts`). Expect conflicts in
+`AuthPairingLinks.ts`, `PairingGrantStore.ts`, `EnvironmentAuth.ts` and the
 `AuthCreatePairingCredentialInput` contract.
+
+## 2026-10-05 upstream merge (orchestration v2) — read this first
+
+Merged `upstream/main` through `a1d9d72aef` (212 commits), including upstream's new orchestrator
+(#2829, ~1,900 files). `apps/server/src/orchestration/` and the v1 provider adapters are gone;
+everything server-side that the fork had built on them was removed and rebuilt on v2
+(`apps/server/src/orchestration-v2/`). The merge commit is "upstream taken"; each fork feature came
+back as its own follow-up commit.
+
+### Fork schema lives in its own migration ledger (`fork_sql_migrations`)
+
+Upstream's migrator compares ids only, and upstream's v2 schema is migration **55**. The fork had
+interleaved its own migrations into `effect_sql_migrations` (ids up to 60), so a fork database would
+have silently skipped v2. Now:
+
+- `apps/server/src/persistence/Migrations.ts` and `Migrations/` match upstream **exactly**. Never
+  renumber or add to them again.
+- Fork schema goes in `apps/server/src/persistence/ForkMigrations.ts` (`fork_sql_migrations`,
+  next id **2**). Fork migrations must be idempotent.
+- `reconcileForkMigrationLedger.ts` runs before the upstream migrator and rewrites a pre-split fork
+  ledger once: the upstream migrations it applied (as a set — the fork ran upstream's pinning
+  migration before settled) are re-recorded under upstream ids, live fork migrations move to the
+  fork ledger, retired ones (queued prompts, forked-from, FTS, side-question column) are dropped from
+  the ledger. Their v1 tables stay as legacy import data. Tested in
+  `reconcileForkMigrationLedger.test.ts`.
+- v2 copies `state.sqlite` to `statev2.sqlite` on first start and migrates only the copy; the old
+  file stays as the v1 import source (see upstream's `docs/internals/legacy-orchestration-migration.md`).
+
+### What upstream now owns (fork code deleted)
+
+- **Queued prompts** → upstream's server queue (`QueuedRunsControl.tsx`, `t3_queue_*` MCP tools).
+  The fork keeps one addition: **Fork** on a queued row (`useThreadActions.forkQueuedRun`): fork at
+  `latest_stable`, send the message there, then cancel it in the source queue — each step stops on
+  failure so the message is never lost.
+- **Thread forking** → upstream's `thread.fork` (fork from a response/run/checkpoint, lineage,
+  merge-back, `provider_handoff`). The sidebar "Fork thread" item uses `forkAtLatest`
+  (`forkThreadAtLatest` in client-runtime `operations/commands.ts`).
+- **Agent thread search** → upstream's `t3_thread_search` / `t3_thread_read`. The fork's MCP
+  `threads` toolkit, FTS table and `ProjectionThreadSearch` are deleted.
+- **Cursor usage** → upstream's `cursorUsageLimits.ts` (now reads the macOS Keychain behind
+  `cursorKeychainUsageEnabled`). `CursorUsageApi.ts` / `MacOSKeychain.ts` deleted.
+- **Mark unread** → upstream's server-side visited tracking; the fork's local `unreadThreadIds` set
+  is gone.
+- The on-demand `server.refreshProviderRateLimits` RPC is dropped; the 5-minute Claude usage loop
+  (`readClaudeUsageLimits`) stays.
+
+### Machines are not interchangeable here
+
+See "machine-scoped environment selector" below: upstream's per-thread machine picker, load
+balancing and per-draft machine stepping stay out. `composer.cycleHost` steps the **global** machine
+scope (`components/sidebar/machineItems.ts`, shared with `MachineSwitcher`). `BranchToolbar` /
+`ThreadDetailsPanel` never receive `onEnvironmentChange`.
+
+### Desktop
+
+- The Electron profile stays `a2code` / `A2 Code` (legacy name preferred when it exists), not
+  upstream's `t3code-v2` split — that would drop localStorage and remote-environment cookies
+  (`DesktopUserData.ts`).
+- Payload backends resolve bare packages from the installed shell through an `--import` hook
+  (`apps/desktop/src/updates/payloadModuleResolution.ts`): upstream made `@cursor/sdk` & co.
+  external. **Raise `T3CODE_PAYLOAD_MIN_SHELL_VERSION` for the first post-merge release**, or older
+  shells loop on a payload they cannot start. Known gaps: the Cursor SDK's platform helpers and
+  self-spawned `t3 acp-mcp-bridge` processes from a payload.
+
+### Still open after this merge
+
+- Generated images, Cursor diff paths, cross-project thread search and full-transcript provider
+  handoffs were in flight in follow-up commits; check `git log` before assuming.
+- Mobile: thread/detail routes still do not reject another machine's thread.
 
 ## 2026-09-30 upstream merge (lint-enforced UI rules, legacy mobile list retired, Codex tool context) — migration notes
 
@@ -1814,269 +1884,50 @@ the next merge; the per-feature sections below were updated to match.
 
 ### Queued prompt steering
 
-- Adds Codex-like running-turn prompt handling: sending while a thread is
-  running queues the prompt instead of immediately steering; each queued prompt
-  can be removed or promoted with **Steer**, which sends it to the active agent
-  mid-flight. When the session becomes ready/idle, queued prompts drain FIFO as
-  normal next turns.
-- Provider behavior remains routed through the existing provider turn-start
-  path. For running sessions, adapters that already treat a second send as a
-  steer continue to do so; for idle/ready sessions the same command starts the
-  next turn. This keeps the feature provider-neutral across Codex, Claude,
-  Cursor, Grok, and OpenCode.
-- Merge note: migration `034_ProjectionQueuedPrompts` is fork-added. Fork ids
-  33-35 are frozen (see the 2026-07-24 merge notes): renumber **upstream's**
-  colliding migrations to the fork's next free id, never the fork's.
-- Files:
-  - `packages/contracts/src/orchestration.ts` — **modified**: queued prompt
-    schema on `OrchestrationThread`, prompt queue/remove/steer commands, and
-    prompt queued/removed/steer-requested events.
-  - `packages/client-runtime/src/operations/commands.ts` and
-    `packages/client-runtime/src/state/threadCommands.ts` — **modified**:
-    client command helpers/atoms for queue, remove, and steer.
-  - `apps/server/src/orchestration/{decider,projector,Schemas,Normalizer}.ts`
-    — **modified**: validate/project queued prompts and normalize queued
-    attachments.
-  - `apps/server/src/orchestration/Layers/{ProjectionPipeline,ProjectionSnapshotQuery,ProviderCommandReactor}.ts`
-    — **modified**: persist/read queued prompts, drain FIFO after ready/idle
-    session updates, and promote queued prompts into provider turn-start work.
-  - `apps/server/src/persistence/Migrations/034_ProjectionQueuedPrompts.ts` —
-    **fork-added**: `projection_queued_prompts` table.
-  - `apps/web/src/components/ChatView.tsx` and
-    `apps/web/src/components/chat/{ChatComposer,ComposerPrimaryActions}.tsx` —
-    **modified**: running composer queues by default and renders queue controls
-    with explicit **Steer** promotion.
+Retired 2026-10-05: upstream's server queue owns this (see the 2026-10-05 merge notes). The only
+fork addition is **Fork** on a queued row (`QueuedRunsControl.tsx` → `useThreadActions.forkQueuedRun`).
 
 ### In-chat find (Cmd/Ctrl+F)
 
-- Adds a browser-style find toolbar to the chat timeline. Because the timeline
-  is rendered through a virtualized list (`@legendapp/list`), the browser's
-  native find-in-page only sees the handful of mounted rows — this feature
-  searches the underlying row data instead, scrolls each match into view, and
-  paints highlights over the rendered DOM.
-- Files (all fork-added unless noted):
-  - `apps/web/src/components/chat/chatSearch.ts` — pure search logic
-    (occurrence extraction over `MessagesTimelineRow` data) + unit tests in
-    `chatSearch.test.ts`.
-  - `apps/web/src/components/chat/ChatSearchBar.tsx` — the floating find
-    toolbar (query input, match counter, prev/next, close).
-  - `apps/web/src/components/chat/useChatSearchHighlight.ts` — paints matches
-    via the CSS Custom Highlight API (no DOM mutation); re-runs on scroll /
-    resize / DOM mutation since only rendered rows can be highlighted.
-  - `apps/web/src/components/chat/MessagesTimeline.tsx` — **modified**: owns the
-    search state (open/query/active match), the `Cmd/Ctrl+F` capture-phase
-    keydown listener, and `scrollToIndex` navigation. Search resets per thread
-    because the component is keyed on the active thread id.
-  - `apps/web/src/index.css` — `::highlight(chat-search)` and
-    `::highlight(chat-search-active)` styles.
-- Behavior: `Cmd/Ctrl+F` opens/refocuses the bar; `Enter` / `Shift+Enter` step
-  through matches (wrapping); `Escape` closes. Matching is case-insensitive over
-  the raw row text (message bodies, proposed-plan markdown, work-log
-  labels/commands/details, fold labels).
+- A find toolbar over the chat timeline. The timeline is virtualized, so native find-in-page only
+  sees mounted rows; this searches the row data, scrolls each match into view and paints highlights
+  over the rendered DOM. Cmd/Ctrl+F is a hard-coded listener (skipped inside the terminal), not a
+  keybinding command.
+- Since 2026-10-05 it indexes the v2 timeline with every fold open and opens only the fold hiding
+  the active match. Collapsed tool rows match on their visible label only (expanding fetches over
+  the network). Files: `components/chat/{chatSearch,ChatSearchBar,useChatSearchHighlight}.ts(x)`,
+  wiring in `ChatView.tsx` and `MessagesTimeline.tsx`.
 
 ### Answered user-input exchanges (questions + answers in the timeline)
 
-- Renders resolved `AskUserQuestion` interactions as their own timeline
-  messages: once the user answers a user-input request, the questions are paired
-  with the submitted answers and shown as a distinct "Answered" row (question
-  header + full text + selected option(s) / free-text value), separate from the
-  agent work log. Landed in commit `f3ef1bec8`.
-- Files (all fork-added surface unless noted):
-  - `apps/web/src/session-logic.ts` — **modified**: `deriveUserInputExchanges(
-activities)` pairs `user-input.requested` questions with the matching
-    `user-input.resolved` answers by `requestId` (ordered via
-    `compareActivitiesByOrder`), plus `buildUserInputExchangeAnswers` and the
-    `UserInputExchange` / `UserInputExchangeAnswer` types and the `kind:
-"user-input"` timeline-row variant. Exchanges with zero answers (e.g.
-    aborted requests) are dropped.
-  - `apps/web/src/session-logic.test.ts` — **modified**: covers the pairing
-    logic (header/values normalization, custom free-text, unanswered requests).
-  - `apps/web/src/components/chat/MessagesTimeline.logic.ts` — **modified**:
-    classifies `user-input` rows and **excludes them from the work log** so an
-    answered exchange reads as a conversation message, not a tool step.
-  - `apps/web/src/components/chat/MessagesTimeline.tsx` — **modified**: renders
-    the row via `UserInputAnswerTimelineRow` for `row.kind === "user-input"`.
-  - `apps/web/src/components/chat/chatSearch.ts` — **modified**: includes
-    user-input row text in the in-chat find index (see "In-chat find" above).
-  - `apps/web/src/components/ChatView.tsx` — **modified**: wires it in via
-    `useMemo(() => deriveUserInputExchanges(threadActivities), …)` and feeds the
-    exchanges into the timeline rows.
-- **Merge seam:** `MessagesTimeline.tsx`, `MessagesTimeline.logic.ts`, and
-  `ChatView.tsx` are all files upstream rewrites (they conflicted in the
-  2026-07-24 merge). Survived that merge intact, but re-apply the row
-  classification, the `UserInputAnswerTimelineRow` render branch, the search
-  indexing, and the `deriveUserInputExchanges` wiring if a future merge clobbers
-  any of them. `session-logic.test.ts` is the behavioral guard.
+Upstream's v2 timeline shows an answered question as a one-line preview in the work log. The fork
+shows each answered exchange as its own conversation row (header, full question, chosen options or
+free text, attachments), kept out of the work log and outside folds. Pairing reuses upstream's
+question/answer data (`buildUserInputExchangeAnswers` in
+`packages/client-runtime/src/work-log/userInput.ts`); rendering is in `MessagesTimeline.tsx`.
 
 ### Thread forking (`/fork` + context menu)
 
-- Creates a new thread that inherits the source thread's provider conversation
-  context, staying in the **same git environment** (same project, model, runtime
-  mode, branch, worktree — no new worktree, no subthread runtime model).
-- Entry points (both fork-added):
-  - sidebar thread context-menu action: **`Fork thread`**
-  - composer slash command: **`/fork`** (only offered on a started server
-    thread, not on a draft — a draft has no context to fork)
-- **Implementation approach — an implicit thread reference.** On the fork's
-  **first user turn**, `ProviderCommandReactor.buildSendTurnRequestForThread`
-  prepends `forkedFromId` to the same bounded, de-duplicated reference list used
-  by explicit `@thread_ref:<id>` tokens. The shared loop resolves the source,
-  serializes its settled history with `buildThreadTranscript`, persists it as
-  `referenced-thread-<id>.md` through `createThreadContextArtifact`, and appends
-  the same mandatory path-reading instruction to the provider prompt. This is
-  provider-neutral: same-provider, cross-provider, regular, `/fork`, and queued
-  prompt forks all use this one path.
-- Transcript contents are intentionally not inlined, so the agent must inspect
-  the complete file with its read/search tools and the prompt does not spend
-  context on a large preview. The persisted transcript is not subject to the
-  regular 10 MiB provider-attachment limit, and its tool results do not use the
-  serializer's normal per-result preview limit. A failure to build the artifact
-  skips that reference and is logged.
-- **Replay transcript serializes completed work, not just text.**
-  `buildThreadTranscript` interleaves messages with **completed tool steps**
-  (`item.completed` activities — the call via `deriveToolActivityPresentation`
-  plus its result via `deriveToolActivityResult`, read from the untruncated
-  `payload.data`) and errors, in chronological order. It deliberately omits:
-  proposed plans (intent / in-flight, not completed work), the **currently
-  running turn** (excluded by `latestTurn.state === "running"` + matching
-  `turnId`, so an in-flight prompt and its partial work never leak in), and
-  `tool.started`/`tool.updated` lifecycle noise. The only thing it cannot
-  recover is what isn't persisted at all — the model's raw hidden reasoning and
-  the exact backend context window — which remain native-fork-only.
-- **`buildThreadTranscript` is a shared primitive, not fork-specific.** It is
-  intended to also back: referencing one thread from another, "copy thread ref"
-  (`thread_ref:<id>`) tokens, exporting a conversation (e.g. "export thread as
-  zip": transcript `.md` + attachments subdir), and handoff to external agents.
-  Keep it pure / I/O-free so those consumers stay trivial.
-- The source transcript is context for the provider, not copied projection
-  history: prior messages do not render as ordinary rows in the fork. Making the
-  implicit source reference a first-class visible chip on the fork's first
-  message is a deferred enhancement.
-- Files:
-  - `packages/contracts/src/orchestration.ts` — **modified**: `ThreadForkCommand`
-    (`thread.fork`: `threadId`, `sourceThreadId`, `title`, and the optional
-    **`modelSelection`** target used to switch providers on fork), added to both
-    command unions; `forkedFromId` added to `OrchestrationThread` (optional) and
-    `ThreadCreatedPayload` (optional). Also defines `thread.prompt.fork`, which
-    atomically creates a fork, removes the selected queued prompt from the
-    source, and starts it on the new thread.
-  - `packages/contracts/src/provider.ts` — **modified**: `forkFromThreadId` on
-    `ProviderSessionStartInput`. This lower-level native-fork primitive remains
-    available but is no longer selected by the user-facing fork workflow.
-  - `apps/server/src/provider/Services/ProviderAdapter.ts` — **modified**:
-    `ProviderAdapterCapabilities.nativeFork: boolean` (retained as a provider
-    capability, but not used by the user-facing fork workflow).
-  - `apps/server/src/provider/Layers/{CodexAdapter,ClaudeAdapter,CursorAdapter,GrokAdapter,OpenCodeAdapter}.ts`
-    — **modified**: each declares `nativeFork` (Codex `true`, rest `false`).
-  - `packages/shared/src/threadTranscript.ts` + `package.json`
-    (`./threadTranscript` export) — **fork-added**: pure `buildThreadTranscript`
-    serializer (no I/O), shared between server and web.
-  - `apps/server/src/threadContextArtifact.ts` — **fork-added**:
-    `createThreadContextArtifact` writes a transcript into the attachment store
-    without the provider attachment-size clamp and returns its absolute path
-    metadata.
-  - `apps/server/src/orchestration/decider.ts` — **modified**: `thread.fork`
-    case validates source exists / new absent, copies source metadata
-    (`modelSelection` now `command.modelSelection ?? source.modelSelection`), and
-    emits a `thread.created` event tagged with `forkedFromId` (no new event
-    type — reuses `thread.created`). The `thread.prompt.fork` case composes
-    `thread.fork`, source prompt removal, and target `thread.turn.start` into one
-    projected command sequence.
-  - `apps/server/src/orchestration/projector.ts` — **modified**: carries
-    `forkedFromId` into the read model (only when set).
-  - `apps/server/src/orchestration/Layers/ProjectionPipeline.ts` — **modified**:
-    `thread.created` upsert writes `forkedFromId`.
-  - `apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts` —
-    **modified**: selects `forked_from_id` in the four full-row thread queries
-    and surfaces it in the thread-detail builder (the shell builder does **not**
-    carry it).
-  - `apps/server/src/persistence/Services/ProjectionThreads.ts` +
-    `Layers/ProjectionThreads.ts` — **modified**: `forkedFromId` field +
-    `forked_from_id` column in INSERT / ON CONFLICT / SELECTs.
-  - `apps/server/src/persistence/Migrations/033_ProjectionThreadsForkedFrom.ts` —
-    fork-added migration (adds `forked_from_id` to `projection_threads`);
-    registered in `apps/server/src/persistence/Migrations.ts` as id `33`.
-  - `apps/server/src/provider/Layers/ProviderService.ts` — **modified**: on
-    `startSession`, when the thread has no cursor yet and `forkFromThreadId` is
-    set, resolves the source thread's persisted conversation id and builds the
-    `{ threadId, fork: true }` cursor (`readResumeCursorThreadId` helper). This
-    lower-level native path is retained but user-facing forks no longer request
-    it.
-  - `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts` —
-    **modified**: on the fork's first user turn, treats `forkedFromId` as the
-    first implicit thread reference and runs it through the exact explicit
-    `@thread_ref` artifact loop. Acquires `ServerConfig`/`FileSystem`/`Path` for
-    the artifact.
-  - `apps/server/src/provider/Layers/CodexSessionRuntime.ts` — **modified**:
-    `CodexResumeCursorSchema` gains optional `fork`; `openCodexThread` adds a
-    `thread/fork` branch; `CodexThreadOpenMethod`/`CodexThreadOpenResponse`
-    include `thread/fork`; `readForkCursorThreadId` helper. This remains a
-    lower-level primitive and is not used by the user-facing fork workflow.
-  - `packages/client-runtime/src/operations/commands.ts` — **fork-added (post-merge)**:
-    `forkThread` command builder + `ForkThreadInput` (dispatches `thread.fork`),
-    mirroring `createThread`. Wired as the `fork` atom command in
-    `packages/client-runtime/src/state/threadCommands.ts`; `forkThreadPrompt` /
-    `ForkThreadPromptInput` are wired as the `forkPrompt` atom command for queue
-    forks. This replaces the old direct `api.orchestration.dispatchCommand`
-    call after the atom-architecture rewrite.
-  - `apps/web/src/hooks/useThreadActions.ts` — **modified**: `forkThread` action
-    now dispatches via `useAtomCommand(threadEnvironment.fork)`, waits for the new
-    thread to project (`waitForServerThread` polls `readThreadShell` rather than
-    the deleted zustand store), then navigates. Accepts an optional
-    `{ modelSelection }` to fork onto a different provider.
-    NOTE: an explicit "fork to provider X" menu is **not yet wired**; the
-    cross-provider path is reachable today by forking and then switching the
-    provider in the composer model picker before sending the first message
-    (the shared transcript reference works across providers).
-    `forkQueuedPrompt` dispatches the atomic queue-fork command and navigates to
-    the projected target thread.
-  - `apps/web/src/components/threadActionMenu.logic.ts` — **modified**: `fork` id +
-    `Fork thread` item in the shared `buildThreadActionMenuItems` list, so both the
-    default sidebar and the chat header offer it (2026-08-14).
-  - `apps/web/src/components/Sidebar.tsx` (default, v2-derived) and
-    `apps/web/src/hooks/useThreadActionMenu.ts` (chat header) — **modified**: each
-    handles `case "fork"` via `forkThread`.
-  - `apps/web/src/components/LegacySidebar.tsx` (the old v1 sidebar) — **modified**:
-    `Fork thread` menu item + threads `forkThread` through the sidebar prop chain.
-  - `apps/web/src/components/ChatView.tsx` — **modified**: queued prompts expose
-    a **Fork** action alongside Edit/Steer; it uses `forkQueuedPrompt`, so it
-    receives the same implicit source reference as regular forks.
-  - `apps/web/src/components/chat/ChatComposer.tsx` +
-    `apps/web/src/composer-logic.ts` — **modified**: `/fork` slash command
-    (`"fork"` added to `ComposerSlashCommand`) and its handler.
+Retired 2026-10-05: upstream's `thread.fork` replaces the fork's transcript-replay forks. The
+sidebar/project-tree "Fork thread" item forks at `latest_stable` via `forkAtLatest`. Cross-provider
+forks use upstream's portable handoff; see the 2026-10-05 notes for the full-transcript addition.
 
 ### Side questions (`/btw`)
 
-- `/btw <question>` (or **Thread: Ask Side Question**, `mod+alt+enter`, which sends the composer
-  text) forks the thread into a **nested side-question thread** and starts the question there
-  while the parent agent keeps running. A bare `/btw` reopens the latest side question. Built on
-  forks, not a second ephemeral protocol — upstream closed #8296 for exactly that reason, so
-  expect no upstream equivalent to merge against.
-- **Server:** `thread.side-question.ask` composes `thread.fork` (with `sideQuestion: true`) and
-  `thread.turn.start` in one decision. Side questions get `sideQuestionOf = parent`, runtime mode
-  **`approval-required`** (the parent usually edits the same checkout) and interaction mode
-  `default`. They are **exempt from `MAX_UNARCHIVED_THREADS_PER_PROJECT`** (asking one must not
-  archive a real thread); instead the parent keeps at most 5 unarchived side questions.
-  `thread.side-question.promote` clears `sideQuestionOf` via `thread.meta-updated` (optional
-  field, no new event type) and restores the parent's runtime mode.
-- **Context:** the side question's first turn replays the parent through the fork's implicit
-  reference, but with `includeRunningTurn` (`buildThreadTranscript` option) so it sees the
-  in-flight turn, a side-question transcript intro, and `SIDE_QUESTION_INSTRUCTIONS` (answer, do
-  not modify) in `ProviderCommandReactor`.
-- **Wire:** `sideQuestionOf` on `OrchestrationThread`, `OrchestrationThreadShell` (unlike
-  `forkedFromId`, the shell carries it — the sidebar needs it), `ThreadCreatedPayload`,
-  `ThreadMetaUpdatedPayload`; column `side_question_of` (migration 058). Capability
-  `threadSideQuestions` gates `/btw` on clients.
-- **Clients:** shared rules in `packages/client-runtime/src/state/sideQuestions.ts`
-  (`parseSideQuestionCommand`, `withoutNestedSideQuestions`, title); per-parent shells from
-  `sideQuestionShellsAtom` in `threadShell.ts` (grouped once per environment). Web: chips above the
-  composer and a `side-question` right-panel surface (`components/chat/SideQuestionPanel.tsx`,
-  `rightPanelStore.ts`), nested rows under the parent in `LegacySidebar.tsx`
-  (`SidebarSideQuestionRows.tsx`); the flat `Sidebar.tsx` only hides them. A provider's own `/btw`
-  (Claude Code publishes one) is dropped from the slash menu where T3 offers it. Mobile:
-  `ThreadComposer` handles `/btw`, `ThreadRouteScreen` dispatches it, `SideQuestionChips.tsx` sits
-  above the composer and opens the side question as a normal thread, and thread lists read
-  `useMachineListThreadShells` (entities.ts) instead of `useMachineThreadShells`.
+- `/btw <question>` asks a side question while the parent agent keeps working; a bare `/btw` reopens
+  the latest. Upstream closed #8296, so there is no upstream equivalent.
+- **Server (v2, 2026-10-05):** `thread.side-question.ask` / `thread.side-question.promote`
+  (`apps/server/src/orchestration-v2/SideQuestion.ts`, hooks in `Orchestrator.ts`,
+  `ProjectionStore.ts`, `ProviderTurnStartService.ts`). The side thread is a lineage child with
+  `relationshipToParent: null` and an optional `sideQuestionOf` marker stored in the thread payload
+  and projected onto shells (no column, no migration). Runtime mode `approval-required`; answer-only
+  instructions on every turn until promoted. Context is a ready context handoff built from the
+  parent's full projection, **including the running turn**. At most 5 unarchived side questions per
+  parent (oldest archived after commit). Capability `threadSideQuestions`.
+- **Clients:** `@t3tools/client-runtime/state/side-questions` (parse/title/filter helpers),
+  `sideQuestionShellsAtom`, `askSideQuestion` / `promoteSideQuestion` thread commands. Web: chips +
+  `side-question` right panel, nested rows in the project tree, hidden from flat lists. Mobile:
+  composer `/btw`, chips above the composer.
 
 ### Pinned project threads
 
@@ -2145,186 +1996,33 @@ RootStackType` in `src/Stack.tsx`) is unstable near its complexity limit
     and flips with unrelated byte-level changes. Trust `vp run typecheck`
     (which uses the package script); do not switch mobile to tsgo.
 
-### Thread references (`@thread_ref:<environmentId>/<id>`)
+### Thread references
 
-- A second consumer of the thread-artifact primitive: an inline
-  `@thread_ref:` token in a message pulls the referenced thread's transcript
-  in as context, reusing `createThreadContextArtifact`. The full transcript is
-  stored on disk and only a mandatory read/search instruction plus its absolute
-  path is sent to the provider; no transcript preview is inlined. Works across
-  models/providers. **Copy thread ref** in the sidebar thread context menu copies
-  the token.
-- **The token is environment-qualified** (`@thread_ref:<environmentId>/<threadId>`);
-  the bare `@thread_ref:<threadId>` form still parses and means "the environment
-  this message is sent to". Copy always emits the qualified form because copy
-  happens before the paste target is known. Resolution splits by owner —
-  `partitionThreadReferences` is shared so client and server agree on the split:
-  - same-environment references stay server-resolved out of the read model;
-  - cross-environment references are resolved **by the client**, which is the
-    only party connected to both machines (known environments are client-local,
-    so no server holds another environment's endpoint or credential). It reads
-    the thread from its owner, renders the transcript with the shared
-    serializer, uploads it to the target environment through the ordinary
-    pending-attachment channel, and carries it on the turn as
-    `threadReferences`. See `docs/internals/remote.md`.
-- **Unresolvable references now fail the turn** instead of being silently
-  skipped — on the client (`ThreadReferencesUnresolvedError`, blocking the send)
-  and on the server (`ThreadReferenceUnresolvedError`, failing turn start with
-  the token named). The _implicit fork_ reference stays lenient: nobody typed
-  it, so a fork whose source was deleted still takes its turn.
-- Files:
-  - `packages/shared/src/threadReference.ts` (+ `./threadReference` export in
-    `package.json`, + `threadReference.test.ts`) — **fork-added**: pure token
-    format/parse (`formatThreadReference`, `parseThreadReferences`,
-    `partitionThreadReferences`, `threadReferenceKey`) and the shared
-    `THREAD_REFERENCE_INTRO` transcript header.
-  - `packages/contracts/src/orchestration.ts` — **modified**:
-    `ExternalThreadReference` plus optional `threadReferences` on the
-    `thread.turn.start` / `thread.prompt.queue` commands (client and canonical),
-    on `ThreadTurnStartRequestedPayload`, and on `OrchestrationQueuedPrompt`.
-    Turn input, deliberately not message content.
-  - `packages/client-runtime/src/state/externalThreadReferences.ts` (+ subpath
-    export, + test) — **fork-added**: client-side resolution, split into a
-    capability-injected core and the real registry/loader/HTTP wiring.
-  - `packages/client-runtime/src/state/threadCommands.ts` — **modified**:
-    `startTurn`/`queuePrompt` are `createRuntimeCommand`s (not
-    `createEnvironmentCommand`s) so resolution runs in the ambient runtime,
-    which can reach every connected machine, before `runInEnvironment` dispatches
-    to the target. **Reverting them to `createEnvironmentCommand` silently drops
-    cross-machine references for every client.**
-  - `apps/server/src/orchestration/Normalizer.ts` — **modified**: the pending
-    attachment claim is extracted as `claimUploadedAttachment` and reused for
-    reference transcripts (and released with them in
-    `cleanupFailedUploadedAttachments`).
-  - `apps/server/src/orchestration/decider.ts`,
-    `Layers/ProjectionPipeline.ts`, `Layers/ProjectionSnapshotQuery.ts`,
-    migration `048_ProjectionQueuedPromptThreadReferences` — **modified**: carry
-    `threadReferences` through the queued-prompt projection. The command read
-    model is hydrated from SQL on boot, so without the column a queued prompt
-    would lose its references across a restart.
-  - `apps/server/src/threadContextArtifact.ts` — **modified**:
-    `resolveThreadContextArtifact` describes an already-uploaded transcript so
-    local and cross-environment references reach the provider through one path.
-  - `apps/server/src/environment/ServerEnvironment.ts` — **modified**:
-    `identityLayerTest` for harnesses that only need "which machine am I".
-  - `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts` —
-    **modified**: `buildSendTurnRequestForThread` parses `@thread_ref` tokens
-    from the message text, splits them against `ServerEnvironmentIdentity`'s
-    environment id, resolves same-machine threads (skips self, caps at
-    `MAX_THREAD_REFERENCES` across both kinds), pairs cross-machine ones with
-    the client-supplied transcripts, and appends their path-only instructions to
-    the provider prompt.
-  - `apps/web/src/components/threadActionMenu.logic.ts` — **modified**:
-    `copy-thread-ref` id + item — since 2026-08-26 a **child of upstream's `copy`
-    submenu**; handled in `Sidebar.tsx` and `useThreadActionMenu.ts`, each with their own
-    `copyThreadRefToClipboard`.
-  - `apps/web/src/components/LegacySidebar.tsx` — **modified**: `Copy thread ref`
-    context-menu item + `copyThreadRefToClipboard`.
-  - `packages/shared/src/composerInlineTokens.ts` — **modified**:
-    `collectMentionTokens` skips `@thread_ref:<id>`. The token shares the `@`
-    trigger with file mentions, and any consumer that turns a mention into a
-    chip (composer paste, draft/prompt rehydration via
-    `splitPromptIntoComposerSegments`, the mobile composers) would re-serialize
-    it as `[thread_ref:<id>](thread_ref%3A<id>)` — dropping the leading `@` so
-    the server parser no longer recognizes it. Exclude it here, once, rather
-    than per consumer.
-- **Merge guard:** `ProviderCommandReactor.test.ts` has a regression test
-  ("stores and path-references a thread transcript when a message contains
-  thread_ref:<id>") alongside fork tests for the same-provider,
-  cross-provider, and queued-prompt paths, plus four for the cross-machine
-  split (client-supplied transcript, a reference naming this machine resolving
-  locally, an unresolved cross-environment reference failing the turn, and a
-  fork whose source was deleted still starting). All four original assert the same
-  `referenced-thread-<id>.md` artifact pipeline, and fail if an upstream merge
-  drops or splits the reactor wiring. The pure serializer/token helpers also
-  have unit tests in `packages/shared` (fork-added files, so merge-safe).
-  `ComposerPromptEditor.test.ts` verifies that the clipboard-to-composer path
-  keeps a thread reference literal so the server parser can still recognize it,
-  and `composerInlineTokens.test.ts` / `composer-editor-mentions.test.ts` guard
-  the tokenizer exclusion that makes every composer path behave that way.
+Rebuilt 2026-10-05 on upstream's composer **thread context records** (`ThreadContextRecord`, chips via
+the `@` picker, sidebar drag, or paste). On the same machine the agent reads the thread with
+`t3_thread_read`. Upstream drops a thread from another machine; the fork instead attaches that
+thread's transcript as a Markdown file fetched from the owning machine
+(`GET /api/thread-export/<id>?format=markdown`, `fetchEnvironmentThreadTranscript`,
+`useThreadTranscriptFile`, wired in `ChatComposer.tsx` drop + paste). "Copy thread ref" writes a
+thread context fragment (`lib/threadReferenceClipboard.ts`). The `@thread_ref:` token, its parser and
+the composer exemption are gone.
 
-### Agent-initiated thread history search (MCP `threads` toolkit)
+### Agent-initiated thread history search
 
-- Where `@thread_ref` requires the user to name the thread up front, this lets
-  the agent find prior threads itself: `thread_search` runs FTS5 keyword search
-  over projected message text and returns title + highlighted snippet;
-  `thread_read` materializes one transcript via the same
-  `createThreadContextArtifact` primitive and returns its path only. Both are
-  project-scoped.
-- **Cross-project boundary:** off by default via
-  `enableCrossProjectThreadSearch`. When disabled, the project predicate is part
-  of the FTS query itself, so other projects' rows are never read, and the
-  `otherProjectMatches` escalation hint is withheld (the count alone leaks that
-  something elsewhere matched). When enabled, one scan orders in-project matches
-  first, `scope: "project"` still returns only in-project threads plus the
-  count, and `scope: "all"` returns everything labelled by project title.
-  `thread_read` enforces the same boundary, so an agent cannot bypass search by
-  passing a thread id it learned elsewhere.
-- Files:
-  - `apps/server/src/persistence/Migrations/043_ProjectionThreadMessagesFts.ts`
-    (+ test) — **fork-added**: external-content FTS5 index over
-    `projection_thread_messages` with triggers filtered to settled
-    (`is_streaming = 0`) `user`/`assistant` rows, plus an explicit backfill
-    (FTS5 `rebuild` would ignore those filters). FTS5 is compiled into both
-    `bun:sqlite` and `node:sqlite`, so no loadable extension is involved.
-  - `apps/server/src/persistence/Services/ProjectionThreadSearch.ts` and
-    `apps/server/src/persistence/Layers/ProjectionThreadSearch.ts` (+ test) —
-    **fork-added**: search repository. Note `bm25`/`snippet` are FTS5 auxiliary
-    functions and cannot be nested in an aggregate, so ranking is per message
-    and collapses per thread in `bestPerThread`.
-  - `apps/server/src/mcp/toolkits/threads/{tools,handlers}.ts` — **fork-added**:
-    the toolkit, mirroring `toolkits/preview/`.
-  - `apps/server/src/mcp/McpHttpServer.ts` — **modified**: registers
-    `ThreadsToolkitRegistrationLive` alongside the preview toolkits in `layer`.
-  - `apps/server/src/mcp/McpInvocationContext.ts` — **modified**: `"threads"`
-    added to `McpCapability`; `requireMcpCapability` narrowed to `"preview"`
-    because its failure type is preview-specific.
-  - `apps/server/src/mcp/McpSessionRegistry.ts` — **modified**: capability set
-    is now `["preview", "threads"]`.
-  - `apps/server/src/orchestration/runtimeLayer.ts` — **modified**:
-    `ProjectionThreadSearchRepositoryLive` merged into
-    `OrchestrationInfrastructureLayerLive` so it resolves `SqlClient` there.
-    Providing it at the routes layer instead leaks `SqlClient` into
-    `makeRoutesLayer`'s requirements and breaks `server.test.ts`.
-  - `packages/contracts/src/settings.ts` — **modified**:
-    `enableCrossProjectThreadSearch` (defaults false).
-  - `apps/server/src/provider/CodexDeveloperInstructions.ts` — **modified**:
-    `T3_CODE_THREAD_HISTORY_INSTRUCTIONS` appended after the browser block in
-    both mode prompts. Codex-only, matching the existing browser instructions;
-    other providers get the tool descriptions but no prompt scaffolding.
-- **Merge guard:** the migration test asserts the streaming case (a message must
-  not enter the index until `is_streaming` flips to 0) and delete/edit
-  consistency; the repository test asserts the scope boundary in both
-  directions. Both are fork-added files, so they are merge-safe.
+Retired 2026-10-05: upstream's `t3_thread_search` / `t3_thread_read` (MCP orchestrator toolkit,
+granted to every agent session). The fork extends search with `scope: "all"` so an agent can search
+every project on its server.
 
 ### Thread export (zip)
 
-- A third consumer of the thread-artifact primitive: download a thread as a zip
-  containing `transcript.md` (the shared serializer) plus every attachment under
-  `attachments/`. Sidebar context-menu action **Export thread (zip)**.
-- Files:
-  - `apps/server/src/threadExport.ts` (+ `threadExport.test.ts`) — **fork-added**:
-    pure `buildThreadExportZip` (transcript + attachment bytes → zip via
-    `fflate`). The builder is pure; the caller resolves attachment bytes.
-  - `apps/server/src/http.ts` — **modified**: `threadExportRouteLayer`
-    (`GET /api/thread-export/<id>`, read-scope auth, reads attachment bytes from
-    the store, returns `application/zip` with `Content-Disposition`). Uses a
-    dedicated top-level path (not under `/api/orchestration/v1`) to avoid
-    colliding with the orchestration HttpApi.
-  - `apps/server/src/server.ts` — **modified**: registers `threadExportRouteLayer`
-    in `makeRoutesLayer`.
-  - `apps/server/package.json` — **modified**: adds the `fflate` dependency.
-  - `apps/web/src/components/threadActionMenu.logic.ts` — **modified**: `export-zip`
-    id + item; handled in `Sidebar.tsx` and `useThreadActionMenu.ts` (both resolve the
-    prepared connection and stream `fetchEnvironmentThreadExport` to a blob download).
-  - `apps/web/src/components/LegacySidebar.tsx` — **modified**: `Export thread (zip)`
-    context-menu item; builds the env-aware export URL from the prepared
-    connection (`readPreparedConnection(environmentId)` → `environmentEndpointUrl(
-httpBaseUrl, pathname)`; the pre-merge `resolveEnvironmentHttpUrl` helper was
-    removed with the old environment catalog), fetches it with
-    `credentials: "include"`, and downloads the blob.
-- **Merge guard:** `threadExport.test.ts` asserts the zip contains
-  `transcript.md` + `attachments/<name>` and skips attachments without bytes.
+Rebuilt 2026-10-05 on v2. `GET /api/thread-export/<threadId>` (read scope) reads the thread through
+`ThreadManagementService.getThreadProjection` (which imports v1 transcripts first) and returns a zip
+of `transcript.md` + `attachments/`; `?format=markdown` returns the transcript alone. Serializer:
+`packages/shared/src/threadTranscript.ts` (v2 `visibleTurnItems`: messages, finished tool work,
+plans, errors). Zip builder: `apps/server/src/threadExport.ts`. Client: `fetchEnvironmentThreadExport`
+(client-runtime `state/thread-export`), `useThreadExportDownload` in `useThreadActionMenu.ts`, used by
+both sidebars and the chat header menu. Threads imported from v1 export messages and attachments only
+(v1 tool activity was never imported).
 
 ### Live provider quota meter (5h / weekly bars + Claude spend bar)
 
@@ -2786,63 +2484,9 @@ build:desktop` → `vp run dist:payload:asset`, using the
 
 ### Chat timeline search wiring
 
-- File: `apps/web/src/components/chat/MessagesTimeline.tsx`
-- The fork adds in-chat find state, a `Cmd/Ctrl+F` keydown listener, and a
-  fragment-wrapped render (the search bar is an absolutely-positioned sibling of
-  the `LegendList`). Upstream changes to the timeline's render tree or to the
-  `rows`/`listRef` plumbing may conflict. Preserve the search wiring (see the
-  "In-chat find" feature above) when resolving, re-applying it on top of any
-  upstream structural refactor.
-- Same file also owns the `UserInputAnswerTimelineRow` render branch and its
-  row classification lives in `MessagesTimeline.logic.ts` (see the "Answered
-  user-input exchanges" feature above) — preserve both when resolving timeline
-  conflicts.
-
-### Thread forking orchestration
-
-- Expected conflict area (see the "Thread forking" feature above for the full
-  file list and per-file detail):
-  - `packages/contracts/src/orchestration.ts` (command unions + `forkedFromId`)
-  - `apps/server/src/orchestration/decider.ts` (`thread.fork` case)
-  - `apps/server/src/orchestration/projector.ts`
-  - `apps/server/src/orchestration/Layers/{ProjectionPipeline,ProjectionSnapshotQuery,ProviderCommandReactor}.ts`
-  - `apps/server/src/persistence/{Services,Layers}/ProjectionThreads.ts` +
-    `Migrations.ts` (migration registry)
-  - `apps/server/src/provider/Layers/{ProviderService,CodexSessionRuntime}.ts`
-  - `apps/web/src/components/threadActionMenu.logic.ts`,
-    `apps/web/src/components/Sidebar.tsx`,
-    `apps/web/src/components/LegacySidebar.tsx`,
-    `apps/web/src/hooks/useThreadActionMenu.ts`,
-    `apps/web/src/components/chat/ChatComposer.tsx`,
-    `apps/web/src/composer-logic.ts`, `apps/web/src/hooks/useThreadActions.ts`
-- Fork-specific concern: the user-facing flow hangs off `forkedFromId` in the
-  projected thread detail and the shared thread-reference artifact path. On the
-  fork's first user turn, `ProviderCommandReactor` must prepend the source as an
-  implicit reference, de-duplicate it against explicit `@thread_ref` tokens,
-  and pass every surviving reference through
-  `createThreadContextArtifact`/`formatThreadContextPathInstructions`. Keep
-  `forked_from_id` in the full-detail queries; shell queries intentionally omit
-  it.
-- Migration seam: `033_ProjectionThreadsForkedFrom` is fork-added. Fork ids
-  33-35 are frozen because existing fork DBs already recorded them. **The fork's
-  next free migration id is 61** (fork-added 060 is the pairing-link session lifetime; upstream's 054 became the fork's 059 in the 2026-09-30 merge; 051-053 became the fork's 055-057 in the
-  2026-09-22 merge; 048-050 became 052-054 on 2026-09-11; 045-047 became 049-051 on
-  2026-09-05) (see the
-  2026-07-24 merge notes): when upstream adds a migration with id >= 33,
-  renumber **upstream's** file/registry entry to the fork's next free id
-  (upstream's 33/34 became the fork's 36/37; upstream's 35 became the fork's
-  38 in the 2026-07-30 merge). Renumber the `.test.ts` and its
-  `toMigrationInclusive` bounds too. The fork migrations are
-  idempotent (guards on `PRAGMA table_info`), so re-running after a renumber
-  is safe.
-- Lower-level provider-native fork plumbing remains in
-  `ProviderService`/`CodexSessionRuntime`, but the user-facing regular fork and
-  queued-prompt Fork action deliberately do not select it. They both create a
-  normal provider session and use the provider-neutral thread-reference
-  artifact pipeline. Do not reintroduce a native-vs-replay branch in
-  `ProviderCommandReactor` without also changing the documented uniform
-  semantics and the same-provider/cross-provider/queued-prompt regression
-  tests.
+In-chat find (`chatSearch.ts`, `ChatSearchBar.tsx`, `useChatSearchHighlight.ts`) indexes the v2
+timeline rows with every fold open, and opens only the fold hiding the active match. Re-check it when
+upstream changes `MessagesTimeline.logic.ts` row kinds.
 
 ### Payload hot-update channel (desktop JS-only updates)
 
@@ -3009,3 +2653,5 @@ When pulling from `upstream/main`:
    the fork-feature suites pass before pushing the merge.
 7. Set `upstreamVersion` in `apps/server/package.json` to upstream's `apps/server` version (see the
    2026-09-30 notes); provider compatibility policies are matched against it.
+8. Never add or renumber migrations in `Migrations.ts`; fork schema goes in `ForkMigrations.ts`
+   (see the 2026-10-05 notes).
