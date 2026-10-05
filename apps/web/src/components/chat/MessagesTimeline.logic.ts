@@ -473,7 +473,63 @@ const LIVE_ACTIVITY_ROW_ID = "live-activity-row";
 
 export type MessagesTimelineRow = MessagesTimelineRowContent & {
   readonly continuesWorkLog?: boolean;
+  /** Set only with `expandAllDisclosures`: what the user's view must open to show this row. */
+  readonly searchReveal?: TimelineSearchReveal;
 };
+
+/** The fold and tool-group disclosures that hide a row in the user's view. */
+export interface TimelineSearchReveal {
+  readonly runId?: RunId;
+  readonly attemptId?: RunAttemptId;
+  readonly workGroupId?: string;
+}
+
+const EXPANDED_WORK_GROUP_ROW_SUFFIX = ":details";
+
+/** The timeline entry a row was built from, recovered from the row id scheme below. */
+function timelineRowSourceEntryId(row: MessagesTimelineRow): string {
+  const { id } = row;
+  for (const prefix of ["work-toggle:", "work-live:"]) {
+    if (id.startsWith(prefix)) return id.slice(prefix.length);
+  }
+  if (row.kind === "work" && row.isExpandedToolGroup && id.startsWith("work-group:")) {
+    return id.slice("work-group:".length, -EXPANDED_WORK_GROUP_ROW_SUFFIX.length);
+  }
+  return id;
+}
+
+function annotateSearchReveals(
+  rows: ReadonlyArray<MessagesTimelineRow>,
+  turnFolds: ReadonlyMap<string, TurnFold>,
+  attemptFolds: ReadonlyMap<string, SupersededAttemptFold>,
+): MessagesTimelineRow[] {
+  const runIdByEntryId = new Map<string, RunId>();
+  for (const fold of turnFolds.values()) {
+    for (const entryId of fold.hiddenEntryIds) runIdByEntryId.set(entryId, fold.runId);
+  }
+  const attemptIdByEntryId = new Map<string, RunAttemptId>();
+  for (const fold of attemptFolds.values()) {
+    for (const entryId of fold.hiddenEntryIds) attemptIdByEntryId.set(entryId, fold.attemptId);
+  }
+  return rows.map((row) => {
+    const entryId = timelineRowSourceEntryId(row);
+    const runId = runIdByEntryId.get(entryId);
+    const attemptId = attemptIdByEntryId.get(entryId);
+    const workGroupId =
+      row.kind === "work" && row.isExpandedToolGroup
+        ? row.id.slice(0, -EXPANDED_WORK_GROUP_ROW_SUFFIX.length)
+        : undefined;
+    if (runId === undefined && attemptId === undefined && workGroupId === undefined) return row;
+    return {
+      ...row,
+      searchReveal: {
+        ...(runId === undefined ? {} : { runId }),
+        ...(attemptId === undefined ? {} : { attemptId }),
+        ...(workGroupId === undefined ? {} : { workGroupId }),
+      },
+    };
+  });
+}
 
 type MessagesTimelineRowContent =
   | {
@@ -636,7 +692,7 @@ function expandedWorkGroupRow(
 ): Extract<MessagesTimelineRow, { kind: "work" }> {
   return {
     kind: "work",
-    id: `${groupId}:details`,
+    id: `${groupId}${EXPANDED_WORK_GROUP_ROW_SUFFIX}`,
     createdAt,
     groupedEntries,
     isExpandedToolGroup: true,
@@ -1207,6 +1263,11 @@ export function deriveMessagesTimelineRows(input: {
   expandedRunIds?: ReadonlySet<RunId>;
   expandedAttemptIds?: ReadonlySet<RunAttemptId>;
   expandedWorkGroupIds?: ReadonlySet<string>;
+  /**
+   * Opens every fold and tool group, ignoring the expanded sets. In-chat find
+   * searches these rows so it can count matches the user's folds still hide.
+   */
+  expandAllDisclosures?: boolean;
   isWorking: boolean;
   /**
    * The live work has no app run (a provider-native subagent thread), so
@@ -1224,6 +1285,12 @@ export function deriveMessagesTimelineRows(input: {
   const timelineEntries = withoutSubagentDelegationRows(
     settleSupersededReasoning(input.timelineEntries),
   );
+  const expandAll = input.expandAllDisclosures === true;
+  const runExpanded = (runId: RunId) => expandAll || input.expandedRunIds?.has(runId) === true;
+  const attemptExpanded = (attemptId: RunAttemptId) =>
+    expandAll || input.expandedAttemptIds?.has(attemptId) === true;
+  const workGroupExpanded = (groupId: string) =>
+    expandAll || input.expandedWorkGroupIds?.has(groupId) === true;
   const turnDiffSummaryByAssistantMessageId = new Map<MessageId, TurnDiffSummary>();
   for (const summary of input.turnDiffSummaries) {
     if (summary.assistantMessageId) {
@@ -1262,7 +1329,7 @@ export function deriveMessagesTimelineRows(input: {
   });
   const collapsedEntryIds = new Set<string>();
   for (const fold of foldsByAnchorEntryId.values()) {
-    if (!input.expandedRunIds?.has(fold.runId)) {
+    if (!runExpanded(fold.runId)) {
       for (const entryId of fold.hiddenEntryIds) {
         collapsedEntryIds.add(entryId);
       }
@@ -1270,7 +1337,7 @@ export function deriveMessagesTimelineRows(input: {
   }
   const collapsedSupersededEntryIds = new Set<string>();
   for (const fold of supersededFoldsByAnchorEntryId.values()) {
-    if (!input.expandedAttemptIds?.has(fold.attemptId)) {
+    if (!attemptExpanded(fold.attemptId)) {
       for (const entryId of fold.hiddenEntryIds) {
         collapsedSupersededEntryIds.add(entryId);
       }
@@ -1353,7 +1420,7 @@ export function deriveMessagesTimelineRows(input: {
             entry: (latestRunningToolEntry ?? latestVisibleToolEntry).entry,
             groupedEntries: visibleActiveToolEntries.map((entry) => entry.entry),
             groupId,
-            expanded: input.expandedWorkGroupIds?.has(groupId) ?? false,
+            expanded: workGroupExpanded(groupId),
             active: latestToolKeepsActivityLive,
           };
         })()
@@ -1415,7 +1482,7 @@ export function deriveMessagesTimelineRows(input: {
         createdAt: turnFold.createdAt,
         runId: turnFold.runId,
         label: turnFold.label,
-        expanded: input.expandedRunIds?.has(turnFold.runId) ?? false,
+        expanded: runExpanded(turnFold.runId),
       });
     }
 
@@ -1432,7 +1499,7 @@ export function deriveMessagesTimelineRows(input: {
         runId: supersededFold.runId,
         attemptId: supersededFold.attemptId,
         label: "Superseded attempt",
-        expanded: input.expandedAttemptIds?.has(supersededFold.attemptId) ?? false,
+        expanded: attemptExpanded(supersededFold.attemptId),
       });
     }
 
@@ -1511,7 +1578,7 @@ export function deriveMessagesTimelineRows(input: {
         const activeInProgressToolEntries = visibleGroupedEntries.filter(workEntryIsInActiveRun);
         if (activeInProgressToolEntries.length > 0) {
           const groupId = workGroupId(timelineEntry.id);
-          const expanded = input.expandedWorkGroupIds?.has(groupId) ?? false;
+          const expanded = workGroupExpanded(groupId);
           const latestActiveToolEntry = activeInProgressToolEntries.at(-1)!;
           nextRows.push({
             kind: "work-live",
@@ -1547,7 +1614,7 @@ export function deriveMessagesTimelineRows(input: {
           });
         } else {
           const groupId = workGroupId(timelineEntry.id);
-          const expanded = input.expandedWorkGroupIds?.has(groupId) ?? false;
+          const expanded = workGroupExpanded(groupId);
           const summaryKind = toolGroupSummaryKind(visibleGroupedEntries);
           const primarySourceEntry = visibleGroupedEntries.find(
             (entry) => entry.toolSource !== undefined,
@@ -1767,7 +1834,7 @@ export function deriveMessagesTimelineRows(input: {
     const failedGroupAnchor = latestToolFailed ? activeWorkAnchor : undefined;
     if (failedGroupAnchor) {
       const groupId = workGroupId(failedGroupAnchor.id);
-      const expanded = input.expandedWorkGroupIds?.has(groupId) ?? false;
+      const expanded = workGroupExpanded(groupId);
       nextRows.push({
         kind: "thinking",
         id: LIVE_ACTIVITY_ROW_ID,
@@ -1796,11 +1863,14 @@ export function deriveMessagesTimelineRows(input: {
   const result = attachTrailingToolGroupsToAssistant(
     attachCreatedThreadSummaries(nextRows, timelineEntries),
   );
-  return result.map((row, index) =>
+  const rows = result.map((row, index) =>
     timelineRowIsWorkLog(row) && timelineRowIsWorkLog(result[index + 1])
       ? { ...row, continuesWorkLog: true }
       : row,
   );
+  return expandAll
+    ? annotateSearchReveals(rows, foldsByAnchorEntryId, supersededFoldsByAnchorEntryId)
+    : rows;
 }
 
 /** Adjacent work stays one visual list even when virtualization splits its groups. */

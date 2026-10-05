@@ -188,8 +188,18 @@ import {
   type AssistantCitationTarget,
 } from "./AssistantCitationSource";
 import { useAssistantCitationTarget, type CitationHistoryPage } from "./useAssistantCitationTarget";
+import { ChatSearchBar } from "./ChatSearchBar";
+import {
+  clampActiveIndex,
+  computeChatSearchOccurrences,
+  EMPTY_CHAT_SEARCH_RESULT,
+  normalizeChatSearchQuery,
+  withSearchDisclosure,
+} from "./chatSearch";
+import { useChatSearchHighlight } from "./useChatSearchHighlight";
 import {
   computeStableMessagesTimelineRows,
+  deriveMessagesTimelineRows,
   deriveMessagesTimelineRowsWithState,
   type MessagesTimelineRowsProjection,
   liveWorkEntryLabel,
@@ -257,6 +267,7 @@ import { useClientSettings } from "~/hooks/useSettings";
 import type { ChatMarkdownContextReference } from "../ChatMarkdown";
 import { useMediaQuery } from "~/hooks/useMediaQuery";
 import { cn } from "~/lib/utils";
+import { useSelectionPinnedRowKeys, virtualRowKeyProps } from "~/lib/virtualizedRowSelection";
 import { useUiStateStore } from "~/uiStateStore";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import {
@@ -355,6 +366,15 @@ interface TimelineRowActivityState {
 
 const TimelineRowCtx = createContext<TimelineRowSharedState>(null!);
 const TimelineRowActivityCtx = createContext<TimelineRowActivityState>(null!);
+
+/**
+ * The normalized in-chat find query, "" while find is closed. Collapsible
+ * bodies that contain it open, so the painted highlight is actually visible.
+ */
+const TimelineSearchQueryCtx = createContext("");
+
+/** Rows a live text selection spans, pinned so their containers survive recycling. */
+const TimelineSelectionPinCtx = createContext<readonly string[]>([]);
 
 interface WorkGroupViewState {
   scrollPositions: Map<string, WorkGroupScrollAnchor>;
@@ -584,6 +604,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   // The list stays mounted across thread switches. Its first end pins on the
   // new thread must snap, not glide, even if that thread is mid-turn.
   const [settlingListIdentity, setSettlingListIdentity] = useState<string | null>(null);
+  // --- In-chat find (Cmd/Ctrl+F) -------------------------------------------
+  // The list is virtualized, so the browser's native find only sees mounted
+  // rows. Search the row data instead, open whatever fold hides the active
+  // match, scroll it into view, and paint highlights over the rendered DOM.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeMatchIndex, setActiveMatchIndex] = useState(0);
+  const [searchFocusNonce, setSearchFocusNonce] = useState(0);
+  const searchNeedle = searchOpen ? normalizeChatSearchQuery(searchQuery) : "";
   let paintedExpandedRunIds = expandedRunIds;
   let paintedExpandedWorkGroupIds = expandedWorkGroupIds;
   let paintedExpandedAttemptIds = expandedAttemptIds;
@@ -598,6 +627,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     setExpandedRunIds(paintedExpandedRunIds);
     setExpandedWorkGroupIds(paintedExpandedWorkGroupIds);
     setExpandedAttemptIds(paintedExpandedAttemptIds);
+    // Find belongs to the thread it searched.
+    setSearchOpen(false);
+    setSearchQuery("");
   }
   const citationThreadRef = useMemo(() => parseScopedThreadKey(routeThreadKey), [routeThreadKey]);
   const openPullRequest = useOpenPrLink(citationThreadRef ?? undefined);
@@ -751,6 +783,69 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     });
   }, [latestRun]);
 
+  // Rows with every fold open: the search domain, so hidden matches count too.
+  const searchRows = useMemo(
+    () =>
+      searchNeedle.length === 0
+        ? null
+        : deriveMessagesTimelineRows({
+            timelineEntries,
+            latestRun,
+            runningRunId,
+            expandAllDisclosures: true,
+            isWorking,
+            runlessWorkActive,
+            activeTurnStartedAt,
+            turnDiffSummaries,
+            supportsConversationRollback,
+            worktreeSetup,
+          }),
+    [
+      searchNeedle,
+      timelineEntries,
+      latestRun,
+      runningRunId,
+      isWorking,
+      runlessWorkActive,
+      activeTurnStartedAt,
+      turnDiffSummaries,
+      supportsConversationRollback,
+      worktreeSetup,
+    ],
+  );
+  const searchResult = useMemo(
+    () =>
+      searchRows === null
+        ? EMPTY_CHAT_SEARCH_RESULT
+        : computeChatSearchOccurrences(searchRows, searchNeedle, workspaceRoot),
+    [searchRows, searchNeedle, workspaceRoot],
+  );
+  const matchCount = searchResult.occurrences.length;
+  const clampedActiveIndex = clampActiveIndex(matchCount, activeMatchIndex);
+  const activeOccurrence =
+    clampedActiveIndex >= 0 ? (searchResult.occurrences[clampedActiveIndex] ?? null) : null;
+  const activeSearchReveal = useMemo(
+    () =>
+      activeOccurrence === null
+        ? undefined
+        : searchRows?.find((row) => row.id === activeOccurrence.rowId)?.searchReveal,
+    [activeOccurrence, searchRows],
+  );
+  // Only the active match's fold opens, on top of the user's own disclosures;
+  // closing find (or moving on) puts the view back as the user left it.
+  const effectiveExpandedRunIds = useMemo(
+    () => withSearchDisclosure(paintedExpandedRunIds, activeSearchReveal?.runId),
+    [paintedExpandedRunIds, activeSearchReveal?.runId],
+  );
+  const effectiveExpandedAttemptIds = useMemo(
+    () => withSearchDisclosure(paintedExpandedAttemptIds, activeSearchReveal?.attemptId),
+    [paintedExpandedAttemptIds, activeSearchReveal?.attemptId],
+  );
+  const effectiveExpandedWorkGroupIds = useMemo(
+    () => withSearchDisclosure(paintedExpandedWorkGroupIds, activeSearchReveal?.workGroupId),
+    [paintedExpandedWorkGroupIds, activeSearchReveal?.workGroupId],
+  );
+
   const rowsProjectionRef = useRef<{
     readonly threadKey: string;
     readonly workspaceRoot: string | undefined;
@@ -763,9 +858,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         timelineEntries,
         latestRun,
         runningRunId,
-        expandedRunIds,
-        expandedAttemptIds,
-        expandedWorkGroupIds,
+        expandedRunIds: effectiveExpandedRunIds,
+        expandedAttemptIds: effectiveExpandedAttemptIds,
+        expandedWorkGroupIds: effectiveExpandedWorkGroupIds,
         isWorking,
         runlessWorkActive,
         activeTurnStartedAt,
@@ -786,9 +881,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     timelineEntries,
     latestRun,
     runningRunId,
-    expandedRunIds,
-    expandedAttemptIds,
-    expandedWorkGroupIds,
+    effectiveExpandedRunIds,
+    effectiveExpandedAttemptIds,
+    effectiveExpandedWorkGroupIds,
     isWorking,
     runlessWorkActive,
     activeTurnStartedAt,
@@ -797,6 +892,71 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     worktreeSetup,
   ]);
   const rows = useStableRows(rawRows, listIdentityKey);
+
+  // A new query starts from its first match.
+  const [searchedQuery, setSearchedQuery] = useState(searchNeedle);
+  if (searchedQuery !== searchNeedle) {
+    setSearchedQuery(searchNeedle);
+    setActiveMatchIndex(0);
+  }
+  const goToNextMatch = useCallback(() => {
+    if (matchCount === 0) return;
+    setActiveMatchIndex((current) => (clampActiveIndex(matchCount, current) + 1) % matchCount);
+  }, [matchCount]);
+  const goToPreviousMatch = useCallback(() => {
+    if (matchCount === 0) return;
+    setActiveMatchIndex(
+      (current) => (clampActiveIndex(matchCount, current) - 1 + matchCount) % matchCount,
+    );
+  }, [matchCount]);
+  const closeSearch = useCallback(() => setSearchOpen(false), []);
+  useEffect(() => {
+    const handler = (event: globalThis.KeyboardEvent) => {
+      if (
+        !(event.metaKey || event.ctrlKey) ||
+        event.altKey ||
+        event.shiftKey ||
+        event.key.toLowerCase() !== "f" ||
+        // The terminal keeps its own find.
+        (event.target instanceof Element && event.target.closest(".xterm") !== null)
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      setSearchOpen(true);
+      setSearchFocusNonce((nonce) => nonce + 1);
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, []);
+  // Scroll the row holding the active match into view once per match. A
+  // revealed fold lands in `rows` a render later, so this waits for the row
+  // rather than recording the match as scrolled.
+  const lastScrolledMatchRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (activeOccurrence === null) {
+      lastScrolledMatchRef.current = null;
+      return;
+    }
+    const matchKey = `${activeOccurrence.rowId}#${activeOccurrence.ordinalInRow}`;
+    if (lastScrolledMatchRef.current === matchKey) return;
+    const index = rows.findIndex((row) => row.id === activeOccurrence.rowId);
+    if (index < 0) return;
+    lastScrolledMatchRef.current = matchKey;
+    onManualNavigation();
+    void listRef.current?.scrollToIndex({ index, viewPosition: 0.35, animated: true });
+  }, [activeOccurrence, listRef, onManualNavigation, rows]);
+  const getSearchScroller = useCallback(
+    () => listRef.current?.getScrollableNode() ?? null,
+    [listRef],
+  );
+  useChatSearchHighlight({
+    enabled: searchOpen,
+    query: searchNeedle,
+    active: activeOccurrence,
+    getScroller: getSearchScroller,
+  });
   // Run status/timestamps churn on every stream event; the shared row context
   // must not change with them or every timeline row re-renders per event.
   const runs = useStableHandoffRuns(runsProp);
@@ -947,7 +1107,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     onManualNavigation,
   });
   const [minimapHasPersistentGutter, setMinimapHasPersistentGutter] = useState(false);
-  const alwaysRender = citationAlwaysRender ?? restoringAlwaysRender;
+  const selectionPinnedRowKeys = useSelectionPinnedRowKeys(timelineViewportElement);
+  // Citation and restore pins mount a navigation target; selection pins hold
+  // the rows a live selection points into.
+  const alwaysRender = useMemo(() => {
+    const base = citationAlwaysRender ?? restoringAlwaysRender;
+    if (selectionPinnedRowKeys.length === 0) return base;
+    const baseKeys = base && "keys" in base ? base.keys : [];
+    return { ...base, keys: [...baseKeys, ...selectionPinnedRowKeys] };
+  }, [citationAlwaysRender, restoringAlwaysRender, selectionPinnedRowKeys]);
   const [minimapHitStripWidth, setMinimapHitStripWidth] = useState(0);
   const [minimapCurrentIndex, setMinimapCurrentIndex] = useState<number | null>(null);
   const handleAnchorReady = useCallback(
@@ -1293,7 +1461,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   // from TimelineRowCtx, which propagates through LegendList's memo.
   const renderItem = useCallback(
     ({ item }: { item: MessagesTimelineRow }) => (
-      <div className="messages-timeline-row-frame">
+      <div className="messages-timeline-row-frame" {...virtualRowKeyProps(item.id)}>
         <div className="chat-content-lane overflow-x-clip" data-timeline-root="true">
           <TimelineRowContent row={item} />
         </div>
@@ -1301,6 +1469,19 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ),
     [],
   );
+
+  const searchBar = searchOpen ? (
+    <ChatSearchBar
+      query={searchQuery}
+      matchCount={matchCount}
+      activeIndex={clampedActiveIndex}
+      focusNonce={searchFocusNonce}
+      onQueryChange={setSearchQuery}
+      onNext={goToNextMatch}
+      onPrevious={goToPreviousMatch}
+      onClose={closeSearch}
+    />
+  ) : null;
 
   if (
     rows.length === 0 &&
@@ -1314,7 +1495,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       return <div className="h-full min-h-0 bg-background" data-timeline-loading="true" />;
     }
     return (
-      <div className="flex h-full items-center justify-center">
+      <div className="relative flex h-full items-center justify-center">
+        {searchBar}
         <p className="text-sm text-muted-foreground/30">
           Send a message to start the conversation.
         </p>
@@ -1325,76 +1507,81 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   return (
     <TimelineRowCtx value={sharedState}>
       <TimelineRowActivityCtx value={activityState}>
-        <TooltipScrollDismissArea
-          ref={setTimelineViewportElement}
-          className="relative h-full min-h-0"
-          data-assistant-citation-viewport="true"
-        >
-          {onCiteAssistantText && citationThreadRef ? (
-            <AssistantSelectionToolbar
-              viewport={timelineViewportElement}
-              threadRef={citationThreadRef}
-              onCite={onCiteAssistantText}
-            />
-          ) : null}
-          <LegendList<MessagesTimelineRow>
-            ref={setTimelineList}
-            data={rows}
-            extraData={`${listIdentityKey}:${rows.length}`}
-            keyExtractor={keyExtractor}
-            getItemType={getItemType}
-            renderItem={renderItem}
-            estimatedItemSize={90}
-            initialScrollAtEnd={citationRequest === null && rememberedPosition?.atEnd !== false}
-            // Legend needs a data refresh to mount new pins without a scroll event.
-            dataVersion={readyCitationRequest?.key ?? listIdentityKey}
-            {...(alwaysRender ? { alwaysRender } : {})}
-            onLoad={onCitationListLoad}
-            {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
-            contentInsetEndAdjustment={anchoredEndSpace ? contentInsetEndAdjustment : 0}
-            maintainScrollAtEnd={
-              citationPositioning ||
-              (restoringThreadPosition && rememberedPosition?.atEnd === false) ||
-              anchoredEndSpace ||
-              !liveFollowEnabled ||
-              disclosureToggleSettling
-                ? false
-                : isWorking && !prefersReducedMotion && settlingListIdentity === null
-                  ? TIMELINE_MAINTAIN_SCROLL_AT_END_SMOOTH
-                  : TIMELINE_MAINTAIN_SCROLL_AT_END
-            }
-            maintainVisibleContentPosition={
-              citationPositioning ||
-              (restoringThreadPosition && rememberedPosition?.atEnd === false)
-                ? false
-                : maintainVisibleContentPosition
-            }
-            maintainScrollAtEndThreshold={1}
-            onScroll={handleScroll}
-            onItemSizeChanged={reportContentOverflow}
-            className={cn(
-              "messages-timeline-scroll scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain [overflow-anchor:none]",
-              topFadeEnabled && "topbar-scroll-fade",
-            )}
-            ListHeaderComponent={listHeader}
-            ListFooterComponent={timelineListFooter}
-          />
-          <TimelineMinimap
-            items={minimapItems}
-            hasPersistentGutter={minimapHasPersistentGutter}
-            hitStripWidth={minimapHitStripWidth}
-            currentIndex={minimapCurrentIndex}
-            stripMap={minimapStripMap}
-            onSelect={(item) => {
-              onManualNavigation();
-              void listRef.current?.scrollToIndex({
-                index: item.rowIndex,
-                animated: true,
-                viewOffset: 24,
-              });
-            }}
-          />
-        </TooltipScrollDismissArea>
+        <TimelineSearchQueryCtx value={searchNeedle}>
+          <TimelineSelectionPinCtx value={selectionPinnedRowKeys}>
+            <TooltipScrollDismissArea
+              ref={setTimelineViewportElement}
+              className="relative h-full min-h-0"
+              data-assistant-citation-viewport="true"
+            >
+              {searchBar}
+              {onCiteAssistantText && citationThreadRef ? (
+                <AssistantSelectionToolbar
+                  viewport={timelineViewportElement}
+                  threadRef={citationThreadRef}
+                  onCite={onCiteAssistantText}
+                />
+              ) : null}
+              <LegendList<MessagesTimelineRow>
+                ref={setTimelineList}
+                data={rows}
+                extraData={`${listIdentityKey}:${rows.length}`}
+                keyExtractor={keyExtractor}
+                getItemType={getItemType}
+                renderItem={renderItem}
+                estimatedItemSize={90}
+                initialScrollAtEnd={citationRequest === null && rememberedPosition?.atEnd !== false}
+                // Legend needs a data refresh to mount new pins without a scroll event.
+                dataVersion={readyCitationRequest?.key ?? listIdentityKey}
+                {...(alwaysRender ? { alwaysRender } : {})}
+                onLoad={onCitationListLoad}
+                {...(anchoredEndSpace ? { anchoredEndSpace } : {})}
+                contentInsetEndAdjustment={anchoredEndSpace ? contentInsetEndAdjustment : 0}
+                maintainScrollAtEnd={
+                  citationPositioning ||
+                  (restoringThreadPosition && rememberedPosition?.atEnd === false) ||
+                  anchoredEndSpace ||
+                  !liveFollowEnabled ||
+                  disclosureToggleSettling
+                    ? false
+                    : isWorking && !prefersReducedMotion && settlingListIdentity === null
+                      ? TIMELINE_MAINTAIN_SCROLL_AT_END_SMOOTH
+                      : TIMELINE_MAINTAIN_SCROLL_AT_END
+                }
+                maintainVisibleContentPosition={
+                  citationPositioning ||
+                  (restoringThreadPosition && rememberedPosition?.atEnd === false)
+                    ? false
+                    : maintainVisibleContentPosition
+                }
+                maintainScrollAtEndThreshold={1}
+                onScroll={handleScroll}
+                onItemSizeChanged={reportContentOverflow}
+                className={cn(
+                  "messages-timeline-scroll scrollbar-gutter-both h-full min-h-0 overflow-x-hidden overscroll-y-contain [overflow-anchor:none]",
+                  topFadeEnabled && "topbar-scroll-fade",
+                )}
+                ListHeaderComponent={listHeader}
+                ListFooterComponent={timelineListFooter}
+              />
+              <TimelineMinimap
+                items={minimapItems}
+                hasPersistentGutter={minimapHasPersistentGutter}
+                hitStripWidth={minimapHitStripWidth}
+                currentIndex={minimapCurrentIndex}
+                stripMap={minimapStripMap}
+                onSelect={(item) => {
+                  onManualNavigation();
+                  void listRef.current?.scrollToIndex({
+                    index: item.rowIndex,
+                    animated: true,
+                    viewOffset: 24,
+                  });
+                }}
+              />
+            </TooltipScrollDismissArea>
+          </TimelineSelectionPinCtx>
+        </TimelineSearchQueryCtx>
       </TimelineRowActivityCtx>
     </TimelineRowCtx>
   );
@@ -2709,9 +2896,9 @@ function UserInputAnswerTimelineRow({
               <p className="whitespace-pre-wrap text-sm text-muted-foreground">{answer.question}</p>
               {answer.values.length > 0 ? (
                 <div className="flex flex-wrap items-center gap-1.5">
-                  {answer.values.map((value, index) => (
+                  {answer.values.map((value) => (
                     <span
-                      key={`${index}:${value}`}
+                      key={value}
                       className="inline-flex min-w-0 items-start gap-1 whitespace-pre-wrap break-words rounded-md border border-border/70 bg-background/60 px-2 py-0.5 text-sm text-foreground"
                     >
                       <CheckIcon className="mt-1 size-3 shrink-0 text-primary" aria-hidden />
@@ -3282,6 +3469,7 @@ function ExpandedWorkGroupEntries({
   workspaceRoot: string | undefined;
 }) {
   const { workGroupViewState: viewState, onToggleWorkEntry } = use(TimelineRowCtx);
+  const selectionPinnedRowKeys = use(TimelineSelectionPinCtx);
   const [initialScrollIndex] = useState(() =>
     resolveWorkGroupScrollIndex(entries, viewState.scrollPositions.get(anchorKey)),
   );
@@ -3365,10 +3553,23 @@ function ExpandedWorkGroupEntries({
 
   const renderEntry = useCallback(
     ({ item }: { item: TimelineWorkEntry }) => (
-      <SimpleWorkEntryRow key={item.id} workEntry={item} workspaceRoot={workspaceRoot} />
+      <div {...virtualRowKeyProps(item.id)}>
+        <SimpleWorkEntryRow key={item.id} workEntry={item} workspaceRoot={workspaceRoot} />
+      </div>
     ),
     [workspaceRoot],
   );
+  // Measure the restored row even when an intra-row offset puts its estimated
+  // bounds outside the list's small bootstrap render window, and hold any row
+  // the user has text selected in so recycling cannot drop that selection.
+  const alwaysRender = useMemo(() => {
+    const indices = restoringPosition && initialScrollIndex ? [initialScrollIndex.index] : [];
+    if (indices.length === 0 && selectionPinnedRowKeys.length === 0) return undefined;
+    return {
+      ...(indices.length > 0 ? { indices } : {}),
+      ...(selectionPinnedRowKeys.length > 0 ? { keys: [...selectionPinnedRowKeys] } : {}),
+    };
+  }, [initialScrollIndex, restoringPosition, selectionPinnedRowKeys]);
 
   const updateExpandedContentHeight = useCallback(() => {
     const state = listRef.current?.getState();
@@ -3403,11 +3604,7 @@ function ExpandedWorkGroupEntries({
             appendState.follow ? { animated: false, on: { dataChange: true } } : false
           }
           maintainScrollAtEndThreshold={1 / Math.max(1, fades.viewportHeight)}
-          // Measure the restored row even when an intra-row offset puts its
-          // estimated bounds outside the list's small bootstrap render window.
-          {...(restoringPosition && initialScrollIndex
-            ? { alwaysRender: { indices: [initialScrollIndex.index] } }
-            : {})}
+          {...(alwaysRender ? { alwaysRender } : {})}
           maintainVisibleContentPosition
           onLoad={handleLoad}
           onScroll={handleScroll}
@@ -4394,7 +4591,14 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
   markdownCwd: string | undefined;
   footer?: ReactNode;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [userExpanded, setExpanded] = useState(false);
+  // In-chat find opens a long message that holds a match, so it can be seen.
+  const searchNeedle = use(TimelineSearchQueryCtx);
+  const searchExpanded = useMemo(
+    () => searchNeedle.length > 0 && props.text.toLowerCase().includes(searchNeedle),
+    [props.text, searchNeedle],
+  );
+  const expanded = userExpanded || searchExpanded;
   const hasVisibleBody = props.text.trim().length > 0;
   const canCollapse = hasVisibleBody && shouldCollapseUserMessage(props.text);
   const isCollapsed = canCollapse && !expanded;
