@@ -3,6 +3,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
+  ThreadId,
 } from "@t3tools/contracts";
 import { isDevProxiedPath } from "@t3tools/shared/devProxy";
 import { decodeOtlpTraceRecords } from "@t3tools/shared/observability";
@@ -47,8 +48,14 @@ import {
 } from "./auth/http.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "./httpCors.ts";
+import { resolveAttachmentPathById } from "./attachmentStore.ts";
+import { isThreadNotFound } from "./orchestration-v2/http.ts";
+import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
+import { collectThreadTranscriptAttachments } from "@t3tools/shared/threadTranscript";
+import { buildThreadExportZip } from "./threadExport.ts";
 
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
+const THREAD_EXPORT_ROUTE_PREFIX = "/api/thread-export";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 const DESKTOP_RENDERER_ORIGINS = ["t3code://app", "t3code-dev://app"];
 const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
@@ -431,6 +438,94 @@ export const assetRouteLayer = HttpRouter.add(
       Effect.orElseSucceed(() => HttpServerResponse.text("Internal Server Error", { status: 500 })),
     );
   }),
+);
+
+// GET /api/thread-export/<threadId> -> zip of transcript.md + attachments/.
+// A top-level path, not under the orchestration HttpApi, because the response
+// is a binary download rather than a schema-encoded payload.
+export const threadExportRouteLayer = HttpRouter.add(
+  "GET",
+  `${THREAD_EXPORT_ROUTE_PREFIX}/*`,
+  Effect.gen(function* () {
+    yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
+
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (Option.isNone(url)) {
+      return HttpServerResponse.text("Bad Request", { status: 400 });
+    }
+    const rawThreadId = url.value.pathname
+      .slice(`${THREAD_EXPORT_ROUTE_PREFIX}/`.length)
+      .replace(/\/+$/, "");
+    const threadIdValue = yield* Effect.try(() => decodeURIComponent(rawThreadId)).pipe(
+      Effect.orElseSucceed(() => ""),
+    );
+    if (threadIdValue.length === 0 || threadIdValue.includes("/")) {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+    const threadId = ThreadId.make(threadIdValue);
+
+    // getThreadProjection hydrates threads imported from v1 before reading.
+    const threadManagement = yield* ThreadManagementService.ThreadManagementService;
+    const projection = yield* threadManagement.getThreadProjection(threadId).pipe(
+      Effect.map(Option.some),
+      Effect.catch((error) =>
+        isThreadNotFound(error)
+          ? Effect.succeed(Option.none())
+          : Effect.logError("Failed to read thread for export.", { threadId, error }).pipe(
+              Effect.andThen(Effect.fail(error)),
+            ),
+      ),
+    );
+    if (Option.isNone(projection)) {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+
+    const config = yield* ServerConfig.ServerConfig;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const attachmentBytesById = new Map<string, Uint8Array>();
+    for (const attachment of collectThreadTranscriptAttachments(projection.value)) {
+      const filePath = resolveAttachmentPathById({
+        attachmentsDir: config.attachmentsDir,
+        attachmentId: attachment.id,
+      });
+      if (filePath === null) continue;
+      const bytes = yield* fileSystem.readFile(filePath).pipe(
+        Effect.tapError((cause) =>
+          Effect.logWarning("Skipping unreadable attachment in thread export.", {
+            threadId,
+            attachmentId: attachment.id,
+            cause,
+          }),
+        ),
+        Effect.option,
+      );
+      if (Option.isSome(bytes)) attachmentBytesById.set(attachment.id, bytes.value);
+    }
+
+    const zip = buildThreadExportZip({
+      title: projection.value.thread.title,
+      source: projection.value,
+      attachmentBytesById,
+    });
+    return HttpServerResponse.uint8Array(zip, {
+      status: 200,
+      contentType: "application/zip",
+      headers: {
+        "Content-Disposition": `attachment; filename="thread-${encodeURIComponent(threadId)}.zip"`,
+        "Cache-Control": "no-store",
+      },
+    });
+  }).pipe(
+    Effect.catchTags({
+      EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
+      EnvironmentInternalError: HttpServerRespondable.toResponse,
+      EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
+    }),
+    Effect.catch(() =>
+      Effect.succeed(HttpServerResponse.text("Internal Server Error", { status: 500 })),
+    ),
+  ),
 );
 
 export const attachmentUploadRouteLayer = HttpRouter.add(

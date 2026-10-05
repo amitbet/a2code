@@ -99,33 +99,28 @@ export const buildEnvironmentAuthHeaders = (
  * Resolve relay credentials at request time without replacing the live socket.
  * A rejected credential gets one refresh and retry, with a new request-bound
  * proof. Cookie and bearer requests keep their existing authentication behavior.
+ *
+ * `request` receives the resolved base URL so raw (non-HttpApi) routes can use
+ * the same credential handling; see {@link executeAuthenticatedEnvironmentHttpRequest}
+ * for the typed HttpApi group variant.
  */
-export const executeAuthenticatedEnvironmentHttpRequest = Effect.fn(
-  "clientRuntime.state.executeAuthenticatedEnvironmentHttpRequest",
-)(function* <
-  Group extends Parameters<typeof makeEnvironmentHttpApiGroupClient>[1],
-  A,
-  E,
-  R,
->(input: {
+export const executeAuthenticatedEnvironmentRawHttpRequest = Effect.fn(
+  "clientRuntime.state.executeAuthenticatedEnvironmentRawHttpRequest",
+)(function* <A, E, R>(input: {
   readonly prepared: PreparedConnection;
   readonly signer: Option.Option<ManagedRelayDpopSigner["Service"]>;
   readonly remoteAuthorization?: Option.Option<RemoteEnvironmentAuthorization["Service"]>;
   readonly method: HttpMethod.HttpMethod;
   readonly url: (httpBaseUrl: string) => string;
   readonly timeoutMs: number;
-  readonly group: Group;
   readonly request: (input: {
-    readonly client: Effect.Success<ReturnType<typeof makeEnvironmentHttpApiGroupClient<Group>>>;
+    readonly httpBaseUrl: string;
+    readonly requestUrl: string;
     readonly headers: EnvironmentHttpAuthHeaders;
   }) => Effect.Effect<A, E, R>;
   /** Some endpoints report rejected credentials in a successful response. */
   readonly isUnauthorizedResponse?: (response: NoInfer<A>) => boolean;
-}): Effect.fn.Return<
-  A,
-  RemoteEnvironmentRequestError,
-  Effect.Services<ReturnType<typeof makeEnvironmentHttpApiGroupClient<Group>>> | R
-> {
+}): Effect.fn.Return<A, RemoteEnvironmentRequestError, R> {
   let httpBaseUrl = input.prepared.httpBaseUrl;
   return yield* Effect.gen(function* () {
     let rejectedAccessToken: string | undefined;
@@ -161,7 +156,6 @@ export const executeAuthenticatedEnvironmentHttpRequest = Effect.fn(
       }
 
       const requestUrl = input.url(httpBaseUrl);
-      const client = yield* makeEnvironmentHttpApiGroupClient(httpBaseUrl, input.group);
       const headers = yield* buildEnvironmentAuthHeaders(
         authorization,
         input.method,
@@ -171,7 +165,10 @@ export const executeAuthenticatedEnvironmentHttpRequest = Effect.fn(
       const result = yield* executeEnvironmentHttpRequest(
         requestUrl,
         input.timeoutMs,
-        withEnvironmentCredentials(authorization, input.request({ client, headers })),
+        withEnvironmentCredentials(
+          authorization,
+          input.request({ httpBaseUrl, requestUrl, headers }),
+        ),
       ).pipe(Effect.result);
 
       if (Result.isFailure(result)) {
@@ -210,3 +207,38 @@ export const executeAuthenticatedEnvironmentHttpRequest = Effect.fn(
     }),
   );
 });
+
+/** {@link executeAuthenticatedEnvironmentRawHttpRequest} for a typed HttpApi group. */
+export const executeAuthenticatedEnvironmentHttpRequest = <
+  Group extends Parameters<typeof makeEnvironmentHttpApiGroupClient>[1],
+  A,
+  E,
+  R,
+>(input: {
+  readonly prepared: PreparedConnection;
+  readonly signer: Option.Option<ManagedRelayDpopSigner["Service"]>;
+  readonly remoteAuthorization?: Option.Option<RemoteEnvironmentAuthorization["Service"]>;
+  readonly method: HttpMethod.HttpMethod;
+  readonly url: (httpBaseUrl: string) => string;
+  readonly timeoutMs: number;
+  readonly group: Group;
+  readonly request: (input: {
+    readonly client: Effect.Success<ReturnType<typeof makeEnvironmentHttpApiGroupClient<Group>>>;
+    readonly headers: EnvironmentHttpAuthHeaders;
+  }) => Effect.Effect<A, E, R>;
+  /** Some endpoints report rejected credentials in a successful response. */
+  readonly isUnauthorizedResponse?: (response: NoInfer<A>) => boolean;
+}): Effect.Effect<
+  A,
+  RemoteEnvironmentRequestError,
+  Effect.Services<ReturnType<typeof makeEnvironmentHttpApiGroupClient<Group>>> | R
+> => {
+  const { group, request, ...rest } = input;
+  return executeAuthenticatedEnvironmentRawHttpRequest({
+    ...rest,
+    request: ({ httpBaseUrl, headers }) =>
+      makeEnvironmentHttpApiGroupClient(httpBaseUrl, group).pipe(
+        Effect.flatMap((client) => request({ client, headers })),
+      ),
+  });
+};

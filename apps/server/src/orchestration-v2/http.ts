@@ -33,7 +33,8 @@ import * as ProjectStore from "./ProjectStore.ts";
 import { buildActiveShellSnapshot } from "./ShellStream.ts";
 import { projectThreadProjectionForWire } from "./WireProjection.ts";
 
-function isThreadNotFound(error: unknown): boolean {
+/** Whether an orchestrator read failed because the thread does not exist. */
+export function isThreadNotFound(error: unknown): boolean {
   return (
     Predicate.hasProperty(error, "cause") &&
     Predicate.hasProperty(error.cause, "_tag") &&

@@ -2,10 +2,12 @@ import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { requestCustomSnooze } from "../components/CustomSnoozeDialog";
 import {
   type AtomCommandResult,
+  createRuntimeCommand,
   isAtomCommandInterrupted,
   settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
+import { fetchEnvironmentThreadExport } from "@t3tools/client-runtime/state/thread-export";
 import { canSnooze, effectiveSnoozed } from "@t3tools/client-runtime/state/thread-settled";
 import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { useRouter } from "@tanstack/react-router";
@@ -17,6 +19,8 @@ import {
   type ThreadActionMenuId,
 } from "../components/threadActionMenu.logic";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
+import { connectionAtomRuntime } from "../connection/runtime";
+import { readPreparedConnection } from "../state/session";
 import { threadEnvironment } from "../state/threads";
 import { useAtomCommand } from "../state/use-atom-command";
 import {
@@ -49,6 +53,58 @@ function failureToast(title: string, error: unknown) {
       title,
       description: error instanceof Error ? error.message : "An error occurred.",
     }),
+  );
+}
+
+/**
+ * Fetches a thread's zip export through the connection runtime, which carries
+ * the relay authorization that DPoP-authenticated environments need.
+ */
+const exportThreadZipCommand = createRuntimeCommand(connectionAtomRuntime, {
+  label: "web:thread:export-zip",
+  execute: (input: Parameters<typeof fetchEnvironmentThreadExport>[0]) =>
+    fetchEnvironmentThreadExport(input),
+});
+
+function downloadBlob(blob: Blob, fileName: string) {
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  // Revoking synchronously can cancel the download in some browsers.
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000);
+}
+
+/**
+ * "Export thread (zip)": downloads `transcript.md` plus the thread's
+ * attachments from the thread's environment. Shared by every surface that
+ * offers the action, and reports its own failures.
+ */
+export function useThreadExportDownload() {
+  const runExport = useAtomCommand(exportThreadZipCommand, { reportFailure: false });
+  return useCallback(
+    async (threadRef: ScopedThreadRef) => {
+      const prepared = readPreparedConnection(threadRef.environmentId);
+      if (!prepared) {
+        failureToast("Export failed", new Error("This environment is not connected."));
+        return;
+      }
+      const result = await runExport({ prepared, threadId: threadRef.threadId });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          failureToast("Export failed", squashAtomCommandFailure(result));
+        }
+        return;
+      }
+      downloadBlob(
+        new Blob([result.value], { type: "application/zip" }),
+        `thread-${threadRef.threadId}.zip`,
+      );
+    },
+    [runExport],
   );
 }
 
@@ -98,6 +154,7 @@ export function useThreadActionMenu(input: {
     reportFailure: false,
   });
   const handleNewThread = useNewThreadHandler();
+  const downloadThreadExport = useThreadExportDownload();
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
@@ -271,6 +328,9 @@ export function useThreadActionMenu(input: {
           case "copy-thread-id":
             copyThreadIdToClipboard(thread.id, { threadId: thread.id });
             return;
+          case "export-zip":
+            await downloadThreadExport(threadRef);
+            return;
           case "archive": {
             if (confirmThreadArchive) {
               const confirmed = await settlePromise(() =>
@@ -332,6 +392,7 @@ export function useThreadActionMenu(input: {
       copyPathToClipboard,
       copyThreadIdToClipboard,
       deleteThread,
+      downloadThreadExport,
       handleNewThread,
       logicalProjectKeyByPhysicalKey,
       markThreadUnread,
