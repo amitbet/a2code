@@ -15,6 +15,7 @@ import {
 } from "../composerDraftStore";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import { useEnvironmentThreadRefs, useThreadRefs, useThreadShell } from "../state/entities";
+import { isEnvironmentInMachineScope, useMachineEnvironmentId } from "../state/environments";
 import { useEnvironmentQuery } from "../state/query";
 import { environmentShell } from "../state/shell";
 import {
@@ -55,6 +56,16 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
   const serverThreadRef: ScopedThreadRef | null =
     target.kind === "server" ? target.threadRef : (draftSession?.promotedTo ?? inferredThreadRef);
   const serverThread = useThreadShell(serverThreadRef);
+  // Fork: a thread on another machine is not reachable from this scope, so the
+  // route bails to the overview instead of rendering an empty chat.
+  const machineEnvironmentId = useMachineEnvironmentId();
+  const targetEnvironmentId =
+    target.kind === "server"
+      ? target.threadRef.environmentId
+      : (draftSession?.environmentId ?? null);
+  const outsideMachineScope =
+    targetEnvironmentId !== null &&
+    !isEnvironmentInMachineScope(targetEnvironmentId, machineEnvironmentId);
   const backgroundSubmissionPending = useBackgroundDraftSubmissionPending(
     target.kind === "draft" ? serverThreadRef : null,
   );
@@ -108,14 +119,18 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
   const environmentHasAnyThreads = environmentThreadRefs.length > 0 || environmentHasDraftThreads;
 
   useEffect(() => {
+    if (outsideMachineScope) {
+      void navigate({ to: "/", replace: true });
+      return;
+    }
     if (!inferredThreadRef || draftSession?.promotedTo) {
       return;
     }
     markPromotedDraftThreadByRef(inferredThreadRef);
-  }, [draftSession?.promotedTo, inferredThreadRef]);
+  }, [draftSession?.promotedTo, inferredThreadRef, navigate, outsideMachineScope]);
 
   useEffect(() => {
-    if (!canonicalThreadRef) {
+    if (!canonicalThreadRef || outsideMachineScope) {
       return;
     }
     let cancelled = false;
@@ -132,17 +147,17 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
     return () => {
       cancelled = true;
     };
-  }, [canonicalThreadRef, navigate]);
+  }, [canonicalThreadRef, navigate, outsideMachineScope]);
 
   useEffect(() => {
-    if (target.kind !== "draft" || draftSession || canonicalThreadRef) {
+    if (target.kind !== "draft" || draftSession || canonicalThreadRef || outsideMachineScope) {
       return;
     }
     void navigate({ to: "/", replace: true });
-  }, [canonicalThreadRef, draftSession, navigate, target.kind]);
+  }, [canonicalThreadRef, draftSession, navigate, outsideMachineScope, target.kind]);
 
   useEffect(() => {
-    if (target.kind !== "server" || !bootstrapComplete) {
+    if (target.kind !== "server" || !bootstrapComplete || outsideMachineScope) {
       return;
     }
     // Navigation already resolved onto this path, so a drop aimed here
@@ -155,14 +170,25 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
         void navigate({ to: "/", replace: true });
       }
     }
-  }, [bootstrapComplete, environmentHasAnyThreads, navigate, renderState, target]);
+  }, [
+    bootstrapComplete,
+    environmentHasAnyThreads,
+    navigate,
+    outsideMachineScope,
+    renderState,
+    target,
+  ]);
 
   useEffect(() => {
-    if (target.kind !== "server" || !serverThreadStarted || !draftThread) {
+    if (target.kind !== "server" || !serverThreadStarted || !draftThread || outsideMachineScope) {
       return;
     }
     finalizePromotedDraftThreadByRef(target.threadRef);
-  }, [draftThread, serverThreadStarted, target]);
+  }, [draftThread, outsideMachineScope, serverThreadStarted, target]);
+
+  if (outsideMachineScope) {
+    return null;
+  }
 
   let view: React.ReactNode = null;
   if (target.kind === "draft") {

@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import type {
   EnvironmentProject,
@@ -9,8 +10,13 @@ import {
   type EnvironmentThreadStatus,
   type ThreadHistoryMeta,
 } from "@t3tools/client-runtime/state/threads";
+import { scopeProject, scopeThreadShell } from "@t3tools/client-runtime/state/models";
 import type { ScopedProjectRef, ScopedThreadRef, ServerConfig } from "@t3tools/contracts";
-import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  OrchestrationV2ProjectedTurnItem,
+  OrchestrationV2ThreadShell,
+} from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentProjects } from "./projects";
@@ -27,6 +33,12 @@ const EMPTY_VISIBLE_TURN_ITEMS: ReadonlyArray<OrchestrationV2ProjectedTurnItem> 
 
 const EMPTY_PROJECT_ATOM = Atom.make<EnvironmentProject | null>(null).pipe(
   Atom.withLabel("web-project:empty"),
+);
+const EMPTY_PROJECTS_ATOM = Atom.make<ReadonlyArray<EnvironmentProject>>([]).pipe(
+  Atom.withLabel("web-projects:empty"),
+);
+const EMPTY_THREAD_SHELLS_ATOM = Atom.make<ReadonlyArray<OrchestrationV2ThreadShell>>([]).pipe(
+  Atom.withLabel("web-thread-shells:empty"),
 );
 const EMPTY_THREAD_REFS_ATOM = Atom.make(EMPTY_THREAD_REFS).pipe(
   Atom.withLabel("web-thread-refs:empty"),
@@ -76,6 +88,51 @@ export function useEnvironmentThreadRefs(
 
 export function useProjects(): ReadonlyArray<EnvironmentProject> {
   return useAtomValue(environmentProjects.projectsAtom);
+}
+
+/**
+ * Projects for one machine. A `null` environment is the machine scope's "no
+ * filter" state — the cross-machine Overview, or a catalog that has not
+ * resolved yet — and yields every environment's projects rather than none, so
+ * every scoped surface unscopes together. Reverting this to an empty list
+ * silently empties the whole Overview.
+ */
+export function useEnvironmentProjects(
+  environmentId: EnvironmentId | null,
+): ReadonlyArray<EnvironmentProject> {
+  const allProjects = useAtomValue(environmentProjects.projectsAtom);
+  const scopedProjects = useAtomValue(
+    environmentId === null
+      ? EMPTY_PROJECTS_ATOM
+      : environmentProjects.environmentProjectsAtom(environmentId),
+  );
+  return useMemo(
+    () =>
+      environmentId === null
+        ? allProjects
+        : scopedProjects.map((project) => scopeProject(environmentId, project)),
+    [allProjects, environmentId, scopedProjects],
+  );
+}
+
+/** Thread shells for one machine, with the same `null` semantics as
+ * `useEnvironmentProjects`. */
+export function useEnvironmentThreadShells(
+  environmentId: EnvironmentId | null,
+): ReadonlyArray<EnvironmentThreadShell> {
+  const allThreads = useAtomValue(environmentThreadShells.threadShellsAtom);
+  const scopedThreads = useAtomValue(
+    environmentId === null
+      ? EMPTY_THREAD_SHELLS_ATOM
+      : environmentThreadShells.environmentThreadsAtom(environmentId),
+  );
+  return useMemo(
+    () =>
+      environmentId === null
+        ? allThreads
+        : scopedThreads.map((thread) => scopeThreadShell(environmentId, thread)),
+    [allThreads, environmentId, scopedThreads],
+  );
 }
 
 export function useServerConfigs(): ReadonlyMap<EnvironmentId, ServerConfig> {

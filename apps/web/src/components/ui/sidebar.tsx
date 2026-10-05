@@ -586,9 +586,12 @@ function SidebarFooter({ className, ...props }: React.ComponentProps<"div">) {
 function SidebarContent({
   className,
   fixedHeader,
+  dropTarget = false,
   ...props
 }: React.ComponentProps<"div"> & {
   fixedHeader?: React.ReactNode;
+  /** Highlights the content as an active drop target while something is dragged over it. */
+  dropTarget?: boolean;
 }) {
   return (
     <>
@@ -612,6 +615,8 @@ function SidebarContent({
             // it, including across the fixed header's boundary.
             "flex w-full min-w-0 flex-col [overflow-anchor:none] group-data-[collapsible=icon]:overflow-hidden [&>[data-sidebar=group]+[data-sidebar=group]]:pt-0",
             fixedHeader && "[&>[data-sidebar=group]:first-child]:pt-0",
+            "transition-colors",
+            dropTarget && "bg-accent/45 ring-1 ring-inset ring-primary/60",
             className,
           )}
           data-sidebar="content"

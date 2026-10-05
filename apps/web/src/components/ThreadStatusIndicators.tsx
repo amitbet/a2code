@@ -17,7 +17,11 @@ import { Atom } from "effect/unstable/reactivity";
 import { FolderGit2Icon, TerminalIcon } from "lucide-react";
 import { useCallback, useMemo } from "react";
 import { appAtomRegistry } from "../rpc/atomRegistry";
-import { useEnvironment, usePrimaryEnvironmentId } from "../state/environments";
+import {
+  useEnvironment,
+  useMachineEnvironmentId,
+  usePrimaryEnvironmentId,
+} from "../state/environments";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { useProject } from "../state/entities";
 import {
@@ -29,7 +33,6 @@ import {
 import { useRender } from "@base-ui/react/use-render";
 import { type ReactNode, type AnimationEvent, type MouseEvent, type ReactElement } from "react";
 import { cn } from "../lib/utils";
-
 import { parseChangeRequestUrl } from "../lib/openPullRequestLink";
 import { useEnvironmentQuery } from "../state/query";
 import { linkedPullRequestDetailAtom, useSharedPullRequestSummary } from "../state/pullRequests";
@@ -987,9 +990,13 @@ export function ThreadRowTrailingStatus({ thread }: { thread: SidebarThreadSumma
     threadId: thread.id,
   });
   const environment = useEnvironment(thread.environmentId);
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
-  // No primary (the hosted app) means every thread is remote, and the machine
-  // glyph is what tells the environments apart.
+  // In the cross-machine overview the machine scope is null; keep naming the
+  // owning machine by falling back to the real primary environment, since that
+  // label is the whole point of an overview row. No primary at all (the hosted
+  // app) means every thread is remote, and the machine glyph tells them apart.
+  const machineEnvironmentId = useMachineEnvironmentId();
+  const catalogPrimaryEnvironmentId = usePrimaryEnvironmentId();
+  const primaryEnvironmentId = machineEnvironmentId ?? catalogPrimaryEnvironmentId;
   const isRemoteThread = thread.environmentId !== primaryEnvironmentId;
   const remoteEnvLabel = environment?.label ?? null;
   const threadEnvironmentLabel = isRemoteThread ? (remoteEnvLabel ?? "Remote") : null;

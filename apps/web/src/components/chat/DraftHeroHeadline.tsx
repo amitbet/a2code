@@ -23,8 +23,12 @@ import {
   buildSidebarProjectSnapshots,
   projectGroupsSpanEnvironments,
 } from "~/sidebarProjectGrouping";
-import { useProjects, useThreadShells } from "~/state/entities";
-import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
+import { useEnvironmentProjects, useEnvironmentThreadShells } from "~/state/entities";
+import {
+  useEnvironments,
+  useMachineEnvironmentId,
+  usePrimaryEnvironmentId,
+} from "~/state/environments";
 import { ProjectEnvironmentBadge } from "../ProjectEnvironmentBadge";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { sortLogicalProjectsForSidebar } from "../Sidebar.logic";
@@ -55,10 +59,13 @@ export function DraftHeroHeadline({
   activeProjectRef,
   activeProjectTitle,
 }: DraftHeroHeadlineProps) {
-  const projects = useProjects();
-  const threads = useThreadShells();
+  const machineEnvironmentId = useMachineEnvironmentId();
+  const catalogPrimaryEnvironmentId = usePrimaryEnvironmentId();
+  // No-project drafts start on the selected machine; Overview falls back to the primary.
+  const primaryEnvironmentId = machineEnvironmentId ?? catalogPrimaryEnvironmentId;
+  const projects = useEnvironmentProjects(machineEnvironmentId);
+  const threads = useEnvironmentThreadShells(machineEnvironmentId);
   const { environments } = useEnvironments();
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const projectSortOrder = useClientSettings((settings) => settings.sidebarProjectSortOrder);
   const setLogicalProjectDraftThreadId = useComposerDraftStore(
@@ -84,7 +91,7 @@ export function DraftHeroHeadline({
         buildSidebarProjectSnapshots({
           projects,
           settings: projectGroupingSettings,
-          primaryEnvironmentId,
+          primaryEnvironmentId: machineEnvironmentId,
           resolveEnvironmentLabel: (environmentId) =>
             environmentLabelById.get(environmentId) ?? null,
         }),
@@ -93,7 +100,7 @@ export function DraftHeroHeadline({
       ),
     [
       environmentLabelById,
-      primaryEnvironmentId,
+      machineEnvironmentId,
       projectGroupingSettings,
       projectSortOrder,
       projects,
@@ -287,12 +294,14 @@ export function DraftHeroHeadline({
                     <TooltipTrigger render={<span className="block min-w-0 truncate" />}>
                       {group.displayName}
                     </TooltipTrigger>
-                    <TooltipPopup side="top">{group.displayName}</TooltipPopup>
+                    <TooltipPopup side="top" className="max-w-80">
+                      {group.displayName}
+                    </TooltipPopup>
                   </Tooltip>
                   {showProjectEnvironments ? (
                     <ProjectEnvironmentBadge
                       group={group}
-                      primaryEnvironmentId={primaryEnvironmentId}
+                      primaryEnvironmentId={machineEnvironmentId}
                       machineByEnvironmentId={environmentMachineById}
                     />
                   ) : null}

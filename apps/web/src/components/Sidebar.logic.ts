@@ -1051,6 +1051,10 @@ export function firstValidTimestampMs(
 }
 
 export { sortActiveThreadsByOrderKey as sortThreadsForSidebar } from "@t3tools/client-runtime/state/thread-sort";
+
+// The active-row label resolver ships alongside the sort it mirrors, so a
+// caller cannot reach for one without the other.
+export { activeThreadAnchorTimestamp } from "@t3tools/client-runtime/state/thread-sort";
 // The Working section beta folds and orders the inbox the same way on mobile.
 export {
   isThreadWorking as isSidebarThreadWorking,

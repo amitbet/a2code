@@ -7,6 +7,7 @@ import * as Order from "effect/Order";
 export interface ThreadSortInput {
   readonly createdAt: string;
   readonly updatedAt: string;
+  readonly pinnedAt?: string | null | undefined;
   readonly latestUserMessageAt?: string | null;
   readonly messages?: ReadonlyArray<{
     readonly createdAt: string;
@@ -118,22 +119,52 @@ export function getThreadSortTimestamp(
   return getLatestUserMessageTimestamp(thread);
 }
 
-/**
- * Sort anchor for the active thread list: creation time, re-anchored to
- * unsettledAt when the thread last re-entered the active list (an explicit
- * un-settle, or a settled thread waking on activity). The list stays static
- * between lifecycle transitions, but an un-settled thread surfaces at the
- * top instead of sinking back to its creation-order slot. Shared by web and
- * mobile so both render the same order. Malformed timestamps sink to 0.
- */
-export function activeThreadAnchorTimestampMs(thread: {
+export interface ActiveThreadAnchorInput {
   readonly createdAt: string;
   readonly unsettledAt?: string | null | undefined;
-}): number {
+  readonly latestUserMessageAt?: string | null | undefined;
+}
+
+/**
+ * Sort anchor for the active thread list: the newest of creation time, the
+ * last prompt the user sent, and the moment the thread last re-entered the
+ * active list (an explicit un-settle, or a settled thread waking on
+ * activity). Fork: upstream anchors on creation/un-settle only; the fork also
+ * lifts a row when the user prompts it.
+ *
+ * Only a USER message moves this. Agent output, tool calls, streaming deltas,
+ * and approvals all leave it alone (latestUserMessageAt counts user messages
+ * only), so rows do not churn underneath a working agent — the list moves
+ * when a human acts.
+ *
+ * Shared by web and mobile so both render the same order, and paired with
+ * activeThreadAnchorTimestamp so the row's time label can never disagree with
+ * the row's position. Malformed timestamps sink to 0.
+ */
+export function activeThreadAnchorTimestampMs(thread: ActiveThreadAnchorInput): number {
   return Math.max(
     toSortableTimestamp(thread.createdAt) ?? 0,
     toSortableTimestamp(thread.unsettledAt ?? undefined) ?? 0,
+    toSortableTimestamp(thread.latestUserMessageAt ?? undefined) ?? 0,
   );
+}
+
+/**
+ * String twin of activeThreadAnchorTimestampMs, for the relative-time label on
+ * an active row: the label reads the same instant the row sorts by, so "6h"
+ * can never sit above "2d". Null when every candidate is missing or malformed.
+ */
+export function activeThreadAnchorTimestamp(thread: ActiveThreadAnchorInput): string | null {
+  let anchor: string | null = null;
+  let anchorMs = Number.NEGATIVE_INFINITY;
+  for (const candidate of [thread.createdAt, thread.unsettledAt, thread.latestUserMessageAt]) {
+    if (candidate == null) continue;
+    const parsed = toSortableTimestamp(candidate);
+    if (parsed === null || parsed <= anchorMs) continue;
+    anchor = candidate;
+    anchorMs = parsed;
+  }
+  return anchor;
 }
 
 export function sortThreads<T extends { readonly id: string } & ThreadSortInput>(
@@ -141,10 +172,19 @@ export function sortThreads<T extends { readonly id: string } & ThreadSortInput>
   sortOrder: SidebarThreadSortOrder,
 ): T[] {
   if (threads.length < 2) return [...threads];
+  // Fork: pinned rows sort above every unpinned row, most recently pinned
+  // first, so the project tree keeps pinned threads at the top of a project.
   return threads
-    .map((thread) => ({ thread, timestamp: getThreadSortTimestamp(thread, sortOrder) }))
+    .map((thread) => ({
+      thread,
+      pinned: thread.pinnedAt ? 1 : 0,
+      pinnedAt: toSortableTimestamp(thread.pinnedAt ?? undefined) ?? 0,
+      timestamp: getThreadSortTimestamp(thread, sortOrder),
+    }))
     .sort(
       (left, right) =>
+        right.pinned - left.pinned ||
+        right.pinnedAt - left.pinnedAt ||
         right.timestamp - left.timestamp ||
         (left.thread.id < right.thread.id ? 1 : left.thread.id > right.thread.id ? -1 : 0),
     )

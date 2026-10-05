@@ -70,6 +70,7 @@ import {
   EyeIcon,
   FolderIcon,
   GitBranchIcon,
+  ListTodoIcon,
   MessageCircleQuestionIcon,
   PinIcon,
   PinOffIcon,
@@ -133,6 +134,7 @@ import {
   useThreadSelectionStore,
 } from "../threadSelectionStore";
 import { useAcknowledgeThreadWoke, useThreadActions } from "../hooks/useThreadActions";
+import { useThreadExportDownload } from "../hooks/useThreadActionMenu";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useTerminalFocus } from "../hooks/useTerminalFocus";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
@@ -145,13 +147,14 @@ import {
   useEnvironmentIdentities,
   useConnectedEnvironmentIds,
   useEnvironmentMachines,
+  useMachineEnvironmentId,
   usePrimaryEnvironmentId,
 } from "../state/environments";
 import {
   readThreadShell,
   useAllEnvironmentProjectSnapshotsReady,
-  useProjects,
-  useThreadShells,
+  useEnvironmentProjects,
+  useEnvironmentThreadShells,
 } from "../state/entities";
 import { environmentServerConfigsAtom, primaryServerKeybindingsAtom } from "../state/server";
 import { vcsEnvironment } from "../state/vcs";
@@ -172,6 +175,7 @@ import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { ProjectEnvironmentBadge } from "./ProjectEnvironmentBadge";
 import { buildDraftActionMenuItems, buildThreadActionMenuItems } from "./threadActionMenu.logic";
 import {
+  activeThreadAnchorTimestamp,
   animateSidebarLayoutChanges,
   applySidebarThreadDrop,
   filterSidebarV2VisibleThreads,
@@ -245,6 +249,10 @@ import { ThreadSearchMatchExcerpt } from "./ThreadSearchMatch";
 import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
 import { getTriggerDisplayModelLabel } from "./chat/providerIconUtils";
+import { fetchEnvironmentThreadExport } from "@t3tools/client-runtime/state/thread-export";
+import { formatThreadReference } from "@t3tools/shared/threadReference";
+import { runtime } from "../lib/runtime";
+import { readPreparedConnection } from "../state/session";
 import {
   deriveProviderEntriesByEnvironment,
   shouldShowInstanceBadge,
@@ -253,6 +261,7 @@ import {
 import { useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Button, InlineButton } from "./ui/button";
+import { ProjectTodoSheet } from "./ProjectTodoSheet";
 import {
   Combobox,
   ComboboxEmpty,
@@ -301,8 +310,12 @@ function compactSidebarTimeLabel(label: string): string {
   return label.endsWith(" ago") ? label.slice(0, -4) : label;
 }
 
+// Active rows read "how long ago did I last prompt this", matching their
+// sort key: both go through activeThreadAnchorTimestamp so label and order
+// can't disagree. Labelling by updatedAt instead would let agent activity
+// move the number without moving the row.
 function threadTimeLabel(thread: SidebarThreadSummary): string {
-  const timestamp = thread.latestUserMessageAt ?? thread.updatedAt;
+  const timestamp = activeThreadAnchorTimestamp(thread) ?? thread.updatedAt;
   return compactSidebarTimeLabel(formatRelativeTimeLabel(timestamp));
 }
 
@@ -2322,9 +2335,10 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
 });
 
 export default function Sidebar() {
-  const projects = useProjects();
+  const machineEnvironmentId = useMachineEnvironmentId();
+  const projects = useEnvironmentProjects(machineEnvironmentId);
   const projectOrder = useUiStateStore((store) => store.projectOrder);
-  const threads = useThreadShells();
+  const threads = useEnvironmentThreadShells(machineEnvironmentId);
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -2348,6 +2362,7 @@ export default function Sidebar() {
     markThreadUnread,
     archiveThread,
     deleteThread,
+    forkThread,
   } = useThreadActions();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
@@ -2389,6 +2404,26 @@ export default function Sidebar() {
       );
     },
   });
+  const { copyToClipboard: copyThreadRefToClipboard } = useCopyToClipboard<{
+    threadRef: string;
+  }>({
+    onCopy: ({ threadRef }) => {
+      toastManager.add({
+        type: "success",
+        title: "Thread ref copied",
+        description: threadRef,
+      });
+    },
+    onError: (error) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to copy thread ref",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        }),
+      );
+    },
+  });
   const { copyToClipboard: copyThreadIdToClipboard } = useCopyToClipboard<{ threadId: ThreadId }>({
     onCopy: ({ threadId }) => {
       toastManager.add({
@@ -2407,14 +2442,23 @@ export default function Sidebar() {
       );
     },
   });
+  const [todoProject, setTodoProject] = useState<SidebarProjectSnapshot | null>(null);
   const newThreadContext = useHandleNewThread();
   const openAddProjectCommandPalette = useCallback(
     () => openCommandPalette({ open: "add-project" }),
     [],
   );
+  const openProjectTodo = useCallback((project: SidebarProjectSnapshot) => {
+    setTodoProject(project);
+  }, []);
   const environments = useEnvironmentIdentities();
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  // Which machine counts as "here", for the local-vs-remote badges. In the
+  // cross-machine overview the data scope is null, but rows still have to name
+  // the machine they came from, so fall back to the real primary environment
+  // instead of treating everything as local.
+  const catalogPrimaryEnvironmentId = usePrimaryEnvironmentId();
+  const primaryEnvironmentId = machineEnvironmentId ?? catalogPrimaryEnvironmentId;
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
   const toggleThreadSelection = useThreadSelectionStore((s) => s.toggleThread);
@@ -4418,6 +4462,7 @@ export default function Sidebar() {
     [copyBranchToClipboard, copyPathToClipboard, openProjectSettings, projectByKey],
   );
 
+  const downloadThreadExport = useThreadExportDownload();
   const handleThreadContextMenu = useCallback(
     (threadRef: ScopedThreadRef, position: { x: number; y: number }) => {
       void (async () => {
@@ -4619,6 +4664,36 @@ export default function Sidebar() {
           case "copy-thread-id":
             copyThreadIdToClipboard(thread.id, { threadId: thread.id });
             return;
+          case "fork": {
+            const result = await settlePromise(() => forkThread(threadRef));
+            if (result._tag === "Failure") {
+              const error = squashAtomCommandFailure(result);
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Fork failed",
+                  description:
+                    error instanceof Error ? error.message : "Could not fork this thread.",
+                }),
+              );
+            }
+            return;
+          }
+          case "copy-thread-ref": {
+            // Always environment-qualified: copy happens before the paste
+            // target is known, so an unqualified token only resolves by luck
+            // once more than one machine is connected.
+            const threadRefToken = formatThreadReference({
+              environmentId: threadRef.environmentId,
+              threadId: thread.id,
+            });
+            copyThreadRefToClipboard(threadRefToken, { threadRef: threadRefToken });
+            return;
+          }
+          case "export-zip": {
+            await downloadThreadExport(threadRef);
+            return;
+          }
           case "archive": {
             if (confirmThreadArchive) {
               const confirmed = await settlePromise(() =>
@@ -4691,7 +4766,10 @@ export default function Sidebar() {
       confirmThreadDelete,
       copyBranchToClipboard,
       copyPathToClipboard,
+      downloadThreadExport,
       copyThreadIdToClipboard,
+      copyThreadRefToClipboard,
+      forkThread,
       deleteThread,
       handleMultiSelectContextMenu,
       markThreadUnread,
@@ -4950,10 +5028,28 @@ export default function Sidebar() {
                               <Button
                                 size="icon-xs"
                                 variant="ghost-muted"
+                                aria-label={`Open project todo for ${project.displayName}`}
+                                title={`Open project todo for ${project.displayName}`}
+                                className="ml-auto"
+                                onPointerDown={(event) => event.stopPropagation()}
+                                onClick={(event) => {
+                                  event.preventDefault();
+                                  event.stopPropagation();
+                                  dispatchProjectScopeMenu({ type: "open-changed", open: false });
+                                  openProjectTodo(project);
+                                }}
+                              >
+                                <ListTodoIcon className="size-3.5" />
+                              </Button>
+                            ) : null}
+                            {project ? (
+                              <Button
+                                size="icon-xs"
+                                variant="ghost-muted"
+                                aria-label={`Project settings for ${project.displayName}`}
                                 tabIndex={-1}
                                 aria-hidden="true"
                                 title={`Project settings for ${project.displayName}`}
-                                className="ml-auto"
                                 onPointerDown={(event) => event.stopPropagation()}
                                 onClick={(event) => {
                                   void handleProjectSettings(event, project);
@@ -5423,6 +5519,23 @@ export default function Sidebar() {
           ) : null}
         </SidebarGroup>
       </SidebarContent>
+      <ProjectTodoSheet
+        open={todoProject !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setTodoProject(null);
+          }
+        }}
+        project={
+          todoProject
+            ? {
+                environmentId: todoProject.environmentId,
+                workspaceRoot: todoProject.workspaceRoot,
+                displayName: todoProject.displayName,
+              }
+            : null
+        }
+      />
       <SidebarChromeFooter />
     </>
   );

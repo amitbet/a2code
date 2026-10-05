@@ -2,6 +2,7 @@ import { ProjectId, RunId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  activeThreadAnchorTimestamp,
   activeThreadAnchorTimestampMs,
   generateSpreadPinOrderKeys,
   getLatestThreadForProject,
@@ -25,6 +26,23 @@ describe("activeThreadAnchorTimestampMs", () => {
         unsettledAt: "2026-08-01T00:00:00.000Z",
       }),
     ).toBe(Date.parse("2026-08-01T00:00:00.000Z"));
+  });
+
+  it("lifts a thread to the user's latest prompt", () => {
+    const thread = {
+      createdAt: "2026-01-01T00:00:00.000Z",
+      unsettledAt: "2026-02-01T00:00:00.000Z",
+      latestUserMessageAt: "2026-03-01T00:00:00.000Z",
+    };
+    expect(activeThreadAnchorTimestampMs(thread)).toBe(Date.parse("2026-03-01T00:00:00.000Z"));
+    // The row label reads the same instant the row sorts by.
+    expect(activeThreadAnchorTimestamp(thread)).toBe("2026-03-01T00:00:00.000Z");
+  });
+
+  it("ignores malformed candidates in the label", () => {
+    expect(
+      activeThreadAnchorTimestamp({ createdAt: "not-a-date", latestUserMessageAt: null }),
+    ).toBeNull();
   });
 });
 
@@ -177,6 +195,22 @@ describe("sortSettledThreads", () => {
 });
 
 describe("sortThreads", () => {
+  it("keeps pinned threads above unpinned ones, most recently pinned first", () => {
+    const sorted = sortThreads(
+      [
+        makeThread({ id: "newer-unpinned", updatedAt: "2026-03-09T10:20:00.000Z" }),
+        makeThread({ id: "pinned-first", pinnedAt: "2026-03-09T10:05:00.000Z" }),
+        makeThread({ id: "pinned-second", pinnedAt: "2026-03-09T10:10:00.000Z" }),
+      ],
+      "updated_at",
+    );
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      "pinned-second",
+      "pinned-first",
+      "newer-unpinned",
+    ]);
+  });
+
   it.each(["created_at", "updated_at"] as const)(
     "preserves references, input order and descending id ties for %s",
     (sortOrder) => {

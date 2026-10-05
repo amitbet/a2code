@@ -39,7 +39,9 @@ import {
   readProject,
   readThreadShell,
   readThreadShells,
+  waitForThreadShell,
 } from "../state/entities";
+import { newThreadId } from "../lib/utils";
 import { useUiStateStore } from "../uiStateStore";
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
@@ -282,6 +284,9 @@ export function useThreadActions() {
     reportFailure: false,
   });
   const markThreadUnread = useMarkThreadUnread();
+  const forkThreadAtLatestMutation = useAtomCommand(threadEnvironment.forkAtLatest, {
+    reportFailure: false,
+  });
   const stopThreadSession = useAtomCommand(threadEnvironment.stopSession);
   const removeWorktree = useAtomCommand(vcsEnvironment.removeWorktree, {
     reportFailure: false,
@@ -957,9 +962,39 @@ export function useThreadActions() {
     [confirmThreadDelete, deleteThread, resolveThreadTarget],
   );
 
+  /**
+   * Fork: the sidebar and `/fork` entry points fork the whole thread from its
+   * latest stable point through upstream's `thread.fork`, then open the fork.
+   */
+  const forkThread = useCallback(
+    async (target: ScopedThreadRef) => {
+      const resolved = resolveThreadTarget(target);
+      if (!resolved) return AsyncResult.success(undefined);
+      const forkRef = scopeThreadRef(target.environmentId, newThreadId());
+      const result = await forkThreadAtLatestMutation({
+        environmentId: target.environmentId,
+        input: {
+          sourceThreadId: target.threadId,
+          targetThreadId: forkRef.threadId,
+          title: `${resolved.thread.title} fork`,
+        },
+      });
+      if (result._tag === "Failure") return result;
+      if (await waitForThreadShell(forkRef)) {
+        await router.navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(forkRef),
+        });
+      }
+      return result;
+    },
+    [forkThreadAtLatestMutation, resolveThreadTarget, router],
+  );
+
   return useMemo(
     () => ({
       archiveThread,
+      forkThread,
       unarchiveThread,
       deleteThread,
       confirmAndDeleteThread,
@@ -977,6 +1012,7 @@ export function useThreadActions() {
     }),
     [
       archiveThread,
+      forkThread,
       confirmAndDeleteThread,
       confirmAndUnpinThread,
       deleteThread,
