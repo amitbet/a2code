@@ -1,6 +1,4 @@
 import { Outlet, createFileRoute, redirect, useParams } from "@tanstack/react-router";
-
-import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useMemo } from "react";
 
@@ -9,12 +7,13 @@ import { ThreadRouteView } from "../components/ThreadRouteView";
 import { resolveThreadRouteTarget } from "../threadRoutes";
 import { useClientSettings, useLegacySidebarEnabled } from "../hooks/useSettings";
 import { openCommandPalette } from "../commandPaletteBus";
-import { useEnvironmentProjects } from "../state/entities";
-import { useMachineEnvironmentId } from "../state/environments";
+import { useProjects } from "../state/entities";
+import { usePrimaryEnvironmentId } from "../state/environments";
 import { selectProjectGroupingSettings } from "../logicalProject";
 import { buildSidebarProjectSnapshots } from "../sidebarProjectGrouping";
 import { dispatchPreviewAction } from "../components/preview/previewActionBus";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useScratchProject } from "../hooks/useScratchProject";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { isPreviewFocused } from "../lib/previewFocus";
 import { isTerminalFocused } from "../lib/terminalFocus";
@@ -37,17 +36,18 @@ function ChatRouteGlobalShortcuts() {
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const legacySidebarEnabled = useLegacySidebarEnabled();
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
-  const machineEnvironmentId = useMachineEnvironmentId();
-  const projects = useEnvironmentProjects(machineEnvironmentId);
+  const projects = useProjects();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const { scratchEnvironmentId, startScratchThread } = useScratchProject();
   const projectGroupCount = useMemo(
     () =>
       buildSidebarProjectSnapshots({
         projects,
         settings: projectGroupingSettings,
-        primaryEnvironmentId: machineEnvironmentId,
+        primaryEnvironmentId,
         resolveEnvironmentLabel: () => null,
       }).length,
-    [machineEnvironmentId, projectGroupingSettings, projects],
+    [primaryEnvironmentId, projectGroupingSettings, projects],
   );
   const terminalOpen = useTerminalUiStateStore((state) =>
     routeThreadRef
@@ -104,6 +104,17 @@ function ChatRouteGlobalShortcuts() {
           defaultProjectRef,
           handleNewThread,
         });
+        return;
+      }
+
+      if (command === "chat.newWithoutProject") {
+        const environmentId = scratchEnvironmentId(
+          activeThread?.environmentId ?? activeDraftThread?.environmentId ?? primaryEnvironmentId,
+        );
+        if (environmentId === null) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void startScratchThread(environmentId);
         return;
       }
 
@@ -182,9 +193,12 @@ function ChatRouteGlobalShortcuts() {
     keybindings,
     defaultProjectRef,
     previewOpen,
+    primaryEnvironmentId,
     projectGroupCount,
     routeThreadRef,
+    scratchEnvironmentId,
     selectedThreadKeysSize,
+    startScratchThread,
     legacySidebarEnabled,
     terminalOpen,
   ]);
@@ -200,14 +214,10 @@ function ChatRouteLayout() {
     select: (params) => resolveThreadRouteTarget(params),
   });
   return (
-    // The diff worker pool is a process-wide singleton that terminates when its
-    // last provider unmounts, so it lives above the outlet. Mounting it per view
-    // rebuilt the whole pool — one worker per core, each reloading its themes and
-    // grammars — on every thread switch, machine swap, and transient route blank.
-    <DiffWorkerPoolProvider>
+    <>
       <ChatRouteGlobalShortcuts />
       {threadTarget ? <ThreadRouteView target={threadTarget} /> : <Outlet />}
-    </DiffWorkerPoolProvider>
+    </>
   );
 }
 

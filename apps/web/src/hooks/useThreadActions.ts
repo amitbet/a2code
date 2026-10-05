@@ -5,15 +5,9 @@ import {
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
 import { settlePromise, squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import { sideQuestionTitle } from "@t3tools/client-runtime/state/side-questions";
 import { canSnooze, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
-import {
-  EnvironmentId,
-  type MessageId,
-  type ModelSelection,
-  type ScopedThreadRef,
-  ThreadId,
-} from "@t3tools/contracts";
+import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
+import { EnvironmentId, type ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { resolveWorktreeCleanup } from "@t3tools/shared/projectSettings";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
@@ -26,11 +20,11 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { terminalEnvironment } from "../state/terminal";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentServerConfigsAtom } from "../state/server";
+import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
 import { useNewThreadHandler } from "./useHandleNewThread";
 import { refreshArchivedThreadsForEnvironment } from "../lib/archivedThreadsState";
-import { newMessageId, newThreadId } from "../lib/utils";
 import { releaseComposerDraftUploads } from "../lib/composerDraftUploads";
 import { readLocalApi } from "../localApi";
 import {
@@ -40,13 +34,14 @@ import {
   readEnvironmentSupportsActiveReorder,
   readEnvironmentSupportsSettlement,
   readEnvironmentSupportsSnooze,
+  readEnvironmentSupportsVisitedTracking,
   readEnvironmentThreadRefs,
   readProject,
   readThreadShell,
   readThreadShells,
 } from "../state/entities";
-import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useUiStateStore } from "../uiStateStore";
+import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
@@ -63,30 +58,8 @@ export class ThreadArchiveBlockedError extends Schema.TaggedError<ThreadArchiveB
   },
 ) {
   override get message(): string {
-    return "Cannot archive a running thread.";
+    return "Cannot archive while the provider is active.";
   }
-}
-
-/**
- * Resolve once the forked thread has been projected into the local store, so we
- * can navigate to its route without landing on a missing-thread screen.
- */
-async function waitForServerThread(target: ScopedThreadRef, timeoutMs = 2_000): Promise<boolean> {
-  if (readThreadShell(target)) {
-    return true;
-  }
-  return await new Promise<boolean>((resolve) => {
-    const deadline = Date.now() + timeoutMs;
-    const intervalId = globalThis.setInterval(() => {
-      if (readThreadShell(target)) {
-        globalThis.clearInterval(intervalId);
-        resolve(true);
-      } else if (Date.now() >= deadline) {
-        globalThis.clearInterval(intervalId);
-        resolve(false);
-      }
-    }, 50);
-  });
 }
 
 export class ThreadSettlementUnsupportedError extends Schema.TaggedError<ThreadSettlementUnsupportedError>()(
@@ -220,6 +193,56 @@ export async function navigateAfterThreadDeletion(navigate: () => Promise<void>)
   }
 }
 
+/**
+ * Marks a thread unread. Servers with visited tracking own the unread marker
+ * (thread.mark-unread rewinds the server-side visited watermark, syncing the
+ * marker to every device); older servers keep the browser-local marker.
+ */
+function useMarkThreadUnread() {
+  const markThreadUnreadMutation = useAtomCommand(threadEnvironment.markUnread, {
+    reportFailure: false,
+  });
+  const markThreadUnreadLocal = useUiStateStore((state) => state.markThreadUnread);
+  return useCallback(
+    (target: ScopedThreadRef) => {
+      if (readEnvironmentSupportsVisitedTracking(target.environmentId)) {
+        void markThreadUnreadMutation({
+          environmentId: target.environmentId,
+          input: { threadId: target.threadId },
+        });
+        return;
+      }
+      const thread = readThreadShell(target);
+      markThreadUnreadLocal(scopedThreadKey(target), thread?.latestRun?.completedAt);
+    },
+    [markThreadUnreadLocal, markThreadUnreadMutation],
+  );
+}
+
+/**
+ * Clears a thread's Woke marker by recording a visit at the wake time.
+ * Servers with visited tracking own the watermark (thread.visit keeps the
+ * later of the stored and supplied values, so this syncs to every device);
+ * older servers keep the browser-local watermark.
+ */
+export function useAcknowledgeThreadWoke() {
+  const visitThreadMutation = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
+  const markThreadVisited = useUiStateStore((state) => state.markThreadVisited);
+  return useCallback(
+    (target: ScopedThreadRef, wokeAt: string) => {
+      if (readEnvironmentSupportsVisitedTracking(target.environmentId)) {
+        void visitThreadMutation({
+          environmentId: target.environmentId,
+          input: { threadId: target.threadId, visitedAt: wokeAt },
+        });
+        return;
+      }
+      markThreadVisited(scopedThreadKey(target), wokeAt);
+    },
+    [markThreadVisited, visitThreadMutation],
+  );
+}
+
 export function useThreadActions() {
   const closeTerminal = useAtomCommand(terminalEnvironment.close);
   const archiveThreadMutation = useAtomCommand(threadEnvironment.archive, {
@@ -228,20 +251,7 @@ export function useThreadActions() {
   const unarchiveThreadMutation = useAtomCommand(threadEnvironment.unarchive, {
     reportFailure: false,
   });
-  const updateThreadMetadataMutation = useAtomCommand(threadEnvironment.updateMetadata, {
-    reportFailure: false,
-  });
   const deleteThreadMutation = useAtomCommand(threadEnvironment.delete, {
-    reportFailure: false,
-  });
-  const forkThreadMutation = useAtomCommand(threadEnvironment.fork);
-  const forkThreadPromptMutation = useAtomCommand(threadEnvironment.forkPrompt, {
-    reportFailure: false,
-  });
-  const askSideQuestionMutation = useAtomCommand(threadEnvironment.askSideQuestion, {
-    reportFailure: false,
-  });
-  const promoteSideQuestionMutation = useAtomCommand(threadEnvironment.promoteSideQuestion, {
     reportFailure: false,
   });
   const settleThreadMutation = useAtomCommand(threadEnvironment.settle, {
@@ -271,6 +281,7 @@ export function useThreadActions() {
   const unsnoozeThreadMutation = useAtomCommand(threadEnvironment.unsnooze, {
     reportFailure: false,
   });
+  const markThreadUnread = useMarkThreadUnread();
   const stopThreadSession = useAtomCommand(threadEnvironment.stopSession);
   const removeWorktree = useAtomCommand(vcsEnvironment.removeWorktree, {
     reportFailure: false,
@@ -340,7 +351,7 @@ export function useThreadActions() {
       const resolved = resolveThreadTarget(target);
       if (!resolved) return AsyncResult.success(undefined);
       const { thread, threadRef } = resolved;
-      if (thread.session?.status === "running" && thread.session.activeTurnId != null) {
+      if (!threadRuntimeCanArchive(thread.runtime)) {
         return AsyncResult.failure(
           Cause.fail(
             new ThreadArchiveBlockedError({
@@ -399,18 +410,6 @@ export function useThreadActions() {
     ],
   );
 
-  const setThreadPinned = useCallback(
-    async (target: ScopedThreadRef, pinned: boolean) =>
-      updateThreadMetadataMutation({
-        environmentId: target.environmentId,
-        input: {
-          threadId: target.threadId,
-          pinnedAt: pinned ? new Date().toISOString() : null,
-        },
-      }),
-    [updateThreadMetadataMutation],
-  );
-
   const deleteThread = useCallback(
     async (target: ScopedThreadRef, opts: { deletedThreadKeys?: ReadonlySet<string> } = {}) => {
       const resolved = resolveThreadTarget(target);
@@ -454,12 +453,18 @@ export function useThreadActions() {
       const displayWorktreePath = orphanedWorktreePath
         ? formatWorktreePathForDisplay(orphanedWorktreePath)
         : null;
-      const canDeleteWorktree = orphanedWorktreePath !== null && threadProject !== null;
+      const environmentConfig = appAtomRegistry
+        .get(environmentServerConfigsAtom)
+        .get(threadRef.environmentId);
+      // A Scratch thread's folder is not a git worktree, and deleting the
+      // thread keeps its files.
+      const canDeleteWorktree =
+        orphanedWorktreePath !== null &&
+        threadProject !== null &&
+        !isScratchProject(threadProject, environmentConfig?.scratchWorkspaceRoot);
       const localApi = readLocalApi();
       let shouldDeleteWorktree = false;
-      const environmentSettings = appAtomRegistry
-        .get(environmentServerConfigsAtom)
-        .get(threadRef.environmentId)?.settings;
+      const environmentSettings = environmentConfig?.settings;
       const automaticWorktreeCleanup = environmentSettings
         ? resolveWorktreeCleanup(environmentSettings, thread.projectId).worktreeOnDelete
         : false;
@@ -481,7 +486,7 @@ export function useThreadActions() {
         shouldDeleteWorktree = confirmationResult.value;
       }
 
-      if (thread.session && thread.session.status !== "stopped") {
+      if (thread.runtime !== null) {
         await stopThreadSession({
           environmentId: threadRef.environmentId,
           input: { threadId: threadRef.threadId },
@@ -602,107 +607,6 @@ export function useThreadActions() {
       sidebarThreadSortOrder,
       stopThreadSession,
     ],
-  );
-
-  const forkThread = useCallback(
-    async (target: ScopedThreadRef, options?: { readonly modelSelection?: ModelSelection }) => {
-      const resolved = resolveThreadTarget(target);
-      if (!resolved) return AsyncResult.success(undefined);
-      const { thread } = resolved;
-      const forkThreadId = newThreadId();
-      const forkResult = await forkThreadMutation({
-        environmentId: target.environmentId,
-        input: {
-          threadId: forkThreadId,
-          sourceThreadId: thread.id,
-          title: `${thread.title} (fork)`,
-          // When provided, the fork targets a different provider/model than its
-          // source; the server replays the source transcript into the new
-          // provider session. When omitted the fork inherits the source.
-          ...(options?.modelSelection !== undefined
-            ? { modelSelection: options.modelSelection }
-            : {}),
-        },
-      });
-      if (forkResult._tag === "Failure") {
-        return forkResult;
-      }
-      const forkRef = scopeThreadRef(target.environmentId, forkThreadId);
-      await waitForServerThread(forkRef);
-      await router.navigate({
-        to: "/$environmentId/$threadId",
-        params: buildThreadRouteParams(forkRef),
-      });
-      return forkResult;
-    },
-    [forkThreadMutation, resolveThreadTarget, router],
-  );
-
-  const forkQueuedPrompt = useCallback(
-    async (target: ScopedThreadRef, messageId: MessageId) => {
-      const resolved = resolveThreadTarget(target);
-      if (!resolved) return AsyncResult.success(undefined);
-      const { thread } = resolved;
-      const forkThreadId = newThreadId();
-      const forkResult = await forkThreadPromptMutation({
-        environmentId: target.environmentId,
-        input: {
-          threadId: forkThreadId,
-          sourceThreadId: thread.id,
-          messageId,
-          title: `${thread.title} (fork)`,
-        },
-      });
-      if (forkResult._tag === "Failure") {
-        return forkResult;
-      }
-      const forkRef = scopeThreadRef(target.environmentId, forkThreadId);
-      await waitForServerThread(forkRef);
-      await router.navigate({
-        to: "/$environmentId/$threadId",
-        params: buildThreadRouteParams(forkRef),
-      });
-      return forkResult;
-    },
-    [forkThreadPromptMutation, resolveThreadTarget, router],
-  );
-
-  // Side questions keep the user on the parent thread: the answer shows in
-  // the parent's right panel, so there is no navigation here.
-  const askSideQuestion = useCallback(
-    async (
-      target: ScopedThreadRef,
-      question: string,
-      options?: { readonly modelSelection?: ModelSelection },
-    ) => {
-      const sideQuestionThreadId = newThreadId();
-      const result = await askSideQuestionMutation({
-        environmentId: target.environmentId,
-        input: {
-          threadId: sideQuestionThreadId,
-          sourceThreadId: target.threadId,
-          messageId: newMessageId(),
-          text: question,
-          title: sideQuestionTitle(question),
-          ...(options?.modelSelection !== undefined
-            ? { modelSelection: options.modelSelection }
-            : {}),
-        },
-      });
-      return result._tag === "Failure"
-        ? result
-        : AsyncResult.success(scopeThreadRef(target.environmentId, sideQuestionThreadId));
-    },
-    [askSideQuestionMutation],
-  );
-
-  const promoteSideQuestion = useCallback(
-    async (target: ScopedThreadRef) =>
-      promoteSideQuestionMutation({
-        environmentId: target.environmentId,
-        input: { threadId: target.threadId },
-      }),
-    [promoteSideQuestionMutation],
   );
 
   const unsettleThread = useCallback(
@@ -1059,11 +963,6 @@ export function useThreadActions() {
       unarchiveThread,
       deleteThread,
       confirmAndDeleteThread,
-      forkThread,
-      forkQueuedPrompt,
-      askSideQuestion,
-      promoteSideQuestion,
-      setThreadPinned,
       settleThread,
       unsettleThread,
       snoozeThread,
@@ -1073,6 +972,7 @@ export function useThreadActions() {
       confirmAndUnpinThread,
       reorderPinnedThread,
       reorderActiveThread,
+      markThreadUnread,
       setThreadAutoSettle,
     }),
     [
@@ -1080,13 +980,9 @@ export function useThreadActions() {
       confirmAndDeleteThread,
       confirmAndUnpinThread,
       deleteThread,
-      forkThread,
-      forkQueuedPrompt,
-      askSideQuestion,
-      promoteSideQuestion,
+      markThreadUnread,
       pinThread,
       reorderPinnedThread,
-      setThreadPinned,
       reorderActiveThread,
       setThreadAutoSettle,
       settleThread,

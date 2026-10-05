@@ -14,15 +14,7 @@ import {
   useComposerDraftStore,
 } from "../composerDraftStore";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
-import {
-  useEnvironmentThreadRefs,
-  useThread,
-  useThreadDetail,
-  useThreadRefs,
-  useThreadShell,
-  useThreadStatus,
-} from "../state/entities";
-import { isEnvironmentInMachineScope, useMachineEnvironmentId } from "../state/environments";
+import { useEnvironmentThreadRefs, useThreadRefs, useThreadShell } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 import { environmentShell } from "../state/shell";
 import {
@@ -30,7 +22,6 @@ import {
   resolveThreadRouteRenderState,
   type ThreadRouteTarget,
 } from "../threadRoutes";
-import { resolveThreadSyncPhase } from "../threadSync";
 
 /**
  * The single chat surface behind both `/draft/$draftId` and
@@ -63,17 +54,7 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
     : null;
   const serverThreadRef: ScopedThreadRef | null =
     target.kind === "server" ? target.threadRef : (draftSession?.promotedTo ?? inferredThreadRef);
-  const serverThread = useThread(serverThreadRef);
-  // Fork: a thread on another machine is not reachable from this scope, so the
-  // route bails to the overview instead of rendering an empty chat.
-  const machineEnvironmentId = useMachineEnvironmentId();
-  const targetEnvironmentId =
-    target.kind === "server"
-      ? target.threadRef.environmentId
-      : (draftSession?.environmentId ?? null);
-  const outsideMachineScope =
-    targetEnvironmentId !== null &&
-    !isEnvironmentInMachineScope(targetEnvironmentId, machineEnvironmentId);
+  const serverThread = useThreadShell(serverThreadRef);
   const backgroundSubmissionPending = useBackgroundDraftSubmissionPending(
     target.kind === "draft" ? serverThreadRef : null,
   );
@@ -89,9 +70,7 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
   const shell = useEnvironmentQuery(
     serverThreadRef === null ? null : environmentShell.stateAtom(serverThreadRef.environmentId),
   );
-  const serverThreadShell = useThreadShell(serverThreadRef);
-  const serverThreadDetail = useThreadDetail(serverThreadRef);
-  const serverThreadStatus = useThreadStatus(serverThreadRef);
+  const serverThreadShell = serverThread;
   const environmentThreadRefs = useEnvironmentThreadRefs(serverThreadRef?.environmentId ?? null);
   const bootstrapComplete = shell.data?.snapshot._tag === "Some";
   const draftThread = useComposerDraftStore((store) =>
@@ -121,32 +100,22 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
   );
   const renderState = resolveThreadRouteRenderState({
     bootstrapComplete,
-    serverThreadShellExists: serverThreadShell !== null,
-    serverThreadDetailExists: serverThreadDetail !== null,
-    serverThreadDetailDeleted: serverThreadStatus === "deleted",
+    serverThreadExists: serverThreadShell !== null,
+    serverThreadDeleted: serverThreadShell?.deletedAt != null,
     draftThreadExists: draftThread !== null,
   });
-  const threadSyncPhase = resolveThreadSyncPhase({
-    detailExists: serverThreadDetail !== null,
-    shellExists: serverThreadShell !== null,
-    status: serverThreadStatus,
-  });
-  const serverThreadStarted = threadHasStarted(serverThreadDetail);
+  const serverThreadStarted = threadHasStarted(serverThreadShell);
   const environmentHasAnyThreads = environmentThreadRefs.length > 0 || environmentHasDraftThreads;
 
   useEffect(() => {
-    if (outsideMachineScope) {
-      void navigate({ to: "/", replace: true });
-      return;
-    }
     if (!inferredThreadRef || draftSession?.promotedTo) {
       return;
     }
     markPromotedDraftThreadByRef(inferredThreadRef);
-  }, [draftSession?.promotedTo, inferredThreadRef, navigate, outsideMachineScope]);
+  }, [draftSession?.promotedTo, inferredThreadRef]);
 
   useEffect(() => {
-    if (!canonicalThreadRef || outsideMachineScope) {
+    if (!canonicalThreadRef) {
       return;
     }
     let cancelled = false;
@@ -163,17 +132,17 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
     return () => {
       cancelled = true;
     };
-  }, [canonicalThreadRef, navigate, outsideMachineScope]);
+  }, [canonicalThreadRef, navigate]);
 
   useEffect(() => {
-    if (target.kind !== "draft" || draftSession || canonicalThreadRef || outsideMachineScope) {
+    if (target.kind !== "draft" || draftSession || canonicalThreadRef) {
       return;
     }
     void navigate({ to: "/", replace: true });
-  }, [canonicalThreadRef, draftSession, navigate, outsideMachineScope, target.kind]);
+  }, [canonicalThreadRef, draftSession, navigate, target.kind]);
 
   useEffect(() => {
-    if (target.kind !== "server" || !bootstrapComplete || outsideMachineScope) {
+    if (target.kind !== "server" || !bootstrapComplete) {
       return;
     }
     // Navigation already resolved onto this path, so a drop aimed here
@@ -186,25 +155,14 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
         void navigate({ to: "/", replace: true });
       }
     }
-  }, [
-    bootstrapComplete,
-    environmentHasAnyThreads,
-    navigate,
-    outsideMachineScope,
-    renderState,
-    target,
-  ]);
+  }, [bootstrapComplete, environmentHasAnyThreads, navigate, renderState, target]);
 
   useEffect(() => {
-    if (target.kind !== "server" || !serverThreadStarted || !draftThread || outsideMachineScope) {
+    if (target.kind !== "server" || !serverThreadStarted || !draftThread) {
       return;
     }
     finalizePromotedDraftThreadByRef(target.threadRef);
-  }, [draftThread, outsideMachineScope, serverThreadStarted, target]);
-
-  if (outsideMachineScope) {
-    return null;
-  }
+  }, [draftThread, serverThreadStarted, target]);
 
   let view: React.ReactNode = null;
   if (target.kind === "draft") {
@@ -223,11 +181,10 @@ export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
   } else if (renderState === "ready" || (renderState === "loading" && serverThreadShell !== null)) {
     view = (
       <ChatView
-        {...(nextChatViewKey ? { key: nextChatViewKey.key } : {})}
+        key={nextChatViewKey?.key}
         environmentId={target.threadRef.environmentId}
         threadId={target.threadRef.threadId}
         routeKind="server"
-        threadSyncPhase={threadSyncPhase}
       />
     );
   }

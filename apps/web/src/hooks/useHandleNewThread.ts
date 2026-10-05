@@ -23,13 +23,7 @@ import {
   selectProjectGroupingSettings,
 } from "../logicalProject";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
-import {
-  readProjects,
-  readThreadShell,
-  useEnvironmentProjects,
-  useThread,
-} from "../state/entities";
-import { isEnvironmentInMachineScope, useMachineEnvironmentId } from "../state/environments";
+import { readProjects, readThreadShell, useProjects, useThreadShell } from "../state/entities";
 import {
   hasExplicitComposerModelSelection,
   resolveNewDraftStartFromOrigin,
@@ -61,7 +55,6 @@ function pickExplicitWorkspaceOptions(options: NewThreadWorkspaceOptions | undef
 }
 
 export function useNewThreadHandler() {
-  const machineEnvironmentId = useMachineEnvironmentId();
   const environmentServerConfigs = useAtomValue(environmentServerConfigsAtom);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const router = useRouter();
@@ -100,39 +93,25 @@ export function useNewThreadHandler() {
       const requestingRouteHref = router.state.location.href;
       const routeChangedSinceRequest = () => router.state.location.href !== requestingRouteHref;
       const currentRouteTarget = getCurrentRouteTarget();
-      if (!isEnvironmentInMachineScope(projectRef.environmentId, machineEnvironmentId)) {
-        // A stale command-palette action or browser history entry must not be
-        // able to create a draft whose provider belongs to another machine.
-        return Promise.resolve(null);
-      }
-      const currentRouteDraft =
-        currentRouteTarget?.kind === "draft" ? getDraftSession(currentRouteTarget.draftId) : null;
-      const currentRouteEnvironmentId =
-        currentRouteTarget?.kind === "server"
-          ? currentRouteTarget.threadRef.environmentId
-          : (currentRouteDraft?.environmentId ?? null);
-      const canCarryCurrentRouteState =
-        currentRouteEnvironmentId === projectRef.environmentId &&
-        isEnvironmentInMachineScope(currentRouteEnvironmentId, machineEnvironmentId);
       // A new thread carries the user's working mode from the thread being
       // viewed. The target project's configured model still wins; interaction
       // mode carries independently. Permissions, branch, worktree, and env mode
       // come from configured defaults unless the caller passes them explicitly.
       const carrySourceShell =
-        canCarryCurrentRouteState && currentRouteTarget?.kind === "server"
+        currentRouteTarget?.kind === "server"
           ? readThreadShell(currentRouteTarget.threadRef)
           : null;
-      const carrySourceDraft = canCarryCurrentRouteState ? currentRouteDraft : null;
+      const carrySourceDraft =
+        currentRouteTarget?.kind === "draft" ? getDraftSession(currentRouteTarget.draftId) : null;
       // Composer overrides win over the persisted thread state — they are
       // what the user currently sees in the composer controls.
-      const carrySourceComposer =
-        canCarryCurrentRouteState && currentRouteTarget
-          ? getComposerDraft(
-              currentRouteTarget.kind === "server"
-                ? currentRouteTarget.threadRef
-                : currentRouteTarget.draftId,
-            )
-          : null;
+      const carrySourceComposer = currentRouteTarget
+        ? getComposerDraft(
+            currentRouteTarget.kind === "server"
+              ? currentRouteTarget.threadRef
+              : currentRouteTarget.draftId,
+          )
+        : null;
       const composerActiveProvider = carrySourceComposer?.activeProvider ?? null;
       const composerModelSelection = composerActiveProvider
         ? (carrySourceComposer?.modelSelectionByProvider[composerActiveProvider] ?? null)
@@ -189,14 +168,7 @@ export function useNewThreadHandler() {
       const hasWorktreePathOption = options?.worktreePath !== undefined;
       const hasEnvModeOption = options?.envMode !== undefined;
       const hasStartFromOriginOption = options?.startFromOrigin !== undefined;
-      const storedDraftThreadCandidate = getDraftSessionByLogicalProjectKey(logicalProjectKey);
-      // Logical project keys intentionally group physical project members, so
-      // also require the environment to match before reusing a draft. The
-      // provider instance id alone is not globally unique across machines.
-      const storedDraftThread =
-        storedDraftThreadCandidate?.environmentId === projectRef.environmentId
-          ? storedDraftThreadCandidate
-          : null;
+      const storedDraftThread = getDraftSessionByLogicalProjectKey(logicalProjectKey);
       const storedDraftThreadRef = storedDraftThread
         ? scopeThreadRef(storedDraftThread.environmentId, storedDraftThread.threadId)
         : null;
@@ -221,14 +193,11 @@ export function useNewThreadHandler() {
         !composerDraftHasUserContent(getComposerDraft(reusableStoredDraftThread.draftId))
           ? reusableStoredDraftThread
           : null;
-      // Route state only carries forward inside the selected machine: a route
-      // left over from another machine must not seed this thread's draft.
-      const latestActiveDraftThread: DraftThreadState | null =
-        canCarryCurrentRouteState && currentRouteTarget
-          ? currentRouteTarget.kind === "server"
-            ? getDraftThread(currentRouteTarget.threadRef)
-            : getDraftSession(currentRouteTarget.draftId)
-          : null;
+      const latestActiveDraftThread: DraftThreadState | null = currentRouteTarget
+        ? currentRouteTarget.kind === "server"
+          ? getDraftThread(currentRouteTarget.threadRef)
+          : getDraftSession(currentRouteTarget.draftId)
+        : null;
       if (emptyStoredDraftThread) {
         return (async () => {
           const isDraftAlreadyOpen =
@@ -461,13 +430,7 @@ export function useNewThreadHandler() {
         return { draftId, threadId };
       })();
     },
-    [
-      environmentServerConfigs,
-      getCurrentRouteTarget,
-      machineEnvironmentId,
-      projectGroupingSettings,
-      router,
-    ],
+    [environmentServerConfigs, getCurrentRouteTarget, projectGroupingSettings, router],
   );
 }
 
@@ -479,7 +442,7 @@ export function useHandleNewThread() {
   });
   const routeThreadRef = routeTarget?.kind === "server" ? routeTarget.threadRef : null;
   const routeDraftId = routeTarget?.kind === "draft" ? routeTarget.draftId : null;
-  const activeThread = useThread(routeThreadRef);
+  const activeThread = useThreadShell(routeThreadRef);
   const getDraftThread = useComposerDraftStore((store) => store.getDraftThread);
   const activeDraftThread = useComposerDraftStore(() =>
     routeTarget
@@ -488,8 +451,7 @@ export function useHandleNewThread() {
         : useComposerDraftStore.getState().getDraftSession(routeTarget.draftId)
       : null,
   );
-  const machineEnvironmentId = useMachineEnvironmentId();
-  const projects = useEnvironmentProjects(machineEnvironmentId);
+  const projects = useProjects();
   const orderedProjects = useMemo(() => {
     return orderItemsByPreferredIds({
       items: projects,

@@ -24,28 +24,32 @@ prove that a route works. In particular, a host's loopback address refers to a
 different machine when another device opens it. Endpoint selection must not
 silently fall back to loopback when a shareable endpoint is unavailable.
 
-## Cross-environment thread references
+A saved environment holds an ordered list of routes, and the
+[driver](../../packages/client-runtime/src/connection/driver.ts) connects over
+the first that works. Each direct route is first checked with the public
+descriptor, so a saved LAN address that a different machine answers on another
+network receives no credential. That check is not proof of a working route:
+when every route stays silent, each is still tried. A route that fails to
+connect, including a blocked one such as a signed-out T3 Connect, moves on to
+the next; only an incompatible server stops the walk, because it is the same
+server on every route. While connected over a later route the
+[supervisor](../../packages/client-runtime/src/connection/supervisor.ts)
+preflights the earlier ones and replaces the session when one would connect.
+Preflight includes authorization so a route that answers but rejects this
+client never costs a working session; a route that still fails afterwards is
+held back for a cooldown so a flaky network cannot bounce the connection.
 
-`@thread_ref:` is the one feature that spans two environments, and it does so
-without breaking the one-runtime rule: the client resolves the half a server
-cannot. The token is environment-qualified —
-`@thread_ref:<environmentId>/<threadId>`
-([threadReference.ts](../../packages/shared/src/threadReference.ts)) — and both
-sides split a message's references against the target environment's id with
-`partitionThreadReferences`, so they agree on who owns what.
+A connected server reports the LAN and tailnet addresses it is bound to, and the
+client saves them as learned routes. A learned route reuses the credential of
+the route it was learned over: the T3 Connect access token, which is not bound
+to an origin because each DPoP proof names the URL it signs, or the paired
+bearer token. Learned routes the server stops reporting are dropped, which is
+how a changed LAN address replaces the old one; routes the user saved are never
+touched. The reported addresses are hints like any advertised endpoint, so a
+learned route still has to answer as this environment before it is used.
 
-A same-environment reference never crosses the wire: the server reads the thread
-out of its own read model, writes a transcript artifact, and hands the provider a
-path. For another environment the server has no endpoint or credential — known
-environments are client-local — so the client resolves it before dispatch
-([externalThreadReferences.ts](../../packages/client-runtime/src/state/externalThreadReferences.ts)),
-uploads the rendered transcript through the ordinary pending-attachment channel,
-and the server then path-references it exactly as it would a local one.
-
-Resolution belongs to the thread commands rather than to any one client's send
-path, so every client and entry point inherits it. An unresolvable reference
-fails the send naming the token: neither side runs a turn that is missing context
-the user attached.
+GitHub routing trust covers the whole route list. Adding or changing a route
+revokes it; reordering does not, because the same addresses remain trusted.
 
 ## Hosted web is a client
 

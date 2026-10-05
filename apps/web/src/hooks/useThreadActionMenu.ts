@@ -1,5 +1,5 @@
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { requestCustomSnooze } from "../components/CustomSnoozeDialog";
-import { scopeProjectRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
 import {
   type AtomCommandResult,
   isAtomCommandInterrupted,
@@ -36,14 +36,10 @@ import {
   selectProjectGroupingSettings,
 } from "../logicalProject";
 import { buildPhysicalToLogicalProjectKeyMap } from "../sidebarProjectGrouping";
-import { useUiStateStore } from "../uiStateStore";
+import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
 import { useCopyToClipboard } from "./useCopyToClipboard";
 import { useNewThreadHandler } from "./useHandleNewThread";
 import { useClientSettings } from "./useSettings";
-import { fetchEnvironmentThreadExport } from "@t3tools/client-runtime/state/thread-export";
-import { formatThreadReference } from "@t3tools/shared/threadReference";
-import { runtime } from "../lib/runtime";
-import { readPreparedConnection } from "../state/session";
 import { useThreadActions } from "./useThreadActions";
 
 function failureToast(title: string, error: unknown) {
@@ -96,13 +92,12 @@ export function useThreadActionMenu(input: {
     setThreadAutoSettle,
     archiveThread,
     deleteThread,
-    forkThread,
+    markThreadUnread,
   } = useThreadActions();
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
   const handleNewThread = useNewThreadHandler();
-  const markThreadUnread = useUiStateStore((s) => s.markThreadUnread);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
@@ -124,14 +119,6 @@ export function useThreadActionMenu(input: {
       toastManager.add({ type: "success", title: "Thread ID copied", description: threadId });
     },
     onError: (error) => failureToast("Failed to copy thread ID", error),
-  });
-  const { copyToClipboard: copyThreadRefToClipboard } = useCopyToClipboard<{
-    threadRef: string;
-  }>({
-    onCopy: ({ threadRef: token }) => {
-      toastManager.add({ type: "success", title: "Thread ref copied", description: token });
-    },
-    onError: (error) => failureToast("Failed to copy thread ref", error),
   });
 
   const openMenu = useCallback(
@@ -156,8 +143,6 @@ export function useThreadActionMenu(input: {
         const snoozePresets = resolveSnoozePresets(now, timestampFormat);
         const items = buildThreadActionMenuItems({
           branch: thread.branch ?? null,
-          // The chat header has no project-scoped thread list behind the
-          // menu, so the "Filter by project" affordance is sidebar-only.
           projectFilter: null,
           isPinned: thread.pinnedAt != null,
           isSettled: supports.settlement && thread.settledOverride === "settled",
@@ -165,7 +150,7 @@ export function useThreadActionMenu(input: {
           isSnoozed: supports.snooze && effectiveSnoozed(thread, { now: now.toISOString() }),
           canSnoozeNow: canSnooze(thread, { now: now.toISOString() }),
           isRegeneratingTitle,
-          isRunning: thread.session?.status === "running" && thread.session.activeTurnId != null,
+          isRunning: !threadRuntimeCanArchive(thread.runtime),
           supports,
           snoozePresets,
         });
@@ -261,7 +246,7 @@ export function useThreadActionMenu(input: {
             );
             return;
           case "mark-unread":
-            markThreadUnread(scopedThreadKey(threadRef));
+            markThreadUnread(threadRef);
             return;
           case "copy-path": {
             const workspacePath = thread.worktreePath ?? projectCwd;
@@ -286,52 +271,6 @@ export function useThreadActionMenu(input: {
           case "copy-thread-id":
             copyThreadIdToClipboard(thread.id, { threadId: thread.id });
             return;
-          case "fork": {
-            const forked = await settlePromise(() => forkThread(threadRef));
-            if (forked._tag === "Failure") {
-              failureToast("Fork failed", squashAtomCommandFailure(forked));
-            }
-            return;
-          }
-          case "copy-thread-ref": {
-            // Always environment-qualified: copy happens before the paste
-            // target is known, so an unqualified token only resolves by luck
-            // once more than one machine is connected.
-            const threadRefToken = formatThreadReference({
-              environmentId: threadRef.environmentId,
-              threadId: thread.id,
-            });
-            copyThreadRefToClipboard(threadRefToken, { threadRef: threadRefToken });
-            return;
-          }
-          case "export-zip": {
-            const exported = await settlePromise(async () => {
-              const preparedConnection = readPreparedConnection(threadRef.environmentId);
-              if (!preparedConnection) {
-                throw new Error("This environment is not connected.");
-              }
-              const archive = await runtime.runPromise(
-                fetchEnvironmentThreadExport({
-                  prepared: preparedConnection,
-                  threadId: thread.id,
-                }),
-              );
-              const objectUrl = URL.createObjectURL(
-                new Blob([archive], { type: "application/zip" }),
-              );
-              const link = document.createElement("a");
-              link.href = objectUrl;
-              link.download = `thread-${thread.id}.zip`;
-              document.body.appendChild(link);
-              link.click();
-              link.remove();
-              URL.revokeObjectURL(objectUrl);
-            });
-            if (exported._tag === "Failure") {
-              failureToast("Export failed", squashAtomCommandFailure(exported));
-            }
-            return;
-          }
           case "archive": {
             if (confirmThreadArchive) {
               const confirmed = await settlePromise(() =>
@@ -390,8 +329,6 @@ export function useThreadActionMenu(input: {
       confirmThreadDelete,
       confirmAndUnpinThread,
       copyBranchToClipboard,
-      copyThreadRefToClipboard,
-      forkThread,
       copyPathToClipboard,
       copyThreadIdToClipboard,
       deleteThread,

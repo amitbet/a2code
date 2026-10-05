@@ -1,7 +1,6 @@
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useRef } from "react";
 import type { SearchBarCommands } from "react-native-screens";
-import { createMachineHeaderItem } from "../layout/machine-header-item";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
@@ -17,36 +16,27 @@ export type { HomeHeaderEnvironment } from "./HomeHeader.types";
 export function HomeHeader(props: HomeHeaderProps) {
   const searchBarRef = useRef<SearchBarCommands>(null);
   const iconColor = useUniwindTheme()["--color-icon"];
-  // The list uses a fixed creation order and ignores sort/group options, and
-  // the machine switcher owns the environment scope, so only the project
-  // filter lights the "customized" icon state.
-  const hasCustomListOptions = props.selectedProjectKey !== null;
+  // The list uses a fixed creation order and ignores sort/group options, so
+  // the filter menu only carries the filters and the "customized" icon state
+  // keys off those alone.
+  const hasCustomListOptions =
+    props.selectedEnvironmentId !== null || props.selectedProjectKey !== null;
   const focusSearch = useCallback(() => {
     searchBarRef.current?.focus();
     return searchBarRef.current !== null;
   }, []);
   useHardwareKeyboardCommand("focusSearch", focusSearch);
-  const filterMenu = buildHomeListFilterMenu({ ...props, includeEnvironment: false });
-  const machineHeaderItem = useMemo(
-    () =>
-      createMachineHeaderItem({
-        activeEnvironmentId: props.selectedEnvironmentId,
-        environments: props.environments,
-        onEnvironmentChange: (environmentId) => props.onEnvironmentChange(environmentId),
-      }),
-    [props.environments, props.onEnvironmentChange, props.selectedEnvironmentId],
-  );
+  const filterMenu = buildHomeListFilterMenu(props);
 
   return (
     <>
       <NativeStackScreenOptions
-        optionsVersion={[filterMenu.items, props.selectedEnvironmentId]}
+        optionsVersion={filterMenu.items}
         options={{
           // Static header config (glass, title, fonts) lives in Stack.tsx
           // (GLASS_HEADER_OPTIONS). Only dynamic values are set here.
           headerTintColor: iconColor,
           unstable_headerRightItems: () => [
-            machineHeaderItem,
             withNativeGlassHeaderItem({
               accessibilityLabel: "Open settings",
               icon: { name: "ellipsis", type: "sfSymbol" } as const,
@@ -108,6 +98,26 @@ export function HomeHeader(props: HomeHeaderProps) {
             title="Thread list options"
             separateBackground
           >
+            <NativeHeaderToolbar.Menu title="Environment">
+              <NativeHeaderToolbar.Label>Environment</NativeHeaderToolbar.Label>
+              <NativeHeaderToolbar.MenuAction
+                isOn={props.selectedEnvironmentId === null}
+                onPress={() => props.onEnvironmentChange(null)}
+                subtitle="Show threads from every environment"
+              >
+                <NativeHeaderToolbar.Label>All environments</NativeHeaderToolbar.Label>
+              </NativeHeaderToolbar.MenuAction>
+              {props.environments.map((environment) => (
+                <NativeHeaderToolbar.MenuAction
+                  key={environment.environmentId}
+                  isOn={props.selectedEnvironmentId === environment.environmentId}
+                  onPress={() => props.onEnvironmentChange(environment.environmentId)}
+                >
+                  <NativeHeaderToolbar.Label>{environment.label}</NativeHeaderToolbar.Label>
+                </NativeHeaderToolbar.MenuAction>
+              ))}
+            </NativeHeaderToolbar.Menu>
+
             {props.projects.length > 0 ? (
               <NativeHeaderToolbar.Menu title="Project">
                 <NativeHeaderToolbar.Label>Project</NativeHeaderToolbar.Label>

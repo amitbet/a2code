@@ -1,53 +1,35 @@
 import { useAtomValue } from "@effect/atom-react";
-import type { EnvironmentId } from "@t3tools/contracts";
-import type { EnvironmentShellState } from "@t3tools/client-runtime/state/shell";
-import * as Option from "effect/Option";
-import { Atom } from "effect/unstable/reactivity";
 import { useMemo } from "react";
 
-import { environmentShell, environmentShellSummaryAtom } from "./shell";
-import { projectWorkspaceEnvironment, projectWorkspaceState } from "./workspaceModel";
-import { useEnvironments } from "./environments";
+import { environmentShellSummaryAtom } from "./shell";
+import { projectWorkspaceState } from "./workspaceModel";
+import { environmentCatalog } from "../connection/catalog";
+import { environmentPresentations } from "./presentation";
+import { createWorkspaceConnectionAtoms } from "./workspace-connection-atoms";
 
-const EMPTY_SELECTED_SHELL_STATE = Atom.make<EnvironmentShellState>({
-  snapshot: Option.none(),
-  status: "empty",
-  error: Option.none(),
+export const workspaceConnections = createWorkspaceConnectionAtoms({
+  catalogValueAtom: environmentCatalog.catalogValueAtom,
+  networkStatusValueAtom: environmentCatalog.networkStatusValueAtom,
+  presentationAtom: environmentPresentations.presentationAtom,
 });
 
-export function useWorkspaceState(environmentId: EnvironmentId | null = null) {
-  const { isReady, networkStatus, environments } = useEnvironments();
-  const allShellSummary = useAtomValue(environmentShellSummaryAtom);
-  const selectedShellState = useAtomValue(
-    environmentId === null
-      ? EMPTY_SELECTED_SHELL_STATE
-      : environmentShell.stateValueAtom(environmentId),
-  );
-  const shellSummary = useMemo(() => {
-    if (environmentId === null) {
-      return allShellSummary;
-    }
-    return {
-      hasSnapshot: Option.isSome(selectedShellState.snapshot),
-      hasSynchronizingShell: selectedShellState.status === "synchronizing",
-      hasCachedShell: selectedShellState.status === "cached",
-      hasLiveShell: selectedShellState.status === "live",
-      firstError: Option.getOrNull(selectedShellState.error),
-      latestSnapshotUpdatedAt: Option.match(selectedShellState.snapshot, {
-        onNone: () => null,
-        onSome: (snapshot) => snapshot.updatedAt,
-      }),
-    };
-  }, [allShellSummary, environmentId, selectedShellState]);
-  const projectedEnvironments = useMemo(
-    () =>
-      environments
-        .filter(
-          (environment) => environmentId === null || environment.environmentId === environmentId,
-        )
-        .map(projectWorkspaceEnvironment),
-    [environmentId, environments],
-  );
+export function useWorkspaceEnvironments() {
+  return useAtomValue(workspaceConnections.environmentsAtom);
+}
+
+export function useWorkspaceConnectionState() {
+  return useAtomValue(workspaceConnections.stateAtom);
+}
+
+export function useConnectionsReady() {
+  return useAtomValue(workspaceConnections.isReadyAtom);
+}
+
+export function useWorkspaceState() {
+  const isReady = useConnectionsReady();
+  const networkStatus = useAtomValue(environmentCatalog.networkStatusValueAtom);
+  const projectedEnvironments = useWorkspaceEnvironments();
+  const shellSummary = useAtomValue(environmentShellSummaryAtom);
   const state = useMemo(
     () =>
       projectWorkspaceState({

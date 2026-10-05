@@ -2,7 +2,6 @@ import { ProjectId, ThreadId } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
-  clearThreadUnread,
   legacyProjectCwdPreferenceKey,
   markThreadUnread,
   markThreadVisited,
@@ -25,7 +24,6 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     projectOrder: [],
     sidebarProjectScopeKey: null,
     threadLastVisitedAtById: {},
-    unreadThreadIds: {},
     threadChangedFilesExpandedById: {},
     defaultAdvertisedEndpointKey: null,
     pullRequestMergeMethod: "merge",
@@ -44,7 +42,7 @@ describe("uiStateStore pure functions", () => {
     expect(markThreadVisited(visited, threadId, "not-a-date")).toBe(visited);
   });
 
-  it("marks a thread unread with an explicit flag that survives the visit watermark", () => {
+  it("marks a completed thread unread using the server completion timestamp", () => {
     const threadId = ThreadId.make("thread-1");
     const initialState = makeUiState({
       threadLastVisitedAtById: {
@@ -52,24 +50,10 @@ describe("uiStateStore pure functions", () => {
       },
     });
 
-    const next = markThreadUnread(initialState, threadId);
+    const next = markThreadUnread(initialState, threadId, "2026-02-25T12:30:00.000Z");
 
-    expect(next.unreadThreadIds[threadId]).toBe(true);
-    // The read watermark is left untouched: unread is a distinct signal.
-    expect(next.threadLastVisitedAtById[threadId]).toBe("2026-02-25T12:35:00.000Z");
-    // Marking an already-unread thread unread is a no-op (stable reference).
-    expect(markThreadUnread(next, threadId)).toBe(next);
-  });
-
-  it("clears the explicit unread flag when a thread is visited", () => {
-    const threadId = ThreadId.make("thread-1");
-    const unread = markThreadUnread(makeUiState(), threadId);
-
-    const cleared = clearThreadUnread(unread, threadId);
-
-    expect(cleared.unreadThreadIds[threadId]).toBeUndefined();
-    // Clearing an already-read thread is a no-op (stable reference).
-    expect(clearThreadUnread(cleared, threadId)).toBe(cleared);
+    expect(next.threadLastVisitedAtById[threadId]).toBe("2026-02-25T12:29:59.999Z");
+    expect(markThreadUnread(next, threadId, null)).toBe(next);
   });
 
   it("resolves project expansion from logical, physical, and legacy preference keys", () => {
@@ -198,7 +182,6 @@ describe("parsePersistedState", () => {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
         invalid: "not-a-date",
       },
-      unreadThreadIds: ["environment:thread-2", "", 42 as unknown as string],
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       threadChangedFilesExpansionVersion: 2,
       threadChangedFilesExpandedById: {
@@ -216,9 +199,6 @@ describe("parsePersistedState", () => {
       projectOrder: ["physical-b", "physical-a"],
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
-      },
-      unreadThreadIds: {
-        "environment:thread-2": true,
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       sidebarProjectScopeKey: null,
@@ -320,9 +300,6 @@ describe("uiStateStore persistence", () => {
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
-      unreadThreadIds: {
-        "environment:thread-2": true,
-      },
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
           "turn-1": false,
@@ -345,7 +322,6 @@ describe("uiStateStore persistence", () => {
       threadLastVisitedAtById: {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
-      unreadThreadIds: ["environment:thread-2"],
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       sidebarProjectScopeKey: null,
       threadChangedFilesExpansionVersion: 2,
@@ -385,5 +361,6 @@ describe("uiStateStore persistence", () => {
       localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}",
     ) as PersistedUiState;
     expect(resolveProjectExpanded(persisted.projectExpandedById ?? {}, ["unknown"])).toBe(true);
+    expect(persisted).not.toHaveProperty("threadPanelOpen");
   });
 });

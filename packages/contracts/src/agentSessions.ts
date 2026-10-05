@@ -20,11 +20,6 @@ export const AgentSessionImportSource = Schema.Struct({
 });
 export type AgentSessionImportSource = typeof AgentSessionImportSource.Type;
 
-/** Imported message ids retain their origin after event metadata is projected into SQLite. */
-export function isImportedAgentSessionMessageId(messageId: string): boolean {
-  return messageId.startsWith("import:");
-}
-
 /**
  * Imported threads are minted as `import:<providerInstanceId>:<providerSessionId>`,
  * so their origin is readable from the id alone — including in the decider, which

@@ -4,15 +4,14 @@ import type {
   EnvironmentThread,
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
-import { scopeProject, scopeThreadShell } from "@t3tools/client-runtime/state/models";
 import {
+  EMPTY_THREAD_HISTORY_META,
   type EnvironmentThreadStatus,
-  mergeEnvironmentThread,
+  type ThreadHistoryMeta,
 } from "@t3tools/client-runtime/state/threads";
 import type { ScopedProjectRef, ScopedThreadRef, ServerConfig } from "@t3tools/contracts";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
-import { useMemo } from "react";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentProjects } from "./projects";
 import { environmentServerConfigsAtom } from "./server";
@@ -21,14 +20,13 @@ import {
   allEnvironmentShellsBootstrappedAtom,
 } from "./shell";
 import { environmentThreadDetails, environmentThreadShells } from "./threads";
+import { waitForAtomValue } from "./waitForAtomValue";
 
 const EMPTY_THREAD_REFS: ReadonlyArray<ScopedThreadRef> = Object.freeze([]);
+const EMPTY_VISIBLE_TURN_ITEMS: ReadonlyArray<OrchestrationV2ProjectedTurnItem> = Object.freeze([]);
 
 const EMPTY_PROJECT_ATOM = Atom.make<EnvironmentProject | null>(null).pipe(
   Atom.withLabel("web-project:empty"),
-);
-const EMPTY_PROJECTS_ATOM = Atom.make<ReadonlyArray<EnvironmentProject>>([]).pipe(
-  Atom.withLabel("web-projects:empty"),
 );
 const EMPTY_THREAD_REFS_ATOM = Atom.make(EMPTY_THREAD_REFS).pipe(
   Atom.withLabel("web-thread-refs:empty"),
@@ -36,14 +34,17 @@ const EMPTY_THREAD_REFS_ATOM = Atom.make(EMPTY_THREAD_REFS).pipe(
 const EMPTY_THREAD_SHELL_ATOM = Atom.make<EnvironmentThreadShell | null>(null).pipe(
   Atom.withLabel("web-thread-shell:empty"),
 );
-const EMPTY_THREAD_SHELLS_ATOM = Atom.make<ReadonlyArray<EnvironmentThreadShell>>([]).pipe(
-  Atom.withLabel("web-thread-shells:empty"),
-);
-const EMPTY_THREAD_DETAIL_ATOM = Atom.make<EnvironmentThread | null>(null).pipe(
-  Atom.withLabel("web-thread-detail:empty"),
+const EMPTY_THREAD_PROJECTION_ATOM = Atom.make<EnvironmentThread | null>(null).pipe(
+  Atom.withLabel("web-thread-projection:empty"),
 );
 const EMPTY_THREAD_STATUS_ATOM = Atom.make<EnvironmentThreadStatus>("empty").pipe(
   Atom.withLabel("web-thread-status:empty"),
+);
+const EMPTY_VISIBLE_TURN_ITEMS_ATOM = Atom.make(EMPTY_VISIBLE_TURN_ITEMS).pipe(
+  Atom.withLabel("web-thread-visible-turn-items:empty"),
+);
+const EMPTY_THREAD_HISTORY_ATOM = Atom.make<ThreadHistoryMeta>(EMPTY_THREAD_HISTORY_META).pipe(
+  Atom.withLabel("web-thread-history:empty"),
 );
 
 const activeEnvironmentIdAtom = Atom.make<EnvironmentId | null>(null).pipe(
@@ -57,34 +58,6 @@ export function useActiveEnvironmentId(): EnvironmentId | null {
 
 export function setActiveEnvironmentId(environmentId: EnvironmentId | null): void {
   appAtomRegistry.set(activeEnvironmentIdAtom, environmentId);
-}
-
-export function useProjectRefs(): ReadonlyArray<ScopedProjectRef> {
-  return useAtomValue(environmentProjects.projectRefsAtom);
-}
-
-/**
- * Projects for one machine. A `null` environment is the machine scope's "no
- * filter" state — the cross-machine overview, or a catalog that has not
- * resolved yet — and yields every environment's projects rather than none, so
- * every scoped surface unscopes together.
- */
-export function useEnvironmentProjects(
-  environmentId: EnvironmentId | null,
-): ReadonlyArray<EnvironmentProject> {
-  const allProjects = useAtomValue(environmentProjects.projectsAtom);
-  const scopedProjects = useAtomValue(
-    environmentId === null
-      ? EMPTY_PROJECTS_ATOM
-      : environmentProjects.environmentProjectsAtom(environmentId),
-  );
-  return useMemo(
-    () =>
-      environmentId === null
-        ? allProjects
-        : scopedProjects.map((project) => scopeProject(environmentId, project)),
-    [allProjects, environmentId, scopedProjects],
-  );
 }
 
 export function useThreadRefs(): ReadonlyArray<ScopedThreadRef> {
@@ -113,26 +86,6 @@ export function useThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
   return useAtomValue(environmentThreadShells.threadShellsAtom);
 }
 
-/** Thread shells for one machine, with the same `null` semantics as
- * `useEnvironmentProjects`. */
-export function useEnvironmentThreadShells(
-  environmentId: EnvironmentId | null,
-): ReadonlyArray<EnvironmentThreadShell> {
-  const allThreads = useAtomValue(environmentThreadShells.threadShellsAtom);
-  const scopedThreads = useAtomValue(
-    environmentId === null
-      ? EMPTY_THREAD_SHELLS_ATOM
-      : environmentThreadShells.environmentThreadsAtom(environmentId),
-  );
-  return useMemo(
-    () =>
-      environmentId === null
-        ? allThreads
-        : scopedThreads.map((thread) => scopeThreadShell(environmentId, thread)),
-    [allThreads, environmentId, scopedThreads],
-  );
-}
-
 export function useAllEnvironmentShellsBootstrapped(): boolean {
   return useAtomValue(allEnvironmentShellsBootstrappedAtom);
 }
@@ -157,24 +110,21 @@ export function useThreadShell(ref: ScopedThreadRef | null): EnvironmentThreadSh
   );
 }
 
-/** Unarchived `/btw` side questions asked from `ref`, oldest first. */
-export function useSideQuestionShells(
-  ref: ScopedThreadRef | null,
-): ReadonlyArray<EnvironmentThreadShell> {
+export function useThreadProjection(ref: ScopedThreadRef | null): EnvironmentThread | null {
   return useAtomValue(
-    ref === null ? EMPTY_THREAD_SHELLS_ATOM : environmentThreadShells.sideQuestionShellsAtom(ref),
-  );
-}
-
-export function useThreadDetail(ref: ScopedThreadRef | null): EnvironmentThread | null {
-  return useAtomValue(
-    ref === null ? EMPTY_THREAD_DETAIL_ATOM : environmentThreadDetails.detailAtom(ref),
+    ref === null ? EMPTY_THREAD_PROJECTION_ATOM : environmentThreadDetails.threadAtom(ref),
   );
 }
 
 export function useThreadStatus(ref: ScopedThreadRef | null): EnvironmentThreadStatus {
   return useAtomValue(
     ref === null ? EMPTY_THREAD_STATUS_ATOM : environmentThreadDetails.statusAtom(ref),
+  );
+}
+
+export function useThreadHistory(ref: ScopedThreadRef | null): ThreadHistoryMeta {
+  return useAtomValue(
+    ref === null ? EMPTY_THREAD_HISTORY_ATOM : environmentThreadDetails.historyAtom(ref),
   );
 }
 
@@ -188,26 +138,14 @@ export function resolveThreadDetailRef(
   return ref !== null && (!options.waitForShell || options.shellExists) ? ref : null;
 }
 
-/** Detail collections composed with shell-authoritative thread/workspace metadata. */
-export function useThread(
+export function useThreadVisibleTurnItems(
   ref: ScopedThreadRef | null,
-  options?: {
-    /**
-     * Client-reserved draft thread ids do not exist on the server until the
-     * first send. Waiting for the shell index avoids polling the detail
-     * endpoint for an intentionally missing thread during that window.
-     */
-    waitForShell?: boolean;
-  },
-): EnvironmentThread | null {
-  const shell = useThreadShell(ref);
-  const detail = useThreadDetail(
-    resolveThreadDetailRef(ref, {
-      shellExists: shell !== null,
-      waitForShell: options?.waitForShell === true,
-    }),
+): ReadonlyArray<OrchestrationV2ProjectedTurnItem> {
+  return useAtomValue(
+    ref === null
+      ? EMPTY_VISIBLE_TURN_ITEMS_ATOM
+      : environmentThreadDetails.visibleTurnItemsAtom(ref),
   );
-  return useMemo(() => mergeEnvironmentThread(detail, shell), [detail, shell]);
 }
 
 export function readProject(ref: ScopedProjectRef): EnvironmentProject | null {
@@ -247,30 +185,19 @@ export function readThreadShell(ref: ScopedThreadRef): EnvironmentThreadShell | 
   return appAtomRegistry.get(environmentThreadShells.threadShellAtom(ref));
 }
 
-/** The thread as `useThread` returns it, read outside React. */
-export function readThread(ref: ScopedThreadRef): EnvironmentThread | null {
-  return mergeEnvironmentThread(
-    appAtomRegistry.get(environmentThreadDetails.detailAtom(ref)),
-    readThreadShell(ref),
-  );
+export function waitForThreadShell(ref: ScopedThreadRef, timeoutMs = 5_000): Promise<boolean> {
+  return waitForAtomValue({
+    registry: appAtomRegistry,
+    atom: environmentThreadShells.threadShellAtom(ref),
+    predicate: (thread) => thread !== null,
+    timeoutMs,
+  });
 }
 
-/** Whether the environment's server understands thread.settle/unsettle.
-    False for pre-settlement servers (capability defaults false on decode),
-    so clients under version skew fall back instead of erroring. */
-export function readEnvironmentSupportsSettlement(environmentId: EnvironmentId): boolean {
+export function readEnvironmentSupportsTitleRegeneration(environmentId: EnvironmentId): boolean {
   return (
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
-      .threadSettlement === true
-  );
-}
-
-/** Whether the environment's server understands thread.snooze/unsnooze.
-    Same version-skew contract as settlement. */
-export function readEnvironmentSupportsSnooze(environmentId: EnvironmentId): boolean {
-  return (
-    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
-      .threadSnooze === true
+      .threadTitleRegeneration === true
   );
 }
 
@@ -280,15 +207,6 @@ export function readEnvironmentSupportsPinning(environmentId: EnvironmentId): bo
   return (
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
       .threadPinning === true
-  );
-}
-
-/** Whether the environment's server understands thread title regeneration.
-    Same version-skew contract as settlement. */
-export function readEnvironmentSupportsTitleRegeneration(environmentId: EnvironmentId): boolean {
-  return (
-    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
-      .threadTitleRegeneration === true
   );
 }
 
@@ -314,6 +232,36 @@ export function readEnvironmentSupportsActiveReorder(environmentId: EnvironmentI
   return (
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
       .threadActiveReorder === true
+  );
+}
+
+/** Whether the environment's server understands thread.settle/unsettle.
+    False for pre-settlement servers (capability defaults false on decode),
+    so clients under version skew fall back instead of erroring. */
+export function readEnvironmentSupportsSettlement(environmentId: EnvironmentId): boolean {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadSettlement === true
+  );
+}
+
+/** Whether the environment's server understands thread.snooze/unsnooze.
+    Same version-skew contract as settlement. */
+export function readEnvironmentSupportsSnooze(environmentId: EnvironmentId): boolean {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadSnooze === true
+  );
+}
+
+/** Whether the environment's server understands thread.visit/mark-unread and
+    projects lastVisitedAt on thread shells. Same version-skew contract as
+    settlement: against older servers, clients keep the browser-local visited
+    state instead. */
+export function readEnvironmentSupportsVisitedTracking(environmentId: EnvironmentId): boolean {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadVisitedTracking === true
   );
 }
 
