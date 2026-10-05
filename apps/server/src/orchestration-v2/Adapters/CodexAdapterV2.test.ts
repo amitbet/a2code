@@ -2222,6 +2222,93 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     }).pipe(Effect.scoped, Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
   );
 
+  it.effect("shows Codex generated images as viewed-image tool rows", () =>
+    Effect.gen(function* () {
+      const nativeThreadId = "image-generation-thread";
+      const nativeTurnId = "image-generation-turn";
+      const prompt = "Draw a lighthouse.";
+      const savedPath = "/home/user/.codex/generated_images/lighthouse.png";
+      const imageItem = {
+        type: "imageGeneration",
+        id: "image-generation-item",
+        result: "iVBORw0KGgo=",
+        revisedPrompt: "A lighthouse at dusk",
+      };
+      const transcript = makeCodexReplayTranscript({
+        scenario: "image-generation",
+        entries: [
+          ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt }),
+          {
+            type: "emit_inbound",
+            label: "item/started",
+            frame: {
+              method: "item/started",
+              params: {
+                threadId: nativeThreadId,
+                turnId: nativeTurnId,
+                startedAtMs: 1782622445000,
+                item: { ...imageItem, result: "", status: "generating" },
+              },
+            },
+          },
+          {
+            type: "emit_inbound",
+            label: "item/completed",
+            frame: {
+              method: "item/completed",
+              params: {
+                threadId: nativeThreadId,
+                turnId: nativeTurnId,
+                completedAtMs: 1782622445010,
+                item: { ...imageItem, status: "completed", savedPath },
+              },
+            },
+          },
+          {
+            type: "emit_inbound",
+            label: "turn/completed",
+            frame: {
+              method: "turn/completed",
+              params: {
+                threadId: nativeThreadId,
+                turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+              },
+            },
+          },
+        ],
+      });
+      const harness = yield* makeCodexReplayHarness(transcript);
+      yield* harness.runtime.startTurn(
+        makeCodexTestTurnInput({
+          threadId: harness.threadId,
+          providerThread: harness.providerThread,
+          now: yield* DateTime.now,
+          attemptId: RunAttemptId.make("image-generation-attempt"),
+          text: prompt,
+        }),
+      );
+      yield* harness.firstTerminal;
+
+      const imageItems = harness.events.flatMap((event) =>
+        event.type === "turn_item.updated" && event.turnItem.type === "dynamic_tool"
+          ? [event.turnItem]
+          : [],
+      );
+      assert.deepEqual(
+        imageItems.map((item) => [item.status, item.viewedImagePath]),
+        [
+          ["running", undefined],
+          ["completed", savedPath],
+        ],
+      );
+      assert.equal(imageItems[1]?.id, imageItems[0]?.id);
+      assert.equal(imageItems[1]?.title, "Generated image");
+      assert.deepEqual(imageItems[1]?.input, { prompt: "A lighthouse at dusk" });
+      // The base64 payload never reaches the projection; the saved file is the copy.
+      assert.notInclude(JSON.stringify(imageItems), "iVBORw0KGgo=");
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+  );
+
   it.effect("sends currency-sigil skill mentions to Codex as $ mentions", () =>
     Effect.gen(function* () {
       const nativeThreadId = "skill-sigil-thread";
