@@ -56,6 +56,7 @@ import * as Order from "effect/Order";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { cn } from "../../lib/cn";
 import { useProjects, useServerConfigs, waitForProject } from "../../state/entities";
+import { isEnvironmentInMachineScope, useMachineEnvironmentId } from "../../state/environments";
 import { filesystemEnvironment } from "../../state/filesystem";
 import { projectEnvironment } from "../../state/projects";
 import { useEnvironmentQuery } from "../../state/query";
@@ -392,12 +393,17 @@ function useEnvironmentOptions(): ReadonlyArray<EnvironmentOption> {
   const serverConfigByEnvironmentId = useServerConfigs();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const { connectedEnvironments } = useRemoteConnectionStatus();
+  const machineEnvironmentId = useMachineEnvironmentId();
 
   return useMemo<ReadonlyArray<EnvironmentOption>>(() => {
     const runtimeByEnvironmentId = new Map(
       connectedEnvironments.map((environment) => [environment.environmentId, environment] as const),
     );
-    const options = Object.values(savedConnectionsById).map((connection) => {
+    // Projects are created on the machine picked in the machine switcher.
+    const connections = Object.values(savedConnectionsById).filter((connection) =>
+      isEnvironmentInMachineScope(connection.environmentId, machineEnvironmentId),
+    );
+    const options = connections.map((connection) => {
       const config = serverConfigByEnvironmentId.get(connection.environmentId);
       const runtime = runtimeByEnvironmentId.get(connection.environmentId);
       return {
@@ -417,7 +423,12 @@ function useEnvironmentOptions(): ReadonlyArray<EnvironmentOption> {
       options.filter((environment) => canCreateProjectInEnvironment(environment.connectionState)),
       environmentOptionOrder,
     );
-  }, [connectedEnvironments, savedConnectionsById, serverConfigByEnvironmentId]);
+  }, [
+    connectedEnvironments,
+    machineEnvironmentId,
+    savedConnectionsById,
+    serverConfigByEnvironmentId,
+  ]);
 }
 
 function useSelectedEnvironment(): {

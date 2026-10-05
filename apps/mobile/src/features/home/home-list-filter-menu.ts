@@ -36,31 +36,35 @@ export function buildHomeListFilterMenu(props: {
   readonly selectedProjectKey: string | null;
   readonly onEnvironmentChange: (environmentId: EnvironmentId | null) => void;
   readonly onProjectChange: (projectKey: string | null) => void;
+  /** False when the machine-wide environment switcher owns this scope. */
+  readonly includeEnvironment?: boolean;
 }): HomeListFilterMenu {
   const items: Array<HomeListFilterMenuAction | HomeListFilterMenuSubmenu> = [];
 
-  items.push({
-    type: "submenu",
-    title: "Environment",
-    items: [
-      {
-        type: "action",
-        title: "All environments",
-        subtitle: "Show threads from every environment",
-        state: props.selectedEnvironmentId === null ? "on" : "off",
-        onPress: () => props.onEnvironmentChange(null),
-      },
-      ...props.environments.map((environment) => ({
-        type: "action" as const,
-        title: environment.label,
-        state:
-          props.selectedEnvironmentId === environment.environmentId
-            ? ("on" as const)
-            : ("off" as const),
-        onPress: () => props.onEnvironmentChange(environment.environmentId),
-      })),
-    ],
-  });
+  if (props.includeEnvironment !== false) {
+    items.push({
+      type: "submenu",
+      title: "Environment",
+      items: [
+        {
+          type: "action",
+          title: "All environments",
+          subtitle: "Show threads from every environment",
+          state: props.selectedEnvironmentId === null ? "on" : "off",
+          onPress: () => props.onEnvironmentChange(null),
+        },
+        ...props.environments.map((environment) => ({
+          type: "action" as const,
+          title: environment.label,
+          state:
+            props.selectedEnvironmentId === environment.environmentId
+              ? ("on" as const)
+              : ("off" as const),
+          onPress: () => props.onEnvironmentChange(environment.environmentId),
+        })),
+      ],
+    });
+  }
 
   if (props.projects.length > 0) {
     items.push({

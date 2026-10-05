@@ -1,3 +1,4 @@
+import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { buildHomeListFilterMenu } from "./home-list-filter-menu";
@@ -35,5 +36,32 @@ describe("buildHomeListFilterMenu", () => {
     projectMenu.items[2]?.onPress();
     expect(onProjectChange).toHaveBeenNthCalledWith(1, null);
     expect(onProjectChange).toHaveBeenNthCalledWith(2, "environment-1:project-2");
+  });
+
+  it("leaves the environment scope to the machine switcher when it owns it", () => {
+    const environments = [
+      {
+        environmentId: EnvironmentId.make("environment-1"),
+        label: "Laptop",
+      },
+    ];
+    const input = {
+      environments,
+      projects: [{ key: "environment-1:project-1", label: "Codething" }],
+      selectedEnvironmentId: environments[0]!.environmentId,
+      selectedProjectKey: null,
+      onEnvironmentChange: vi.fn(),
+      onProjectChange: vi.fn(),
+    };
+
+    expect(buildHomeListFilterMenu(input).items.map((item) => item.title)).toEqual([
+      "Environment",
+      "Project",
+    ]);
+    expect(
+      buildHomeListFilterMenu({ ...input, includeEnvironment: false }).items.map(
+        (item) => item.title,
+      ),
+    ).toEqual(["Project"]);
   });
 });

@@ -23,7 +23,8 @@ import { MaterialButton } from "../../components/MaterialButton";
 import { ScreenScrollView as ScrollView } from "../../components/ScreenScrollView";
 import { AppText as Text } from "../../components/AppText";
 import { ProjectFavicon } from "../../components/ProjectFavicon";
-import { useProjects, useServerConfigs } from "../../state/entities";
+import { useMachineProjects, useServerConfigs } from "../../state/entities";
+import { isEnvironmentInMachineScope, useMachineEnvironmentId } from "../../state/environments";
 import { projectEnvironment } from "../../state/projects";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
@@ -135,10 +136,11 @@ function NewTaskHeader(props: {
 }
 
 export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRouteParams | undefined>) {
-  const projects = useProjects();
+  const projects = useMachineProjects();
+  const machineEnvironmentId = useMachineEnvironmentId();
   const [searchText, setSearchText] = useState("");
   const { projectScopes, selectedEnvironmentId, setProject } = useNewTaskFlow();
-  const { state: catalogState } = useWorkspaceState();
+  const { state: catalogState } = useWorkspaceState(machineEnvironmentId);
   const navigation = useNavigation();
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
@@ -178,11 +180,11 @@ export function NewTaskRouteScreen({ route }: StaticScreenProps<NewTaskRoutePara
   const openScratch = useAtomCommand(projectEnvironment.openScratch, {
     reportFailure: false,
   });
-  // Threads without a project need a connected environment that offers them.
-  // The row starts on the selected environment when it has one, otherwise the
-  // first that does; the draft page's machine picker moves it from there.
+  // Threads without a project need the selected machine to be connected and
+  // offer them; the machine switcher, not this row, moves work between machines.
   const scratchEnvironments = connectedEnvironments.filter(
     (environment) =>
+      isEnvironmentInMachineScope(environment.environmentId, machineEnvironmentId) &&
       availableScratchWorkspaceRoot(
         environment.connectionState,
         serverConfigs.get(environment.environmentId),

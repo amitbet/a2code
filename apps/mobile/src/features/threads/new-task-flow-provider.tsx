@@ -27,10 +27,11 @@ import { pipe } from "effect/Function";
 
 import {
   useEnvironmentServerConfig,
-  useProjects,
+  useMachineProjects,
+  useMachineThreadShells,
   useServerConfigs,
-  useThreadShells,
 } from "../../state/entities";
+import { isEnvironmentInMachineScope, useMachineEnvironmentId } from "../../state/environments";
 import type { TurnCommandMetadata } from "../../lib/commandMetadata";
 import type { DraftComposerAttachment } from "../../lib/composerImages";
 import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
@@ -255,8 +256,11 @@ type NewTaskFlowContextValue = {
 const NewTaskFlowContext = React.createContext<NewTaskFlowContextValue | null>(null);
 
 export function NewTaskFlowProvider(props: React.PropsWithChildren) {
-  const projects = useProjects();
-  const threads = useThreadShells();
+  // New tasks start on the machine picked in the machine switcher, so only its
+  // projects (and therefore only it) are offered here.
+  const projects = useMachineProjects();
+  const threads = useMachineThreadShells();
+  const machineEnvironmentId = useMachineEnvironmentId();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const groupingSettings = useMobileProjectGroupingSettings();
   const { enabled: legacyPlanModeEnabled, loaded: planModePreferenceLoaded } =
@@ -374,18 +378,20 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     isScratchProject(selectedProject, selectedEnvironmentServerConfig?.scratchWorkspaceRoot);
   const serverConfigs = useServerConfigs();
   const { connectedEnvironments } = useRemoteConnectionStatus();
-  // A thread without a project can move to any connected machine that offers
+  // A thread without a project runs on the selected machine when it offers
   // one; its Scratch project there is created on the switch if it is missing.
+  // Other machines stay out: the machine switcher owns where work runs.
   const scratchEnvironments = useMemo(
     () =>
       connectedEnvironments.filter(
         (environment) =>
+          isEnvironmentInMachineScope(environment.environmentId, machineEnvironmentId) &&
           availableScratchWorkspaceRoot(
             environment.connectionState,
             serverConfigs.get(environment.environmentId),
           ) !== null,
       ),
-    [connectedEnvironments, serverConfigs],
+    [connectedEnvironments, machineEnvironmentId, serverConfigs],
   );
 
   // Only offer machines that actually host the currently selected repository, so

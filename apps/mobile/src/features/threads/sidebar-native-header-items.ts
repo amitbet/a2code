@@ -1,9 +1,12 @@
+import type { EnvironmentId } from "@t3tools/contracts";
 import type {
   NativeStackHeaderItem,
   NativeStackHeaderItemMenu,
 } from "@react-navigation/native-stack";
 
+import type { MachineSwitcherEnvironment } from "../../components/MachineSwitcher";
 import type { HomeListFilterMenu } from "../home/home-list-filter-menu";
+import { createMachineHeaderItem } from "../layout/machine-header-item";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
 
 type NativeHeaderMenuItems = NativeStackHeaderItemMenu["menu"]["items"];
@@ -37,11 +40,19 @@ function toNativeHeaderMenuItems(items: HomeListFilterMenu["items"]): NativeHead
  * the Messages-style grouped header buttons.
  */
 export function createSidebarHeaderItems(input: {
+  readonly activeEnvironmentId: EnvironmentId | null;
+  readonly environments: ReadonlyArray<MachineSwitcherEnvironment>;
   readonly filterIcon: string;
   readonly filterMenu: HomeListFilterMenu;
+  readonly onEnvironmentChange: (environmentId: EnvironmentId) => void;
   readonly onOpenSettings: () => void;
 }): NativeStackHeaderItem[] {
   return [
+    createMachineHeaderItem({
+      activeEnvironmentId: input.activeEnvironmentId,
+      environments: input.environments,
+      onEnvironmentChange: input.onEnvironmentChange,
+    }),
     withNativeGlassHeaderItem({
       type: "menu",
       label: "",

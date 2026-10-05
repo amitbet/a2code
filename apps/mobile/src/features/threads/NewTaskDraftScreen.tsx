@@ -104,7 +104,11 @@ import {
   type ComposerDraft,
   waitForComposerDraftsLoaded,
 } from "../../state/use-composer-drafts";
-import { useEnvironmentServerConfig, useProjects, useThreadShells } from "../../state/entities";
+import {
+  useEnvironmentServerConfig,
+  useMachineProjects,
+  useThreadShells,
+} from "../../state/entities";
 import { useProjectClone } from "../../state/projectClones";
 import { projectEnvironment } from "../../state/projects";
 import { sourceControlEnvironment } from "../../state/sourceControl";
@@ -195,7 +199,7 @@ export function NewTaskDraftScreen(props: {
   /** Durable native share inbox item to merge into this project draft. */
   readonly incomingShareId?: string;
 }) {
-  const projects = useProjects();
+  const projects = useMachineProjects();
   const flow = useNewTaskFlow();
   const navigation = useNavigation();
   const {

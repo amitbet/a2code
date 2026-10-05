@@ -14,7 +14,7 @@ import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { environmentServerConfigsAtom } from "../../state/server";
-import { environmentThreadShells } from "../../state/threads";
+import { useMachineNavigationThreadShells } from "../../state/entities";
 import {
   pendingThreadOrderAtom,
   threadDropBusyAtom,
@@ -150,7 +150,8 @@ function DragHandle(props: {
 
 export function ThreadArrangementSheet(props: { onClose: () => void }) {
   const insets = useSafeAreaInsets();
-  const threads = useAtomValue(environmentThreadShells.navigationThreadShellsAtom);
+  // Arranges the list the user sees, which the machine switcher scopes.
+  const threads = useMachineNavigationThreadShells();
   const configs = useAtomValue(environmentServerConfigsAtom);
   const queuedThreadKeys = useAtomValue(queuedThreadKeysAtom);
   const pendingOrder = useAtomValue(pendingThreadOrderAtom);

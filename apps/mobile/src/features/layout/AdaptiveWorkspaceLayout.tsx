@@ -46,6 +46,7 @@ import {
 } from "../../lib/adaptive-navigation";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { mobilePreferencesAtom } from "../../state/preferences";
+import { setMachineEnvironmentId } from "../../state/environments";
 import {
   DEFAULT_MOBILE_PROJECT_GROUPING_SETTINGS,
   resolveMobileProjectGroupingSettings,
@@ -300,6 +301,18 @@ function AdaptiveWorkspaceLayoutContent(
   const activeThread = parseActiveThreadPath(pathname);
   const environmentId = activeThread?.environmentId ?? null;
   const threadId = activeThread?.threadId ?? null;
+  const handleMachineEnvironmentChange = useCallback(
+    (nextEnvironmentId: EnvironmentId) => {
+      setMachineEnvironmentId(nextEnvironmentId);
+      if (
+        activeThread?.environmentId !== undefined &&
+        activeThread.environmentId !== nextEnvironmentId
+      ) {
+        navigation.dispatch(StackActions.replace("Home"));
+      }
+    },
+    [activeThread?.environmentId, navigation],
+  );
   const selectedThreadKey = useMemo(() => {
     if (environmentId === null || threadId === null) {
       return null;
@@ -598,6 +611,7 @@ function AdaptiveWorkspaceLayoutContent(
                       selectedThreadKey={selectedThreadKey}
                       onOpenSettings={handleOpenSettings}
                       onOpenEnvironmentSettings={handleOpenEnvironmentSettings}
+                      onMachineEnvironmentChange={handleMachineEnvironmentChange}
                       onNewThreadInProject={handleNewThreadInProject}
                       onNewThreadOnBranch={handleNewThreadOnBranch}
                       onSelectThread={handleSelectThread}

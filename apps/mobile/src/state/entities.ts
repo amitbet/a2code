@@ -14,7 +14,9 @@ import type {
   ServerConfig,
 } from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
+import { useMemo } from "react";
 
+import { useMachineEnvironmentId } from "./machineScope";
 import { environmentProjects } from "./projects";
 import { environmentServerConfigsAtom, serverEnvironment } from "./server";
 import { environmentThreadDetails, environmentThreadShells } from "./threads";
@@ -64,6 +66,46 @@ export function useThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
 
 export function useNavigationThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
   return useAtomValue(environmentThreadShells.navigationThreadShellsAtom);
+}
+
+/** A null machine scope is "no filter" (still resolving), not "nothing". */
+function filterToMachine<A extends { readonly environmentId: EnvironmentId }>(
+  entities: ReadonlyArray<A>,
+  environmentId: EnvironmentId | null,
+): ReadonlyArray<A> {
+  return environmentId === null
+    ? entities
+    : entities.filter((entity) => entity.environmentId === environmentId);
+}
+
+/** Projects on the machine selected in the machine switcher. */
+export function useMachineProjects(): ReadonlyArray<EnvironmentProject> {
+  const projects = useProjects();
+  const machineEnvironmentId = useMachineEnvironmentId();
+  return useMemo(
+    () => filterToMachine(projects, machineEnvironmentId),
+    [machineEnvironmentId, projects],
+  );
+}
+
+/** Every thread shell (including archived and subagent threads) on the selected machine. */
+export function useMachineThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
+  const threads = useThreadShells();
+  const machineEnvironmentId = useMachineEnvironmentId();
+  return useMemo(
+    () => filterToMachine(threads, machineEnvironmentId),
+    [machineEnvironmentId, threads],
+  );
+}
+
+/** Thread-list shells (see `useNavigationThreadShells`) on the selected machine. */
+export function useMachineNavigationThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
+  const threads = useNavigationThreadShells();
+  const machineEnvironmentId = useMachineEnvironmentId();
+  return useMemo(
+    () => filterToMachine(threads, machineEnvironmentId),
+    [machineEnvironmentId, threads],
+  );
 }
 
 export function useProject(ref: ScopedProjectRef | null): EnvironmentProject | null {
