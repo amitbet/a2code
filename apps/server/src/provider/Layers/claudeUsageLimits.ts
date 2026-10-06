@@ -198,8 +198,15 @@ export function claudeUsageResponseToLimits(input: {
 }): { readonly limits: ServerProviderUsageLimits; readonly names: ClaudeScopedLimitNames } {
   const { response, checkedAt } = input;
   if (!response.rate_limits_available || !response.rate_limits) {
+    // API key and Bedrock accounts never have windows. A subscription account
+    // only lacks them when the usage endpoint hiccups, and `unsupported` is
+    // sticky (the usage loop and turn events both skip it), so one bad read
+    // would hide the meter until the next full probe a day later.
     return {
-      limits: makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" }),
+      limits: makeUnavailableUsageLimits({
+        checkedAt,
+        reason: input.planType ? "probeFailed" : "unsupported",
+      }),
       names: { overageIncluded: undefined },
     };
   }
