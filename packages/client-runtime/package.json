@@ -263,6 +263,10 @@
       "types": "./src/state/sideQuestions.ts",
       "default": "./src/state/sideQuestions.ts"
     },
+    "./state/subagents": {
+      "types": "./src/state/subagents.ts",
+      "default": "./src/state/subagents.ts"
+    },
     "./state/thread-sort": {
       "types": "./src/state/threadSort.ts",
       "default": "./src/state/threadSort.ts"

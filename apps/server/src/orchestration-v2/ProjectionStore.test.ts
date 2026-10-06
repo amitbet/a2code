@@ -2139,6 +2139,119 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
     }),
   );
 
+  it.effect("presents a provider-native subagent's runless root turn as shell activity", () =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      const now = yield* DateTime.now;
+      const parentThreadId = ThreadId.make("thread:runless-subagent:parent");
+      const createThread = (
+        threadId: ThreadId,
+        lineage: {
+          readonly parentThreadId: ThreadId | null;
+          readonly relationshipToParent: "subagent" | null;
+        },
+      ) =>
+        store.apply({
+          id: EventId.make(`event:${threadId}:created`),
+          type: "thread.created",
+          threadId,
+          occurredAt: now,
+          payload: {
+            createdBy: "agent",
+            creationSource: "provider",
+            id: threadId,
+            projectId: ProjectId.make("project:runless-subagent"),
+            title: threadId,
+            providerInstanceId,
+            modelSelection,
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            activeProviderThreadId: null,
+            lineage: { ...lineage, rootThreadId: parentThreadId },
+            forkedFrom: null,
+            createdAt: now,
+            updatedAt: now,
+            archivedAt: null,
+            settledOverride: null,
+            settledAt: null,
+            lastVisitedAt: null,
+            deletedAt: null,
+          },
+        });
+      const updateRootTurn = (threadId: ThreadId, status: "running" | "completed") => {
+        const nodeId = NodeId.make(`node:${threadId}:root`);
+        return store.apply({
+          id: EventId.make(`event:${threadId}:root:${status}`),
+          type: "node.updated",
+          threadId,
+          nodeId,
+          driver,
+          occurredAt: now,
+          payload: {
+            id: nodeId,
+            threadId,
+            runId: null,
+            rootNodeId: nodeId,
+            parentNodeId: null,
+            kind: "root_turn",
+            status,
+            countsForRun: false,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            runtimeRequestId: null,
+            checkpointScopeId: null,
+            startedAt: now,
+            completedAt: status === "completed" ? now : null,
+          },
+        });
+      };
+      const shellsOf = Effect.fnUntraced(function* (threadId: ThreadId) {
+        const memory = ProjectionStore.threadShellFromProjection(
+          yield* store.getThreadProjection(threadId),
+        );
+        const single = (yield* store.getThreadShell(threadId))!;
+        const snapshot = (yield* store.getShellSnapshot()).threads.find(
+          (row) => row.id === threadId,
+        )!;
+        return [memory, single, snapshot];
+      });
+
+      const childThreadId = ThreadId.make("thread:runless-subagent:child");
+      const unrelatedThreadId = ThreadId.make("thread:runless-subagent:unrelated");
+      yield* createThread(parentThreadId, { parentThreadId: null, relationshipToParent: null });
+      yield* createThread(childThreadId, {
+        parentThreadId,
+        relationshipToParent: "subagent",
+      });
+      yield* createThread(unrelatedThreadId, { parentThreadId: null, relationshipToParent: null });
+      yield* updateRootTurn(childThreadId, "running");
+      yield* updateRootTurn(unrelatedThreadId, "running");
+
+      for (const shell of yield* shellsOf(childThreadId)) {
+        assert.equal(shell.activityRunStatus, "running");
+        assert.equal(
+          shell.activityRunStartedAt && DateTime.toEpochMillis(shell.activityRunStartedAt),
+          DateTime.toEpochMillis(now),
+        );
+        assert.isNull(shell.activeRunId);
+        assert.isNull(shell.latestRunId);
+      }
+      // Only subagent lineage turns runless root turns into activity.
+      for (const shell of yield* shellsOf(unrelatedThreadId)) {
+        assert.isNull(shell.activityRunStatus ?? null);
+      }
+
+      yield* updateRootTurn(childThreadId, "completed");
+      for (const shell of yield* shellsOf(childThreadId)) {
+        assert.isNull(shell.activityRunStatus ?? null);
+        assert.isNull(shell.activityRunStartedAt ?? null);
+      }
+    }),
+  );
+
   it.effect("projects only the latest failed root turn's limit into SQL and memory shells", () =>
     Effect.gen(function* () {
       const store = yield* ProjectionStore.ProjectionStoreV2;

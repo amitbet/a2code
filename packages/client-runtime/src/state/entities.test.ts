@@ -76,6 +76,24 @@ describe("V2 client presentation", () => {
     expect(shell.source).toBe(v2ThreadShell);
   });
 
+  it("presents a runless subagent's live root turn as a running runtime", () => {
+    const shell = presentThreadShell(environmentId, {
+      ...v2ThreadShell,
+      latestRunId: null,
+      activeProviderThreadId: null,
+      activityRunStatus: "running",
+    });
+    expect(shell.runtime).toMatchObject({ status: "running", activeRunId: null });
+    expect(
+      presentThreadShell(environmentId, {
+        ...v2ThreadShell,
+        latestRunId: null,
+        activeProviderThreadId: null,
+        activityRunStatus: null,
+      }).runtime,
+    ).toBeNull();
+  });
+
   it("preserves active ordering and both pull-request sources", () => {
     const linkedPullRequest = {
       projectId: v2ThreadShell.projectId,

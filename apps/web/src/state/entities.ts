@@ -46,8 +46,8 @@ const EMPTY_THREAD_REFS_ATOM = Atom.make(EMPTY_THREAD_REFS).pipe(
 const EMPTY_THREAD_SHELL_ATOM = Atom.make<EnvironmentThreadShell | null>(null).pipe(
   Atom.withLabel("web-thread-shell:empty"),
 );
-const EMPTY_SIDE_QUESTION_SHELLS_ATOM = Atom.make<ReadonlyArray<EnvironmentThreadShell>>([]).pipe(
-  Atom.withLabel("web-side-question-shells:empty"),
+const EMPTY_CHILD_THREAD_SHELLS_ATOM = Atom.make<ReadonlyArray<EnvironmentThreadShell>>([]).pipe(
+  Atom.withLabel("web-child-thread-shells:empty"),
 );
 const EMPTY_THREAD_PROJECTION_ATOM = Atom.make<EnvironmentThread | null>(null).pipe(
   Atom.withLabel("web-thread-projection:empty"),
@@ -176,8 +176,17 @@ export function useSideQuestionShells(
 ): ReadonlyArray<EnvironmentThreadShell> {
   return useAtomValue(
     ref === null
-      ? EMPTY_SIDE_QUESTION_SHELLS_ATOM
+      ? EMPTY_CHILD_THREAD_SHELLS_ATOM
       : environmentThreadShells.sideQuestionShellsAtom(ref),
+  );
+}
+
+/** Unarchived subagent threads spawned from `ref`, oldest first. */
+export function useSubagentShells(
+  ref: ScopedThreadRef | null,
+): ReadonlyArray<EnvironmentThreadShell> {
+  return useAtomValue(
+    ref === null ? EMPTY_CHILD_THREAD_SHELLS_ATOM : environmentThreadShells.subagentShellsAtom(ref),
   );
 }
 

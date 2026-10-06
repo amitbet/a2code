@@ -278,3 +278,38 @@ describe("side question shells", () => {
     registry.dispose();
   });
 });
+
+describe("subagent shells", () => {
+  it("lists a parent's unarchived subagents and ignores forks and side questions", () => {
+    const { registry, threads, snapshotAtom } = makeHarness();
+    const parent = v2ThreadShell;
+    const child = (
+      id: string,
+      relationshipToParent: "subagent" | "fork" | null,
+      overrides: { readonly archived?: boolean; readonly sideQuestionOf?: ThreadId } = {},
+    ) => ({
+      ...parent,
+      id: ThreadId.make(id),
+      lineage: { rootThreadId: parent.id, parentThreadId: parent.id, relationshipToParent },
+      archivedAt: overrides.archived ? parent.createdAt : null,
+      ...(overrides.sideQuestionOf === undefined
+        ? {}
+        : { sideQuestionOf: overrides.sideQuestionOf }),
+    });
+    registry.set(snapshotAtom(environmentId), {
+      ...v2ShellSnapshot,
+      threads: [
+        parent,
+        child("agent", "subagent"),
+        child("agent-archived", "subagent", { archived: true }),
+        child("fork", "fork"),
+        child("side", null, { sideQuestionOf: parent.id }),
+      ],
+    });
+    const atom = threads.subagentShellsAtom({ environmentId, threadId: parent.id });
+    const dispose = registry.mount(atom);
+    expect(registry.get(atom).map((thread) => thread.id)).toEqual(["agent"]);
+    dispose();
+    registry.dispose();
+  });
+});

@@ -26,7 +26,7 @@ import {
 } from "./ThreadStatusIndicators";
 import { EnvironmentMachineIcon } from "./EnvironmentMachineIcon";
 import { ProjectFavicon } from "./ProjectFavicon";
-import { SidebarSideQuestionRows } from "./SidebarSideQuestionRows";
+import { SidebarSideQuestionRows, SidebarSubagentRows } from "./SidebarChildThreadRows";
 import { useAtomValue } from "@effect/atom-react";
 import { autoAnimate } from "@formkit/auto-animate";
 import React, { Fragment, useCallback, useEffect, memo, useMemo, useRef, useState } from "react";
@@ -56,7 +56,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { fetchEnvironmentThreadExport } from "@t3tools/client-runtime/state/thread-export";
-import { withoutNestedSideQuestions } from "@t3tools/client-runtime/state/side-questions";
+import { withoutNestedChildThreads } from "@t3tools/client-runtime/state/subagents";
 import {
   parseScopedThreadKey,
   scopedProjectKey,
@@ -1133,6 +1133,11 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
                 attemptArchiveThread={attemptArchiveThread}
                 openPrLink={openPrLink}
               />
+              <SidebarSubagentRows
+                parentRef={threadRef}
+                activeRouteThreadKey={activeRouteThreadKey}
+                onOpen={navigateToThread}
+              />
               <SidebarSideQuestionRows
                 parentRef={threadRef}
                 activeRouteThreadKey={activeRouteThreadKey}
@@ -1320,11 +1325,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   // thread-list change).
   const sidebarThreadByKeyRef = useRef(sidebarThreadByKey);
   sidebarThreadByKeyRef.current = sidebarThreadByKey;
-  // Side questions render under their parent row, not in the project list.
-  const projectThreads = useMemo(
-    () => withoutNestedSideQuestions(sidebarThreads),
-    [sidebarThreads],
-  );
+  // Side questions and subagents render under their parent row, not in the
+  // project list.
+  const projectThreads = useMemo(() => withoutNestedChildThreads(sidebarThreads), [sidebarThreads]);
   const projectPreferenceKeys = useMemo(() => projectExpansionPreferenceKeys(project), [project]);
   const projectExpanded = useUiStateStore((state) =>
     resolveProjectExpanded(state.projectExpandedById, projectPreferenceKeys),
@@ -3580,7 +3583,7 @@ export default function LegacySidebar() {
   }, []);
 
   const visibleThreads = useMemo(
-    () => withoutNestedSideQuestions(sidebarThreads).filter((thread) => thread.archivedAt === null),
+    () => withoutNestedChildThreads(sidebarThreads).filter((thread) => thread.archivedAt === null),
     [sidebarThreads],
   );
   const sortedProjects = useMemo(() => {
@@ -3619,7 +3622,7 @@ export default function LegacySidebar() {
     () =>
       sortedProjects.flatMap((project) => {
         const projectThreads = sortThreads(
-          withoutNestedSideQuestions(threadsByProjectKey.get(project.projectKey) ?? []).filter(
+          withoutNestedChildThreads(threadsByProjectKey.get(project.projectKey) ?? []).filter(
             (thread) => thread.archivedAt === null,
           ),
           sidebarThreadSortOrder,

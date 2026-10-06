@@ -88,6 +88,18 @@ scope (`components/sidebar/machineItems.ts`, shared with `MachineSwitcher`). `Br
   keep attachment-bearing messages first when the budget trims. Forks name the source thread for
   `t3_thread_read`. No transcript file: full history is readable through MCP.
 - Codex `imageGeneration` items become "Generated image" rows with `viewedImagePath` = `savedPath`.
+- **Subagents nest under their parent in the project tree** (upstream hides them from both
+  sidebars; they only open from the Agents panel). `LegacySidebar` drops a subagent whose parent is
+  listed (`withoutNestedChildThreads`, `@t3tools/client-runtime/state/subagents`) and shows it in an
+  "N agents" group under the parent row (`SidebarSubagentRows`; the fork's side-question rows file
+  became `SidebarChildThreadRows.tsx` and hosts both). `subagentShellsAtom` groups children by
+  `lineage.parentThreadId`.
+- **Runless subagent activity on shells.** Provider-native subagent threads have no runs, so
+  upstream's shells reported them idle while working. `ProjectionStore.ts` presents an open runless
+  `root_turn` on a `subagent`-lineage thread as `activityRunStatus`/`activityRunStartedAt`, in
+  both `threadShellFromProjection` and the `selectShellThreadRows` SQL (`runless_subagent_*`
+  columns). Client `shellRuntime` (`models.ts`) presents a runtime for that case. Re-check both
+  paths when upstream touches shell derivation.
 - `AcpAdapterV2.pathFromToolCall` reads diff-block paths (Grok/Antigravity/registry agents; Cursor
   now runs through `@cursor/sdk`).
 

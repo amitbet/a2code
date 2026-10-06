@@ -1,36 +1,52 @@
 import { scopeThreadRef, scopedThreadKey } from "@t3tools/client-runtime/environment";
-import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/models";
+import {
+  threadRuntimeIsActive,
+  type EnvironmentThreadShell,
+} from "@t3tools/client-runtime/state/models";
 import type { ScopedThreadRef } from "@t3tools/contracts";
-import { ChevronRight, MessageCircleQuestion } from "lucide-react";
+import { BotIcon, ChevronRight, MessageCircleQuestion, type LucideIcon } from "lucide-react";
 import { memo, useMemo, useState } from "react";
 
 import { SidebarMenuSubButton, SidebarMenuSubItem } from "~/components/ui/sidebar";
 import { Spinner } from "~/components/ui/spinner";
 import { cn } from "~/lib/utils";
-import { useSideQuestionShells } from "~/state/entities";
+import { useSideQuestionShells, useSubagentShells } from "~/state/entities";
 
-/**
- * The `/btw` side questions asked from one thread, listed under that thread's
- * sidebar row. Collapsed to a count by default; always expanded while one of
- * them is the open thread so the active row stays visible.
- */
-export const SidebarSideQuestionRows = memo(function SidebarSideQuestionRows(props: {
+interface ChildThreadRowsProps {
   parentRef: ScopedThreadRef;
   activeRouteThreadKey: string | null;
   onOpen: (threadRef: ScopedThreadRef) => void;
+}
+
+/**
+ * Child threads listed under their parent's sidebar row. Collapsed to a count
+ * by default; always expanded while one of them is the open thread so the
+ * active row stays visible. A running child shows a spinner either way: the
+ * toggle carries one while any child is working.
+ */
+const SidebarChildThreadRows = memo(function SidebarChildThreadRows(props: {
+  shells: ReadonlyArray<EnvironmentThreadShell>;
+  singularLabel: string;
+  pluralLabel: string;
+  icon: LucideIcon;
+  activeRouteThreadKey: string | null;
+  onOpen: (threadRef: ScopedThreadRef) => void;
 }) {
-  const sideQuestions = useSideQuestionShells(props.parentRef);
   const [expanded, setExpanded] = useState(false);
   const toggleRender = useMemo(() => <button type="button" />, []);
   const rowRender = useMemo(() => <button type="button" />, []);
-  if (sideQuestions.length === 0) {
+  const { shells } = props;
+  if (shells.length === 0) {
     return null;
   }
-  const refs = sideQuestions.map((shell) => scopeThreadRef(shell.environmentId, shell.id));
+  const refs = shells.map((shell) => scopeThreadRef(shell.environmentId, shell.id));
+  const running = shells.map((shell) => threadRuntimeIsActive(shell.runtime));
+  const anyRunning = running.some(Boolean);
   const containsActive = refs.some((ref) => scopedThreadKey(ref) === props.activeRouteThreadKey);
   const showRows = expanded || containsActive;
   const label =
-    sideQuestions.length === 1 ? "1 side question" : `${sideQuestions.length} side questions`;
+    shells.length === 1 ? `1 ${props.singularLabel}` : `${shells.length} ${props.pluralLabel}`;
+  const Icon = props.icon;
 
   return (
     <>
@@ -45,12 +61,12 @@ export const SidebarSideQuestionRows = memo(function SidebarSideQuestionRows(pro
         >
           <ChevronRight className={cn("size-3", showRows && "rotate-90")} />
           <span className="text-sidebar-muted-foreground">{label}</span>
+          {!showRows && anyRunning ? <Spinner size="xs" tone="muted" /> : null}
         </SidebarMenuSubButton>
       </SidebarMenuSubItem>
       {showRows
-        ? sideQuestions.map((shell, index) => {
+        ? shells.map((shell, index) => {
             const ref = refs[index]!;
-            const running = threadRuntimeIsActive(shell.runtime);
             return (
               <SidebarMenuSubItem
                 key={shell.id}
@@ -65,17 +81,49 @@ export const SidebarSideQuestionRows = memo(function SidebarSideQuestionRows(pro
                   className="h-6 w-full translate-x-0 justify-start text-left"
                   onClick={() => props.onOpen(ref)}
                 >
-                  {running ? (
+                  {running[index] ? (
                     <Spinner size="xs" tone="muted" />
                   ) : (
-                    <MessageCircleQuestion className="size-3" />
+                    <Icon className="size-3" />
                   )}
-                  <span>{shell.title}</span>
+                  <span className="truncate">{shell.title}</span>
                 </SidebarMenuSubButton>
               </SidebarMenuSubItem>
             );
           })
         : null}
     </>
+  );
+});
+
+/** The `/btw` side questions asked from one thread. */
+export const SidebarSideQuestionRows = memo(function SidebarSideQuestionRows(
+  props: ChildThreadRowsProps,
+) {
+  const shells = useSideQuestionShells(props.parentRef);
+  return (
+    <SidebarChildThreadRows
+      shells={shells}
+      singularLabel="side question"
+      pluralLabel="side questions"
+      icon={MessageCircleQuestion}
+      activeRouteThreadKey={props.activeRouteThreadKey}
+      onOpen={props.onOpen}
+    />
+  );
+});
+
+/** The subagents spawned from one thread, provider-native or delegated. */
+export const SidebarSubagentRows = memo(function SidebarSubagentRows(props: ChildThreadRowsProps) {
+  const shells = useSubagentShells(props.parentRef);
+  return (
+    <SidebarChildThreadRows
+      shells={shells}
+      singularLabel="agent"
+      pluralLabel="agents"
+      icon={BotIcon}
+      activeRouteThreadKey={props.activeRouteThreadKey}
+      onOpen={props.onOpen}
+    />
   );
 });

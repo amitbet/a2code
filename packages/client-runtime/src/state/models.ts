@@ -170,8 +170,16 @@ function terminalRunStatus(status: OrchestrationV2RunStatus): boolean {
 // so a remaining roster is stronger than checkpoint-oriented waiting.
 // latestRun keeps the latest run's status for history presentation.
 // A failed latest run outranks the roster, so the failure stays visible.
+// Provider-native subagents have no runs; the server reports their live root
+// turn as activityRunStatus, which alone is enough to present a runtime.
 function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary | null {
-  if (thread.latestRunId === null && thread.activeProviderThreadId === null) return null;
+  if (
+    thread.latestRunId === null &&
+    thread.activeProviderThreadId === null &&
+    (thread.activityRunStatus ?? null) === null
+  ) {
+    return null;
+  }
   const parkAtIdle =
     backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? []) &&
     thread.status !== "failed";

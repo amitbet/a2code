@@ -914,6 +914,8 @@ type ShellThreadRow = {
   readonly active_run_id: string | null;
   readonly activity_run_status: string | null;
   readonly activity_run_started_at: string | null;
+  readonly runless_subagent_status: string | null;
+  readonly runless_subagent_started_at: string | null;
   readonly last_error: string | null;
   readonly terminal_failure_payload_json: string | null;
   readonly blocking_run_id: string | null;
@@ -1330,6 +1332,7 @@ export function threadShellFromProjection(
     projection.runs
       .filter(isActivityRunForShell)
       .toSorted((left, right) => right.ordinal - left.ordinal)[0] ?? null;
+  const subagentActivity = activityRun === null ? runlessSubagentActivity(projection) : null;
   const pendingRuntimeRequest =
     projection.runtimeRequests
       .filter((request) => request.status === "pending")
@@ -1387,9 +1390,11 @@ export function threadShellFromProjection(
     latestRunStartedAt: latestRun?.startedAt ?? null,
     latestRunCompletedAt: latestRun?.completedAt ?? null,
     activeRunId: activeRun?.id ?? null,
-    activityRunStatus: activityRun?.status ?? null,
+    activityRunStatus: activityRun?.status ?? subagentActivity?.status ?? null,
     activityRunStartedAt:
-      activityRun === null ? null : orchestrationV2RunWorkStartedAt(activityRun),
+      activityRun === null
+        ? (subagentActivity?.startedAt ?? null)
+        : orchestrationV2RunWorkStartedAt(activityRun),
     status: latestRun?.status ?? "idle",
     ...threadErrorSummary(
       latestRootProviderFailure(latestRun, projection.turnItems),
@@ -1476,6 +1481,45 @@ function isActivityRunForShell(
   readonly status: ShellActivityRunStatus;
 } {
   return isInterruptibleRunForShell(run) || run.status === "waiting";
+}
+
+/**
+ * A provider-native subagent thread has no runs: its work is a runless root
+ * turn that the adapter moves through running and completed. While that turn
+ * is open it presents as the thread's activity, so lists can show the child
+ * working. The SQL shell path mirrors this in `selectShellThreadRows`.
+ */
+function runlessSubagentActivityStatus(status: string | null): ShellActivityRunStatus | null {
+  switch (status) {
+    case "pending":
+    case "running":
+      return "running";
+    case "waiting":
+      return "waiting";
+    default:
+      return null;
+  }
+}
+
+function runlessSubagentActivity(
+  projection: Pick<OrchestrationV2ThreadProjection, "thread" | "nodes">,
+): { readonly status: ShellActivityRunStatus; readonly startedAt: DateTime.Utc | null } | null {
+  if (projection.thread.lineage.relationshipToParent !== "subagent") return null;
+  let latest: OrchestrationV2ThreadProjection["nodes"][number] | null = null;
+  for (const node of projection.nodes) {
+    if (node.kind !== "root_turn" || node.runId !== null) continue;
+    if (runlessSubagentActivityStatus(node.status) === null) continue;
+    if (
+      latest === null ||
+      (node.startedAt !== null &&
+        (latest.startedAt === null ||
+          DateTime.toEpochMillis(node.startedAt) > DateTime.toEpochMillis(latest.startedAt)))
+    ) {
+      latest = node;
+    }
+  }
+  const status = latest === null ? null : runlessSubagentActivityStatus(latest.status);
+  return latest === null || status === null ? null : { status, startedAt: latest.startedAt };
 }
 
 type ShellThreadState = {
@@ -4864,6 +4908,28 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                 LIMIT 1
               ) AS activity_run_started_at,
               (
+                SELECT n.status
+                FROM orchestration_v2_projection_nodes n
+                WHERE n.thread_id = t.thread_id
+                  AND n.run_id IS NULL
+                  AND n.kind = 'root_turn'
+                  AND n.status IN ('pending', 'running', 'waiting')
+                  AND json_extract(t.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+                ORDER BY n.started_at DESC, n.node_id DESC
+                LIMIT 1
+              ) AS runless_subagent_status,
+              (
+                SELECT n.started_at
+                FROM orchestration_v2_projection_nodes n
+                WHERE n.thread_id = t.thread_id
+                  AND n.run_id IS NULL
+                  AND n.kind = 'root_turn'
+                  AND n.status IN ('pending', 'running', 'waiting')
+                  AND json_extract(t.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+                ORDER BY n.started_at DESC, n.node_id DESC
+                LIMIT 1
+              ) AS runless_subagent_started_at,
+              (
                 SELECT json_extract(session.payload_json, '$.lastError')
                 FROM orchestration_v2_projection_provider_sessions session
                 INNER JOIN orchestration_v2_projection_provider_session_bindings binding
@@ -5353,6 +5419,24 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             hasActiveRun: row.active_run_id !== null,
           }),
         ];
+        const runActivityStatus =
+          row.activity_run_status === "preparing" ||
+          row.activity_run_status === "starting" ||
+          row.activity_run_status === "running" ||
+          row.activity_run_status === "waiting"
+            ? row.activity_run_status
+            : null;
+        const subagentActivityStatus =
+          runActivityStatus === null
+            ? runlessSubagentActivityStatus(row.runless_subagent_status)
+            : null;
+        const activityRunStatus = runActivityStatus ?? subagentActivityStatus;
+        const activityStartedAtRaw =
+          subagentActivityStatus === null
+            ? row.activity_run_started_at
+            : row.runless_subagent_started_at;
+        const activityRunStartedAt =
+          activityStartedAtRaw === null ? null : DateTime.makeUnsafe(activityStartedAtRaw);
         return {
           thread,
           latestRunId,
@@ -5361,17 +5445,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           latestRunStartedAt,
           latestRunCompletedAt,
           activeRunId: row.active_run_id === null ? null : RunId.make(row.active_run_id),
-          activityRunStartedAt:
-            row.activity_run_started_at === null
-              ? null
-              : DateTime.makeUnsafe(row.activity_run_started_at),
-          activityRunStatus:
-            row.activity_run_status === "preparing" ||
-            row.activity_run_status === "starting" ||
-            row.activity_run_status === "running" ||
-            row.activity_run_status === "waiting"
-              ? row.activity_run_status
-              : null,
+          activityRunStartedAt,
+          activityRunStatus,
           ...threadErrorSummary(
             terminalFailureItem?.type === "error" ? terminalFailureItem.failure : null,
             row.last_error,

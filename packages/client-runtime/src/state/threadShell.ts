@@ -12,6 +12,7 @@ import { Atom } from "effect/unstable/reactivity";
 import type { EnvironmentThreadShell } from "./models.ts";
 import { presentThreadShell } from "./models.ts";
 import { isNestedSideQuestion } from "./sideQuestions.ts";
+import { subagentParentId } from "./subagents.ts";
 import { type EnvironmentCatalogState, enabledEnvironmentIds } from "./connections.ts";
 import {
   arrayElementsEqual,
@@ -24,7 +25,7 @@ import {
 
 const EMPTY_THREADS: ReadonlyArray<OrchestrationV2ThreadShell> = Object.freeze([]);
 const EMPTY_THREAD_SHELLS: ReadonlyArray<EnvironmentThreadShell> = Object.freeze([]);
-const EMPTY_SIDE_QUESTIONS_BY_PARENT: ReadonlyMap<
+const EMPTY_CHILD_THREADS_BY_PARENT: ReadonlyMap<
   ThreadId,
   ReadonlyArray<EnvironmentThreadShell>
 > = new Map();
@@ -177,48 +178,65 @@ export function createEnvironmentThreadShellAtoms(input: {
     }).pipe(Atom.withLabel(`environment-thread-shells-for-projects:${key}`));
   });
 
-  // Unarchived `/btw` side questions grouped by the thread they were asked
-  // about, oldest first. Grouped once per environment so per-parent reads
-  // (one per thread row or composer) stay O(1) on every shell update.
-  const environmentSideQuestionsByParentAtom = Atom.family((environmentId: EnvironmentId) =>
-    Atom.make((get): ReadonlyMap<ThreadId, ReadonlyArray<EnvironmentThreadShell>> => {
-      const grouped = new Map<ThreadId, EnvironmentThreadShell[]>();
-      for (const thread of get(environmentThreadsAtom(environmentId))) {
-        const parentId = thread.sideQuestionOf ?? null;
-        if (parentId === null || thread.archivedAt !== null) continue;
-        const shell = scopedThread(environmentId, thread);
-        const siblings = grouped.get(parentId);
-        if (siblings === undefined) {
-          grouped.set(parentId, [shell]);
-        } else {
-          siblings.push(shell);
+  // Unarchived child threads grouped by the thread they belong under, oldest
+  // first. Grouped once per environment so per-parent reads (one per thread
+  // row or composer) stay O(1) on every shell update.
+  const childThreadsByParentAtomFamily = (
+    kind: string,
+    parentIdOf: (thread: OrchestrationV2ThreadShell) => ThreadId | null,
+  ) =>
+    Atom.family((environmentId: EnvironmentId) =>
+      Atom.make((get): ReadonlyMap<ThreadId, ReadonlyArray<EnvironmentThreadShell>> => {
+        const grouped = new Map<ThreadId, EnvironmentThreadShell[]>();
+        for (const thread of get(environmentThreadsAtom(environmentId))) {
+          const parentId = parentIdOf(thread);
+          if (parentId === null || parentId === thread.id || thread.archivedAt !== null) continue;
+          const shell = scopedThread(environmentId, thread);
+          const siblings = grouped.get(parentId);
+          if (siblings === undefined) {
+            grouped.set(parentId, [shell]);
+          } else {
+            siblings.push(shell);
+          }
         }
-      }
-      if (grouped.size === 0) return EMPTY_SIDE_QUESTIONS_BY_PARENT;
-      for (const siblings of grouped.values()) {
-        siblings.sort(
-          (left, right) =>
-            left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
-        );
-      }
-      return grouped;
-    }).pipe(Atom.withLabel(`environment-thread-side-questions-by-parent:${environmentId}`)),
-  );
+        if (grouped.size === 0) return EMPTY_CHILD_THREADS_BY_PARENT;
+        for (const siblings of grouped.values()) {
+          siblings.sort(
+            (left, right) =>
+              left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+          );
+        }
+        return grouped;
+      }).pipe(Atom.withLabel(`environment-thread-${kind}-by-parent:${environmentId}`)),
+    );
 
-  const sideQuestionShellsAtomFamily = Atom.family((key: string) => {
-    const ref = parseThreadKey(key);
-    let previous: ReadonlyArray<EnvironmentThreadShell> = EMPTY_THREAD_SHELLS;
-    return Atom.make((get) => {
-      const next =
-        get(environmentSideQuestionsByParentAtom(ref.environmentId)).get(ref.threadId) ??
-        EMPTY_THREAD_SHELLS;
-      if (arrayElementsEqual(previous, next)) {
+  const childThreadShellsAtomFamily = (
+    kind: string,
+    byParentAtom: (
+      environmentId: EnvironmentId,
+    ) => Atom.Atom<ReadonlyMap<ThreadId, ReadonlyArray<EnvironmentThreadShell>>>,
+  ) =>
+    Atom.family((key: string) => {
+      const ref = parseThreadKey(key);
+      let previous: ReadonlyArray<EnvironmentThreadShell> = EMPTY_THREAD_SHELLS;
+      return Atom.make((get) => {
+        const next = get(byParentAtom(ref.environmentId)).get(ref.threadId) ?? EMPTY_THREAD_SHELLS;
+        if (arrayElementsEqual(previous, next)) {
+          return previous;
+        }
+        previous = next;
         return previous;
-      }
-      previous = next;
-      return previous;
-    }).pipe(Atom.withLabel(`environment-thread-side-questions:${key}`));
-  });
+      }).pipe(Atom.withLabel(`environment-thread-${kind}:${key}`));
+    });
+
+  const sideQuestionShellsAtomFamily = childThreadShellsAtomFamily(
+    "side-questions",
+    childThreadsByParentAtomFamily("side-questions", (thread) => thread.sideQuestionOf ?? null),
+  );
+  const subagentShellsAtomFamily = childThreadShellsAtomFamily(
+    "subagents",
+    childThreadsByParentAtomFamily("subagents", subagentParentId),
+  );
 
   let previousThreadRefs: ReadonlyArray<ScopedThreadRef> = [];
   const threadRefsAtom = Atom.make((get) => {
@@ -284,5 +302,7 @@ export function createEnvironmentThreadShellAtoms(input: {
     threadShellAtom: (ref: ScopedThreadRef) => threadShellAtomFamily(threadKey(ref)),
     /** Fork-only: the unarchived `/btw` side questions asked about `ref`, oldest first. */
     sideQuestionShellsAtom: (ref: ScopedThreadRef) => sideQuestionShellsAtomFamily(threadKey(ref)),
+    /** The unarchived subagent threads spawned from `ref`, oldest first. */
+    subagentShellsAtom: (ref: ScopedThreadRef) => subagentShellsAtomFamily(threadKey(ref)),
   };
 }
