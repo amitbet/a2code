@@ -38,7 +38,10 @@ import { threadListEnvironmentsAtom } from "../../state/server";
 import { usePendingNewTasks } from "../../state/use-pending-new-tasks";
 import { useQueuedThreadKeys } from "../../state/use-thread-outbox";
 import { useWorkspaceState } from "../../state/workspace";
-import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
+import {
+  useMachineSwitcherEnvironments,
+  useSavedRemoteConnections,
+} from "../../state/use-remote-environment-registry";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
 import { useHomeListOptions } from "../home/home-list-options";
@@ -167,16 +170,7 @@ function ThreadNavigationSidebarPane(
   const pendingTasks = usePendingNewTasks();
   const queuedThreadKeys = useQueuedThreadKeys();
   const { openPendingTask, confirmDeletePendingTask } = usePendingTaskListActions();
-  const environments = useMemo(
-    () =>
-      Object.values(savedConnectionsById)
-        .map((connection) => ({
-          environmentId: connection.environmentId,
-          label: connection.environmentLabel,
-        }))
-        .sort((left, right) => left.label.localeCompare(right.label)),
-    [savedConnectionsById],
-  );
+  const environments = useMachineSwitcherEnvironments();
   const availableEnvironmentIds = useMemo(
     () => new Set(environments.map((environment) => environment.environmentId)),
     [environments],
@@ -1022,6 +1016,13 @@ function ThreadNavigationSidebarPane(
           onOpenSettings={props.onOpenSettings}
           onOpenEnvironments={props.onOpenEnvironmentSettings}
           onRequestVisibility={props.onRequestVisibility}
+          machineSwitcher={
+            <MachineSwitcher
+              activeEnvironmentId={machineEnvironmentId}
+              environments={environments}
+              onEnvironmentChange={props.onMachineEnvironmentChange}
+            />
+          }
         />
       ) : (
         <View

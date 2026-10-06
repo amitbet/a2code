@@ -3,7 +3,7 @@ import { useNavigation } from "@react-navigation/native";
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { Alert } from "react-native";
 
 import { useConnectionController } from "../features/connection/useConnectionController";
@@ -63,6 +63,24 @@ export function useSavedRemoteConnections() {
     isLoadingSavedConnection: !catalog.isReady,
     savedConnectionsById,
   };
+}
+
+/** Saved machines as the machine switcher lists them, sorted by label. */
+export function useMachineSwitcherEnvironments(): ReadonlyArray<{
+  readonly environmentId: EnvironmentId;
+  readonly label: string;
+}> {
+  const savedConnectionsById = useAtomValue(savedConnectionsByIdAtom);
+  return useMemo(
+    () =>
+      Object.values(savedConnectionsById)
+        .map((connection) => ({
+          environmentId: connection.environmentId,
+          label: connection.environmentLabel,
+        }))
+        .sort((left, right) => left.label.localeCompare(right.label)),
+    [savedConnectionsById],
+  );
 }
 
 export function useSavedRemoteConnection(

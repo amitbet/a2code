@@ -246,7 +246,10 @@ leaf components.
   the per-project todo button inside the `ComboboxItem` is the surviving entry point.
 - **Mobile home header.** Upstream deleted the custom Android header (332 lines to 15) in favour of
   the native header. The fork's `MachineSwitcher` is re-applied as `createMachineHeaderItem()`
-  prepended to `unstable_headerRightItems`, so it now shows on both platforms.
+  prepended to `unstable_headerRightItems` on iOS. Android's home header is upstream's
+  `HomeHeader.android.tsx` + `MaterialThreadListToolbar`, which get the `MachineSwitcher` pill
+  through the toolbar's `machineSwitcher` slot (the tablet sidebar passes it too); upstream's
+  Android "Environment" filter submenu stays out.
 - **Codex attachments.** Upstream passes images by path (`type: "localImage"`) instead of base64.
   The fork's PDF/text branches in `resolveAttachment` were **unreachable** — `sendTurn` already
   filtered to `attachment.type === "image"` — so upstream's version was taken whole. The

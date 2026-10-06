@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type ComponentProps } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ComponentProps,
+  type ReactNode,
+} from "react";
 import {
   BackHandler,
   Keyboard,
@@ -30,6 +37,8 @@ export function MaterialThreadListToolbar(props: {
   readonly onFilterAction: NonNullable<ComponentProps<typeof ControlPillMenu>["onPressAction"]>;
   readonly onOpenSettings: () => void;
   readonly onOpenEnvironments: () => void;
+  /** Rendered before the search button; the fork's `MachineSwitcher`. */
+  readonly machineSwitcher?: ReactNode;
   readonly sidebar?: boolean;
   readonly onLayout?: (event: LayoutChangeEvent) => void;
   readonly onRequestVisibility?: () => void;
@@ -108,6 +117,7 @@ export function MaterialThreadListToolbar(props: {
                   brand={<CompactBrandTitle allowFontScaling={false} />}
                 />
               </View>
+              {props.machineSwitcher}
               <AndroidHeaderIconButton
                 accessibilityLabel="Search threads"
                 icon="magnifyingglass"

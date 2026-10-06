@@ -1,5 +1,6 @@
 import type { MenuAction } from "@react-native-menu/menu";
 import { useCallback, useMemo } from "react";
+import { MachineSwitcher } from "../../components/MachineSwitcher";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { MaterialThreadListToolbar } from "./MaterialThreadListToolbar";
 import type { HomeHeaderProps } from "./HomeHeader.types";
@@ -11,30 +12,13 @@ function checkedMenuState(checked: boolean) {
 }
 
 export function HomeHeader(props: HomeHeaderProps) {
-  // The list uses a fixed creation order and ignores sort/group options, so
-  // the filter menu only carries the filters and the "customized" icon state
-  // keys off those alone.
-  const hasCustomListOptions =
-    props.selectedEnvironmentId !== null || props.selectedProjectKey !== null;
+  // The list uses a fixed creation order and ignores sort/group options, and
+  // the machine switcher owns the environment scope, so the filter menu only
+  // carries the project filter.
+  const hasCustomListOptions = props.selectedProjectKey !== null;
   const menuActions = useMemo<MenuAction[]>(
-    () => [
-      {
-        id: "environment",
-        title: "Environment",
-        subactions: [
-          {
-            id: "environment:all",
-            title: "All environments",
-            state: checkedMenuState(props.selectedEnvironmentId === null),
-          },
-          ...props.environments.map((environment) => ({
-            id: `environment:${environment.environmentId}`,
-            title: environment.label,
-            state: checkedMenuState(props.selectedEnvironmentId === environment.environmentId),
-          })),
-        ],
-      },
-      ...(props.projects.length === 0
+    () =>
+      props.projects.length === 0
         ? []
         : ([
             {
@@ -53,29 +37,12 @@ export function HomeHeader(props: HomeHeaderProps) {
                 })),
               ],
             },
-          ] satisfies MenuAction[])),
-    ],
-    [props.environments, props.projects, props.selectedEnvironmentId, props.selectedProjectKey],
+          ] satisfies MenuAction[]),
+    [props.projects, props.selectedProjectKey],
   );
   const handleMenuAction = useCallback(
     (event: { nativeEvent: { event: string } }) => {
       const id = event.nativeEvent.event;
-      if (id === "environment:all") {
-        props.onEnvironmentChange(null);
-        return;
-      }
-
-      if (id.startsWith("environment:")) {
-        const environmentId = id.slice("environment:".length);
-        const environment = props.environments.find(
-          (candidate) => candidate.environmentId === environmentId,
-        );
-        if (environment) {
-          props.onEnvironmentChange(environment.environmentId);
-        }
-        return;
-      }
-
       if (id === "project:all") {
         props.onProjectChange(null);
         return;
@@ -103,6 +70,13 @@ export function HomeHeader(props: HomeHeaderProps) {
         onFilterAction={handleMenuAction}
         onOpenSettings={props.onOpenSettings}
         onOpenEnvironments={props.onOpenEnvironments}
+        machineSwitcher={
+          <MachineSwitcher
+            activeEnvironmentId={props.selectedEnvironmentId}
+            environments={props.environments}
+            onEnvironmentChange={props.onEnvironmentChange}
+          />
+        }
       />
     </>
   );
