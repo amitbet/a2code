@@ -160,6 +160,33 @@ export const resolveActivePayloadVersion: Effect.Effect<
   return yield* readActivePayloadVersion;
 });
 
+/**
+ * The web client directory the packaged renderer serves: the active payload's
+ * `client/` when intact, else the shell-bundled client. Resolved with the same
+ * pending promotion the backend launch uses, so the window and the backend run
+ * the same payload; without this, payload updates never reach the UI.
+ */
+export const resolveActiveClientAssetsDir: Effect.Effect<
+  string,
+  never,
+  FileSystem.FileSystem | DesktopEnvironment.DesktopEnvironment
+> = Effect.gen(function* () {
+  const environment = yield* DesktopEnvironment.DesktopEnvironment;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const activeVersion = yield* resolveActivePayloadVersion;
+  if (Option.isNone(activeVersion)) {
+    return environment.clientAssetsDir;
+  }
+  const payloadClientDir = environment.path.join(
+    payloadVersionDir(environment, activeVersion.value),
+    "client",
+  );
+  const intact = yield* fileSystem
+    .exists(environment.path.join(payloadClientDir, "index.html"))
+    .pipe(Effect.orElseSucceed(() => false));
+  return intact ? payloadClientDir : environment.clientAssetsDir;
+});
+
 /** The applied payload version (none when running the shell-bundled backend). */
 export const readActivePayloadVersion: Effect.Effect<
   Option.Option<string>,

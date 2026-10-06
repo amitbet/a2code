@@ -13,6 +13,7 @@ import {
   SquarePenIcon,
   TerminalIcon,
   TriangleAlertIcon,
+  XIcon,
 } from "lucide-react";
 import {
   ChangeRequestStatusIcon,
@@ -120,7 +121,22 @@ import { isModelPickerOpen } from "../modelPickerVisibility";
 import { useShortcutModifierState } from "../shortcutModifierState";
 import { ensureLocalApi, readLocalApi } from "../localApi";
 import { runtime } from "../lib/runtime";
-import { useComposerDraftStore } from "../composerDraftStore";
+import {
+  DraftId,
+  useComposerDraftStore,
+  useThreadHasUnsentDraft,
+  type ComposerThreadDraftState,
+  type DraftSessionState,
+} from "../composerDraftStore";
+import { discardComposerDraft } from "../lib/discardComposerDraft";
+import {
+  draftPenClassName,
+  draftSurfaceClassName,
+  resolveSidebarDraftPreview,
+  sidebarDraftProjectKey,
+  useSidebarDraftContextMenu,
+  useSidebarDraftRows,
+} from "./sidebar/sidebarDrafts";
 import { useAddProjectDropZone } from "../hooks/useAddProjectDropZone";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
 import { useDesktopUpdateState } from "../state/desktopUpdate";
@@ -204,6 +220,7 @@ import {
   isSidebarNestedLinkClick,
   isTrailingDoubleClick,
   resolveProjectStatusIndicator,
+  resolveSidebarRowAccessibility,
   resolveThreadRowClassName,
   resolveThreadLastVisitedAt,
   resolveThreadStatusPill,
@@ -404,6 +421,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   } = props;
   const threadRef = scopeThreadRef(thread.environmentId, thread.id);
   const threadKey = scopedThreadKey(threadRef);
+  const hasUnsentDraft = useThreadHasUnsentDraft(threadRef) && !isActive;
   const [isFileDragOver, setIsFileDragOver] = useState(false);
   const fileDropHandlers = useMemo(
     () =>
@@ -747,7 +765,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             ? "bg-sidebar-row-active font-medium text-sidebar-foreground hover:bg-sidebar-row-active"
             : isSelected
               ? "bg-sidebar-row-selected text-sidebar-foreground hover:bg-sidebar-row-active"
-              : "text-sidebar-muted-foreground/80 hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
+              : hasUnsentDraft
+                ? cn(draftSurfaceClassName, "text-sidebar-foreground")
+                : "text-sidebar-muted-foreground/80 hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
           isFileDragOver && "ring-1 ring-inset ring-primary/70",
         )}
         onClick={handleRowClick}
@@ -796,6 +816,22 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             </a>
           ) : null}
           {threadStatus && <ThreadStatusLabel status={threadStatus} />}
+          {hasUnsentDraft ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span
+                    aria-label="Unsent draft"
+                    data-testid={`sidebar-draft-indicator-${thread.id}`}
+                    className="inline-flex shrink-0 items-center justify-center"
+                  />
+                }
+              >
+                <SquarePenIcon aria-hidden className={draftPenClassName} />
+              </TooltipTrigger>
+              <TooltipPopup side="top">Unsent draft</TooltipPopup>
+            </Tooltip>
+          ) : null}
           {thread.pinnedAt ? (
             <Tooltip>
               <TooltipTrigger
@@ -989,8 +1025,135 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   );
 });
 
+// One unsent new-thread draft, shown at the top of its project with the same
+// warm tint as the flat sidebar's draft rows. Clicking is a plain navigation
+// to /draft/$draftId, so the draft's model, branch and worktree travel with
+// it. Memoized so per-keystroke block re-renders skip unchanged rows.
+const SidebarProjectDraftRow = memo(function SidebarProjectDraftRow(props: {
+  draftId: DraftId;
+  composer: ComposerThreadDraftState;
+  projectDisplayName: string;
+  isActive: boolean;
+  onNavigate: (draftId: DraftId) => void;
+  onContextMenu: (draftId: DraftId, position: { x: number; y: number }) => void;
+}) {
+  const { composer, draftId, onContextMenu, onNavigate } = props;
+  const preview = resolveSidebarDraftPreview(composer);
+  const accessibility = resolveSidebarRowAccessibility({
+    title: preview,
+    statusLabel: "Unsent draft",
+    projectDisplayName: props.projectDisplayName,
+    isActive: props.isActive,
+  });
+  const handleActivate = useCallback(() => onNavigate(draftId), [draftId, onNavigate]);
+  const handleKeyDown = useCallback(
+    (event: React.KeyboardEvent) => {
+      // Keys targeting the nested discard button belong to the button.
+      if ((event.target as HTMLElement).closest("button")) return;
+      if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+        event.preventDefault();
+        const rect = event.currentTarget.getBoundingClientRect();
+        onContextMenu(draftId, { x: rect.left, y: rect.bottom });
+      } else if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        onNavigate(draftId);
+      }
+    },
+    [draftId, onContextMenu, onNavigate],
+  );
+  const handleContextMenu = useCallback(
+    (event: React.MouseEvent) => {
+      event.preventDefault();
+      onContextMenu(draftId, { x: event.clientX, y: event.clientY });
+    },
+    [draftId, onContextMenu],
+  );
+  const handleDiscard = useCallback(
+    (event: React.MouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      discardComposerDraft(draftId);
+    },
+    [draftId],
+  );
+  return (
+    <SidebarMenuSubItem className="w-full" data-thread-selection-safe>
+      <div
+        role="button"
+        tabIndex={0}
+        aria-label={accessibility.label}
+        aria-current={accessibility.current}
+        data-testid="sidebar-draft-row"
+        className={cn(
+          "relative flex h-8 w-full min-w-0 cursor-pointer select-none items-center gap-1.5 overflow-hidden rounded-md px-2 text-left text-xs outline-hidden focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring group-data-[collapsible=icon]:hidden",
+          props.isActive
+            ? "bg-sidebar-row-active font-medium text-sidebar-foreground"
+            : cn(draftSurfaceClassName, "text-sidebar-foreground"),
+        )}
+        onClick={handleActivate}
+        onContextMenu={handleContextMenu}
+        onKeyDown={handleKeyDown}
+      >
+        <SquarePenIcon aria-hidden className={draftPenClassName} />
+        <span aria-hidden className="min-w-0 flex-1 truncate text-sm">
+          {preview}
+        </span>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                aria-label="Discard draft"
+                onClick={handleDiscard}
+                className="pointer-events-none inline-flex shrink-0 cursor-pointer items-center rounded-md px-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 max-sm:pointer-events-auto max-sm:opacity-100 group-hover/menu-sub-item:pointer-events-auto group-hover/menu-sub-item:opacity-100"
+              >
+                <XIcon className="size-3" />
+              </button>
+            }
+          />
+          <TooltipPopup side="top">Discard draft</TooltipPopup>
+        </Tooltip>
+      </div>
+    </SidebarMenuSubItem>
+  );
+});
+
+// The project's unsent new-thread drafts. A leaf with its own composer-store
+// subscription, so typing in a draft re-renders only this block, never the
+// project's thread list.
+const SidebarProjectDraftRows = memo(function SidebarProjectDraftRows(props: {
+  projectKeys: ReadonlySet<string>;
+  projectDisplayName: string;
+  onNavigate: (draftId: DraftId) => void;
+  onContextMenu: (draftId: DraftId, position: { x: number; y: number }) => void;
+}) {
+  const routeDraftId = useParams({
+    strict: false,
+    select: (params) => {
+      const target = resolveThreadRouteTarget(params);
+      return target?.kind === "draft" ? target.draftId : null;
+    },
+  });
+  const drafts = useSidebarDraftRows({ projectKeys: props.projectKeys, routeDraftId });
+  return drafts.map(({ composer, draftId }) => (
+    <SidebarProjectDraftRow
+      key={draftId}
+      draftId={draftId}
+      composer={composer}
+      projectDisplayName={props.projectDisplayName}
+      isActive={draftId === routeDraftId}
+      onNavigate={props.onNavigate}
+      onContextMenu={props.onContextMenu}
+    />
+  ));
+});
+
 interface SidebarProjectThreadListProps {
   projectKey: string;
+  projectDisplayName: string;
+  draftProjectKeys: ReadonlySet<string>;
+  navigateToDraft: (draftId: DraftId) => void;
+  handleDraftContextMenu: (draftId: DraftId, position: { x: number; y: number }) => void;
   projectExpanded: boolean;
   hasOverflowingThreads: boolean;
   hiddenThreadStatus: ThreadStatusPill | null;
@@ -1047,6 +1210,10 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
 ) {
   const {
     projectKey,
+    projectDisplayName,
+    draftProjectKeys,
+    navigateToDraft,
+    handleDraftContextMenu,
     projectExpanded,
     hasOverflowingThreads,
     hiddenThreadStatus,
@@ -1090,6 +1257,14 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
       ref={attachThreadListAutoAnimateRef}
       className="mx-0.5 my-0 w-full translate-x-0 overflow-hidden sm:mx-1"
     >
+      {projectExpanded ? (
+        <SidebarProjectDraftRows
+          projectKeys={draftProjectKeys}
+          projectDisplayName={projectDisplayName}
+          onNavigate={navigateToDraft}
+          onContextMenu={handleDraftContextMenu}
+        />
+      ) : null}
       {shouldShowThreadPanel && showEmptyThreadState ? (
         <SidebarMenuSubItem className="w-full" data-thread-selection-safe>
           <div
@@ -1368,6 +1543,39 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       ),
     [project.memberProjects],
   );
+  const draftProjectKeys = useMemo(
+    () => new Set(memberProjectByScopedKey.keys()),
+    [memberProjectByScopedKey],
+  );
+  const navigateToDraft = useCallback(
+    (draftId: DraftId) => {
+      clearSelection();
+      if (isMobile) setOpenMobile(false);
+      void router.navigate({ to: "/draft/$draftId", params: { draftId } });
+    },
+    [clearSelection, isMobile, router, setOpenMobile],
+  );
+  const resolveDraftProject = useCallback(() => project, [project]);
+  const resolveDraftWorkspaceRoot = useCallback(
+    (session: DraftSessionState) =>
+      memberProjectByScopedKey.get(sidebarDraftProjectKey(session))?.workspaceRoot ?? null,
+    [memberProjectByScopedKey],
+  );
+  const openDraftProjectSettings = useCallback(
+    (target: SidebarProjectSnapshot) => {
+      if (isMobile) setOpenMobile(false);
+      void router.navigate({
+        to: "/projects/$projectKey",
+        params: { projectKey: target.projectKey },
+      });
+    },
+    [isMobile, router, setOpenMobile],
+  );
+  const handleDraftContextMenu = useSidebarDraftContextMenu({
+    resolveProject: resolveDraftProject,
+    resolveWorkspaceRoot: resolveDraftWorkspaceRoot,
+    openProjectSettings: openDraftProjectSettings,
+  });
   const memberThreadCountByPhysicalKey = useMemo(() => {
     const counts = new Map<string, number>(
       project.memberProjects.map((member) => [member.physicalProjectKey, 0] as const),
@@ -2610,6 +2818,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
       <SidebarProjectThreadList
         projectKey={project.projectKey}
+        projectDisplayName={project.displayName}
+        draftProjectKeys={draftProjectKeys}
+        navigateToDraft={navigateToDraft}
+        handleDraftContextMenu={handleDraftContextMenu}
         projectExpanded={projectExpanded}
         hasOverflowingThreads={hasOverflowingThreads}
         hiddenThreadStatus={hiddenThreadStatus}

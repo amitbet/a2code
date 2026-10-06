@@ -77,6 +77,11 @@ scope (`components/sidebar/machineItems.ts`, shared with `MachineSwitcher`). `Br
   on the next native/Electron change. (A deliberate fork workflow change — keep it when checking
   that workflows match the fork tip.) Known gaps: the Cursor SDK's platform helpers and
   self-spawned `t3 acp-mcp-bridge` processes from a payload.
+- Upstream serves the packaged renderer from the shell's bundled client over the desktop protocol
+  (`DesktopApp.ts` `registerDesktopProtocol`), which would freeze the UI at the installed shell's
+  version. The fork passes `resolveActiveClientAssetsDir` (`updates/payloadLayout.ts`) instead: the
+  active payload's `client/`, falling back to the bundled one. Keep it when upstream touches that
+  registration.
 
 ### Fork additions on upstream's v2 surfaces
 
