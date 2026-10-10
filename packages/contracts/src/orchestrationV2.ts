@@ -2873,6 +2873,8 @@ export const OrchestrationV2Command = Schema.Union([
     targetThreadId: ThreadId,
     messageId: MessageId,
     question: TrimmedNonEmptyString,
+    /** Consume this queued run atomically when starting the side question. */
+    queuedRunId: Schema.optional(RunId),
     title: Schema.optional(TrimmedNonEmptyString),
     /** Defaults to the source thread's selection. */
     modelSelection: Schema.optional(ModelSelection),

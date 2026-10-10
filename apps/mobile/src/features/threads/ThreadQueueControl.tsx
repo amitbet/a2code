@@ -1,6 +1,12 @@
 import { type StaticScreenProps, useNavigation } from "@react-navigation/native";
 import { useAtomValue } from "@effect/atom-react";
-import type { ChatAttachment, EnvironmentId, RunId, ThreadId } from "@t3tools/contracts";
+import {
+  MessageId,
+  ThreadId,
+  type ChatAttachment,
+  type EnvironmentId,
+  type RunId,
+} from "@t3tools/contracts";
 import { Image } from "expo-image";
 import * as Haptics from "expo-haptics";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
@@ -18,6 +24,8 @@ import { AndroidSheetHeader } from "../../components/AndroidScreenHeader";
 import { AppText as Text } from "../../components/AppText";
 import { SymbolView } from "../../components/AppSymbol";
 import { ControlPillMenu } from "../../components/ControlPill";
+import { makeTurnCommandMetadata } from "../../lib/commandMetadata";
+import { serverEnvironment } from "../../state/server";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { nativeHeaderScrollEdgeEffects } from "../../native/StackHeader";
@@ -39,7 +47,7 @@ const REMOVE_ACTION_WIDTH = 76;
 const THUMBNAIL_LIMIT = 3;
 
 type QueueTarget = { readonly environmentId: EnvironmentId; readonly threadId: ThreadId };
-type QueueAction = "steer" | "edit" | "up" | "down" | "remove";
+type QueueAction = "btw" | "steer" | "edit" | "up" | "down" | "remove";
 type QueueRowLayout = { readonly id: RunId; readonly y?: number; readonly height?: number };
 
 export function useThreadQueueWorkflow(target: QueueTarget) {
@@ -56,6 +64,13 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
   const insets = useSafeAreaInsets();
   const theme = useUniwindTheme();
   const workflow = useThreadQueueWorkflow(target);
+  const serverConfig = useAtomValue(serverEnvironment.configValueAtom(target.environmentId));
+  const sideQuestionsSupported =
+    serverConfig?.environment.capabilities.threadQueuedSideQuestions === true;
+  const askSideQuestion = useAtomCommand(
+    threadEnvironment.askSideQuestion,
+    "run queued message as BTW",
+  );
   const threadKey = scopedThreadKey(target.environmentId, target.threadId);
   const editing = useQueuedRunEdit(threadKey);
   const reorder = useAtomCommand(threadEnvironment.reorderQueuedRun, "reorder queued message");
@@ -97,8 +112,8 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
       hadQueuedRuns.current = true;
       return;
     }
-    if (hadQueuedRuns.current) navigation.goBack();
-  }, [navigation, queuedRuns.length]);
+    if (hadQueuedRuns.current && busyRunId === null) navigation.goBack();
+  }, [busyRunId, navigation, queuedRuns.length]);
 
   const move = async (runId: RunId, beforeRunId: RunId | null) => {
     if (busyRef.current || !workflow?.canReorder) return;
@@ -138,12 +153,34 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
       navigation.goBack();
       return;
     }
-    if (action !== "steer" && action !== "remove") return;
+    if (action !== "steer" && action !== "remove" && action !== "btw") return;
     busyRef.current = true;
     setBusyRunId(runId);
     void Haptics.selectionAsync();
     try {
-      if (action === "remove") {
+      if (action === "btw") {
+        const entry = queuedRuns[index]!;
+        if (!sideQuestionsSupported || !entry.text.trim()) return;
+        const metadata = makeTurnCommandMetadata();
+        const result = await askSideQuestion({
+          environmentId: target.environmentId,
+          input: {
+            sourceThreadId: target.threadId,
+            targetThreadId: ThreadId.make(metadata.threadId),
+            messageId: MessageId.make(metadata.messageId),
+            question: entry.text,
+            queuedRunId: runId,
+          },
+        });
+        if (result._tag === "Success") {
+          hadQueuedRuns.current = false;
+          navigation.goBack();
+          navigation.navigate("Thread", {
+            environmentId: String(target.environmentId),
+            threadId: metadata.threadId,
+          });
+        }
+      } else if (action === "remove") {
         await cancel(buildCancelQueuedRunCommand({ ...target, runId }));
       } else if (workflow?.activeRun && workflow.canPromoteToSteer) {
         await promote({
@@ -327,6 +364,22 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
                   accessibilityLabel={`Actions for queued message ${index + 1}`}
                   shouldOpenOnLongPress
                   actions={[
+                    ...(sideQuestionsSupported
+                      ? [
+                          {
+                            id: "btw",
+                            title: "Run as BTW",
+                            attributes: {
+                              disabled:
+                                busyRunId !== null ||
+                                draggedRunId !== null ||
+                                editing?.runId === run.id ||
+                                !text.trim(),
+                            },
+                            image: Platform.OS === "ios" ? "bubble.left" : "chat_bubble_outline",
+                          },
+                        ]
+                      : []),
                     ...(workflow?.canPromoteToSteer
                       ? [
                           {

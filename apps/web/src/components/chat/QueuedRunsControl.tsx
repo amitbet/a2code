@@ -14,10 +14,12 @@ import {
   GitForkIcon,
   GripVerticalIcon,
   ListOrderedIcon,
+  MessageCircleQuestionIcon,
   PencilIcon,
 } from "lucide-react";
 import { useId, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 
+import { useRightPanelStore } from "../../rightPanelStore";
 import { useAssetUrls } from "../../assets/assetUrls";
 import { threadEnvironment } from "../../state/threads";
 import { useThreadProjection } from "../../state/entities";
@@ -61,6 +63,7 @@ export function QueuedRunsControl({
   readonly ref?: Ref<QueuedRunsControlHandle>;
   readonly steerShortcutLabel?: string | null;
   readonly editShortcutLabel?: string | null;
+  readonly sideQuestionsSupported?: boolean;
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
   readonly optimisticMessages: ReadonlyArray<
@@ -77,7 +80,7 @@ export function QueuedRunsControl({
   const reorder = useAtomCommand(threadEnvironment.reorderQueuedRun);
   const promote = useAtomCommand(threadEnvironment.promoteQueuedRun);
   const cancel = useAtomCommand(threadEnvironment.cancelQueuedRun);
-  const { forkQueuedRun } = useThreadActions();
+  const { forkQueuedRun, askSideQuestion } = useThreadActions();
   const [expanded, setExpanded] = useState(true);
   const queueListId = useId();
   const [busyRunId, setBusyRunId] = useState<RunId | null>(null);
@@ -238,6 +241,36 @@ export function QueuedRunsControl({
         );
       }
     } finally {
+      setBusyRunId(null);
+    }
+  };
+
+  const askInFlightRef = useRef(false);
+  const askQueued = async (runId: RunId) => {
+    const entry = queued.find(({ run }) => run.id === runId);
+    if (!entry || busyRunId !== null || askInFlightRef.current || !props.sideQuestionsSupported)
+      return;
+    askInFlightRef.current = true;
+    const target = scopeThreadRef(props.environmentId, props.threadId);
+    setBusyRunId(runId);
+    try {
+      const result = await askSideQuestion(target, entry.text, { queuedRunId: runId });
+      if (result._tag === "Failure") {
+        if (!isAtomCommandInterrupted(result)) {
+          const error = squashAtomCommandFailure(result);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not run the queued message as BTW",
+              description: error instanceof Error ? error.message : "It is still queued.",
+            }),
+          );
+        }
+        return;
+      }
+      useRightPanelStore.getState().openSideQuestion(target, result.value.threadId);
+    } finally {
+      askInFlightRef.current = false;
       setBusyRunId(null);
     }
   };
@@ -502,6 +535,29 @@ export function QueuedRunsControl({
                           </TooltipTrigger>
                           <TooltipPopup>Run it now in a fork of this thread</TooltipPopup>
                         </Tooltip>
+                        {props.sideQuestionsSupported ? (
+                          <Tooltip>
+                            <TooltipTrigger render={<span className="flex shrink-0" />}>
+                              <Button
+                                size="xs"
+                                variant="ghost-muted"
+                                aria-label="Run queued message as BTW"
+                                disabled={
+                                  item.runId === null ||
+                                  busyRunId !== null ||
+                                  item.text.trim().length === 0
+                                }
+                                onClick={() => {
+                                  if (item.runId !== null) void askQueued(item.runId);
+                                }}
+                              >
+                                <MessageCircleQuestionIcon />
+                                BTW
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipPopup>Ask it now as a side question</TooltipPopup>
+                          </Tooltip>
+                        ) : null}
                         <Tooltip>
                           <TooltipTrigger render={<span className="flex shrink-0" />}>
                             <Button

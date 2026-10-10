@@ -1088,7 +1088,7 @@ export function useThreadActions() {
     async (
       target: ScopedThreadRef,
       question: string,
-      options?: { readonly modelSelection?: ModelSelection },
+      options?: { readonly modelSelection?: ModelSelection; readonly queuedRunId?: RunId },
     ) => {
       const sideQuestionRef = scopeThreadRef(target.environmentId, newThreadId());
       const result = await askSideQuestionMutation({
@@ -1098,6 +1098,7 @@ export function useThreadActions() {
           targetThreadId: sideQuestionRef.threadId,
           question,
           messageId: newMessageId(),
+          ...(options?.queuedRunId !== undefined ? { queuedRunId: options.queuedRunId } : {}),
           ...(options?.modelSelection !== undefined
             ? { modelSelection: options.modelSelection }
             : {}),

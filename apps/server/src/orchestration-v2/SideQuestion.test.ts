@@ -1,11 +1,16 @@
 import { assert, describe, it } from "@effect/vitest";
 import {
+  ChatAttachmentId,
+  ComposerContextId,
+  type ChatAttachment,
+  type OrchestrationMessageContext,
   CommandId,
   EventId,
   MessageId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderThreadId,
   RunId,
   ThreadId,
   TurnItemId,
@@ -44,6 +49,7 @@ const layer = makeOrchestratorV2ReplayLayerWithRegistry(
 );
 
 const parentThreadId = ThreadId.make("side-question-parent");
+const parentProviderThreadId = ProviderThreadId.make("side-question-parent-provider-thread");
 const runningRunId = RunId.make("side-question-parent-run");
 
 /** A parent whose second turn is still running: partial answer and a command in flight. */
@@ -116,6 +122,31 @@ const seedParent = Effect.gen(function* () {
   yield* eventSink.write({
     events: [
       {
+        id: EventId.make("parent-provider-thread"),
+        type: "provider-thread.updated",
+        threadId: parentThreadId,
+        driver,
+        providerInstanceId: instanceId,
+        occurredAt: now,
+        payload: {
+          id: parentProviderThreadId,
+          driver,
+          providerInstanceId: instanceId,
+          providerSessionId: null,
+          appThreadId: parentThreadId,
+          ownerNodeId: null,
+          nativeThreadRef: null,
+          nativeConversationHeadRef: null,
+          status: "active",
+          firstRunOrdinal: 1,
+          lastRunOrdinal: 1,
+          handoffIds: [],
+          forkedFrom: null,
+          createdAt: now,
+          updatedAt: now,
+        },
+      },
+      {
         id: EventId.make("parent-run"),
         type: "run.created",
         threadId: parentThreadId,
@@ -127,7 +158,7 @@ const seedParent = Effect.gen(function* () {
           ordinal: 1,
           providerInstanceId: instanceId,
           modelSelection,
-          providerThreadId: null,
+          providerThreadId: parentProviderThreadId,
           userMessageId: MessageId.make("parent-user-message"),
           rootNodeId: null,
           activeAttemptId: null,
@@ -171,6 +202,160 @@ const ask = (index: number) =>
   });
 
 describe("thread.side-question.ask", () => {
+  const queueQuestion = (content?: {
+    attachments?: ReadonlyArray<ChatAttachment>;
+    context?: OrchestrationMessageContext;
+  }) =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("queue-question"),
+        threadId: parentThreadId,
+        messageId: MessageId.make("queued-question-message"),
+        text: "What does this change do?",
+        attachments: content?.attachments ?? [],
+        ...(content?.context === undefined ? {} : { context: content.context }),
+        modelSelection,
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "user",
+        creationSource: "web",
+      });
+      const projection = yield* orchestrator.getThreadProjection(parentThreadId);
+      return projection.runs.find((run) => run.status === "queued")!.id;
+    });
+
+  const convertQuestion = (queuedRunId: RunId, question = "What does this change do?") => ({
+    type: "thread.side-question.ask" as const,
+    commandId: CommandId.make("convert-question"),
+    sourceThreadId: parentThreadId,
+    targetThreadId: ThreadId.make("converted-question"),
+    messageId: MessageId.make("converted-question-message"),
+    question,
+    queuedRunId,
+    createdBy: "user" as const,
+    creationSource: "web" as const,
+  });
+
+  it.effect("atomically moves a queued question to BTW without changing the active run", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      yield* seedParent;
+      const queuedRunId = yield* queueQuestion();
+      const command = convertQuestion(queuedRunId);
+      yield* orchestrator.dispatch(command);
+      // Retrying the same command must not create a second question.
+      yield* orchestrator.dispatch(command);
+      const parent = yield* orchestrator.getThreadProjection(parentThreadId);
+      assert.strictEqual(parent.runs.find((run) => run.id === queuedRunId)?.status, "cancelled");
+      assert.strictEqual(parent.runs.find((run) => run.id === runningRunId)?.status, "running");
+      assert.isFalse(parent.visibleTurnItems.some((row) => row.item.runId === queuedRunId));
+      const side = yield* orchestrator.getThreadProjection(command.targetThreadId);
+      assert.lengthOf(side.runs, 1);
+      assert.strictEqual(side.messages[0]?.text, command.question);
+      assert.strictEqual(side.thread.sideQuestionOf, parentThreadId);
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("preserves queued attachments and structured context in the BTW turn", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      yield* seedParent;
+      const attachments: ReadonlyArray<ChatAttachment> = [
+        {
+          type: "image",
+          id: ChatAttachmentId.make("queued-image"),
+          name: "screenshot.png",
+          mimeType: "image/png",
+          sizeBytes: 42,
+        },
+        {
+          type: "file",
+          id: ChatAttachmentId.make("queued-file"),
+          name: "notes.txt",
+          mimeType: "text/plain",
+          sizeBytes: 20,
+        },
+      ];
+      const context: OrchestrationMessageContext = {
+        version: 1,
+        records: [
+          {
+            version: 1,
+            kind: "terminal",
+            contextId: ComposerContextId.make("queued-terminal"),
+            label: "Build error",
+            terminalId: "terminal-1",
+            terminalLabel: "Build",
+            lineStart: 1,
+            lineEnd: 2,
+            text: "BUILD_ERROR_MARKER",
+          },
+        ],
+      };
+      const queuedRunId = yield* queueQuestion({ attachments, context });
+      const command = convertQuestion(queuedRunId);
+      yield* orchestrator.dispatch(command);
+      const side = yield* orchestrator.getThreadProjection(command.targetThreadId);
+      const message = side.messages.find((candidate) => candidate.role === "user");
+      assert.deepStrictEqual(message?.attachments, attachments);
+      assert.deepStrictEqual(message?.context, context);
+      assert.lengthOf(side.contextHandoffs, 1);
+      const parent = yield* orchestrator.getThreadProjection(parentThreadId);
+      assert.strictEqual(parent.runs.find((run) => run.id === queuedRunId)?.status, "cancelled");
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("preserves the queue and creates no BTW when the queued text has changed", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      yield* seedParent;
+      const queuedRunId = yield* queueQuestion();
+      const command = convertQuestion(queuedRunId, "Stale text");
+      const result = yield* orchestrator.dispatch(command).pipe(Effect.result);
+      assert.strictEqual(result._tag, "Failure");
+      const parent = yield* orchestrator.getThreadProjection(parentThreadId);
+      assert.strictEqual(parent.runs.find((run) => run.id === queuedRunId)?.status, "queued");
+      assert.isNull(yield* orchestrator.getThreadShell(command.targetThreadId));
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("rejects a queue entry already removed by another client", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      yield* seedParent;
+      const queuedRunId = yield* queueQuestion();
+      yield* orchestrator.dispatch({
+        type: "queued-run.cancel",
+        commandId: CommandId.make("remove-question"),
+        threadId: parentThreadId,
+        runId: queuedRunId,
+      });
+      const command = convertQuestion(queuedRunId);
+      const result = yield* orchestrator.dispatch(command).pipe(Effect.result);
+      assert.strictEqual(result._tag, "Failure");
+      assert.isNull(yield* orchestrator.getThreadShell(command.targetThreadId));
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("leaves the queue intact when side-question creation fails", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      yield* seedParent;
+      const queuedRunId = yield* queueQuestion();
+      const result = yield* orchestrator
+        .dispatch({
+          ...convertQuestion(queuedRunId),
+          modelSelection: { instanceId: ProviderInstanceId.make("missing"), model: "missing" },
+        })
+        .pipe(Effect.result);
+      assert.strictEqual(result._tag, "Failure");
+      const parent = yield* orchestrator.getThreadProjection(parentThreadId);
+      assert.strictEqual(parent.runs.find((run) => run.id === queuedRunId)?.status, "queued");
+      assert.isNull(yield* orchestrator.getThreadShell(ThreadId.make("converted-question")));
+    }).pipe(Effect.provide(layer)),
+  );
+
   it.effect("creates a side question that starts with the parent's running turn", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;

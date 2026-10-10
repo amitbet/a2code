@@ -11337,6 +11337,11 @@ export default function ChatView(props: ChatViewProps) {
                                 isServerThread && activeThread ? (
                                   <QueuedRunsControl
                                     ref={queuedRunsControlRef}
+                                    sideQuestionsSupported={
+                                      sideQuestionsSupported &&
+                                      serverConfig?.environment.capabilities
+                                        .threadQueuedSideQuestions === true
+                                    }
                                     steerShortcutLabel={shortcutLabelForCommand(
                                       keybindings,
                                       "thread.steerQueuedMessage",

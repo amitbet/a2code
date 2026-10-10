@@ -435,8 +435,10 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
       return command.parentThreadId;
     case "thread.fork":
     case "thread.merge_back":
-    case "thread.side-question.ask":
       return command.targetThreadId;
+    case "thread.side-question.ask":
+      // Queue conversion must serialize with edits and automatic queue delivery.
+      return command.queuedRunId === undefined ? command.targetThreadId : command.sourceThreadId;
   }
 }
 
@@ -3528,7 +3530,40 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         "Ask side questions from the main thread, not from another side question.",
       );
     }
-    const modelSelection = command.modelSelection ?? parent.thread.modelSelection;
+    const queuedRun =
+      command.queuedRunId === undefined
+        ? undefined
+        : parent.runs.find((run) => run.id === command.queuedRunId);
+    const queuedMessage =
+      queuedRun === undefined
+        ? undefined
+        : parent.messages.find((message) => message.id === queuedRun.userMessageId);
+    if (command.queuedRunId !== undefined) {
+      if (queuedRun?.status !== "queued") {
+        return yield* reject(`Run ${command.queuedRunId} is not queued.`);
+      }
+      if (
+        queuedMessage === undefined ||
+        queuedMessage.delegatedCompletion !== undefined ||
+        queuedMessage.notification !== undefined
+      ) {
+        return yield* reject("Only user queued messages can run as a side question.");
+      }
+      if (queuedMessage.text.trim() !== command.question.trim()) {
+        return yield* reject("The queued message changed. Try again with its latest text.");
+      }
+      yield* dispatchQueuedRunCancel(
+        {
+          type: "queued-run.cancel",
+          commandId: command.commandId,
+          threadId: command.sourceThreadId,
+          runId: command.queuedRunId,
+        },
+        events,
+      );
+    }
+    const modelSelection =
+      command.modelSelection ?? queuedRun?.modelSelection ?? parent.thread.modelSelection;
     const adapter = yield* providerAdapters.get(modelSelection.instanceId).pipe(
       Effect.mapError(
         (cause) =>
@@ -3589,7 +3624,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         threadId: command.targetThreadId,
         messageId: command.messageId,
         text: command.question,
-        attachments: [],
+        attachments: queuedMessage?.attachments ?? [],
+        ...(queuedMessage?.context === undefined ? {} : { context: queuedMessage.context }),
         modelSelection,
         dispatchMode: { type: "start_immediately" },
       },

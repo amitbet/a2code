@@ -154,6 +154,8 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   /** Server understands thread.side-question.ask / .promote and projects
       `sideQuestionOf`. Absent on older servers, so clients hide `/btw`. */
   threadSideQuestions: Schema.optionalKey(Schema.Boolean),
+  /** Atomic conversion of a queued message into a side question. */
+  threadQueuedSideQuestions: Schema.optionalKey(Schema.Boolean),
   /** Server persists manual Active order through thread.active.reorder. */
   threadActiveReorder: Schema.optionalKey(Schema.Boolean),
   /** Server understands thread.auto-settle.set (per-thread auto-settle off).

@@ -233,6 +233,7 @@ export interface AskSideQuestionInput extends CommandMetadata {
   readonly sourceThreadId: ThreadId;
   readonly targetThreadId: ThreadId;
   readonly question: string;
+  readonly queuedRunId?: RunId;
   /** Generated when omitted. */
   readonly messageId?: MessageId;
   /** Defaults to the source thread's model selection on the server. */
@@ -981,6 +982,7 @@ export const askSideQuestion = Effect.fn("EnvironmentCommands.askSideQuestion")(
     messageId: input.messageId ?? MessageId.make(yield* crypto.randomUUIDv4.pipe(Effect.orDie)),
     question: input.question.trim(),
     title: sideQuestionTitle(input.question),
+    ...(input.queuedRunId === undefined ? {} : { queuedRunId: input.queuedRunId }),
     ...(input.modelSelection === undefined ? {} : { modelSelection: input.modelSelection }),
   });
 });
