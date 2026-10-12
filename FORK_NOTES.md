@@ -1954,7 +1954,10 @@ forks use upstream's portable handoff; see the 2026-10-05 notes for the full-tra
   `ProjectionStore.ts`, `ProviderTurnStartService.ts`). The side thread is a lineage child with
   `relationshipToParent: null` and an optional `sideQuestionOf` marker stored in the thread payload
   and projected onto shells (no column, no migration). Runtime mode `approval-required`; answer-only
-  instructions on every turn until promoted. Context is a ready context handoff built from the
+  instructions on every turn until promoted; promotion stamps `sideQuestionPromotedAt` (thread
+  payload) and each provider thread is told once that the instructions are lifted
+  (`sideQuestionPromotedTurnNote`, derived from provider turns started after promotion; forks keep the
+  stamp only when forked from before it, `ThreadForkService.ts`). Context is a ready context handoff built from the
   parent's full projection, **including the running turn**. At most 5 unarchived side questions per
   parent (oldest archived after commit). Capability `threadSideQuestions`.
 - **Shortcut:** `thread.askSideQuestion` defaults to `mod+shift+b` (upstream took `mod+alt+enter` for

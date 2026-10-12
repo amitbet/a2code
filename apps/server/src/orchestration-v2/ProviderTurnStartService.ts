@@ -47,7 +47,7 @@ import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import { makeProviderFailure } from "./ProviderFailure.ts";
 import * as RunExecutionService from "./RunExecutionService.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
-import { sideQuestionTurnNote } from "./SideQuestion.ts";
+import { sideQuestionPromotedTurnNote, sideQuestionTurnNote } from "./SideQuestion.ts";
 import {
   isRestartNoteContinuation,
   pendingRestartCancelledBackgroundWork,
@@ -956,18 +956,19 @@ export const layer: Layer.Layer<
         projection.providerTurns,
         projection.attempts,
       );
+      const compactionMessageIds: ReadonlySet<string> = new Set(
+        projection.messages
+          .filter(
+            (candidate) =>
+              candidate.attachments.length === 0 &&
+              candidate.text.trim().toLowerCase() === "/compact",
+          )
+          .map((candidate) => candidate.id),
+      );
       const restartCancelledWork = pendingRestartCancelledBackgroundWork({
         runs: projection.runs,
         providerTurns: projection.providerTurns,
-        compactionMessageIds: new Set(
-          projection.messages
-            .filter(
-              (candidate) =>
-                candidate.attachments.length === 0 &&
-                candidate.text.trim().toLowerCase() === "/compact",
-            )
-            .map((candidate) => candidate.id),
-        ),
+        compactionMessageIds,
         run,
         attempts: projection.attempts,
       });
@@ -976,8 +977,22 @@ export const layer: Layer.Layer<
           ? ""
           : restartCancelledBackgroundWorkNote(restartCancelledWork);
       // Fork-only `/btw`: every turn of a side question is told not to change
-      // the checkout its parent may still be working in.
-      const sideQuestionNote = sideQuestionTurnNote(projection.thread);
+      // the checkout its parent may still be working in, and the first turn
+      // after promotion is told that no longer applies.
+      const sideQuestionNote =
+        sideQuestionTurnNote(projection.thread) ||
+        sideQuestionPromotedTurnNote({
+          thread: projection.thread,
+          providerThreadId: providerThread.id,
+          runs: projection.runs,
+          attempts: projection.attempts,
+          providerTurns: projection.providerTurns,
+          compactionRunIds: new Set(
+            projection.runs
+              .filter((candidate) => compactionMessageIds.has(candidate.userMessageId))
+              .map((candidate) => candidate.id),
+          ),
+        });
       const turnNotes = [sideQuestionNote, restartNote].filter((part) => part !== "").join("\n\n");
       const tokenCap = yield* handoffTokenCapConfig.pipe(
         Effect.orElseSucceed(() => DEFAULT_HANDOFF_TOKEN_CAP),

@@ -11,6 +11,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderThreadId,
+  RunAttemptId,
   RunId,
   ThreadId,
   TurnItemId,
@@ -25,8 +26,11 @@ import * as Orchestrator from "./Orchestrator.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import {
+  forkSideQuestionPromotedAt,
   SIDE_QUESTION_INSTRUCTIONS,
   SIDE_QUESTION_MAX_UNARCHIVED_PER_PARENT,
+  SIDE_QUESTION_PROMOTED_INSTRUCTIONS,
+  sideQuestionPromotedTurnNote,
   sideQuestionTurnNote,
 } from "./SideQuestion.ts";
 import { makeOrchestratorV2ReplayLayerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
@@ -465,6 +469,7 @@ describe("thread.side-question.promote", () => {
       const shell = yield* orchestrator.getThreadShell(threadId);
       assert.isUndefined(shell?.sideQuestionOf);
       assert.strictEqual(sideQuestionTurnNote(promoted.thread), "");
+      assert.isNotNull(promoted.thread.sideQuestionPromotedAt ?? null);
 
       const again = yield* orchestrator
         .dispatch({
@@ -486,5 +491,85 @@ describe("sideQuestionTurnNote", () => {
     );
     assert.strictEqual(sideQuestionTurnNote({ sideQuestionOf: null }), "");
     assert.strictEqual(sideQuestionTurnNote({}), "");
+  });
+});
+
+describe("sideQuestionPromotedTurnNote", () => {
+  const promotedAt = DateTime.makeUnsafe("2026-10-12T07:00:00.000Z");
+  const before = DateTime.makeUnsafe("2026-10-12T06:50:00.000Z");
+  const after = DateTime.makeUnsafe("2026-10-12T07:05:00.000Z");
+  const providerThreadId = ProviderThreadId.make("promoted-provider-thread");
+  const thread = { sideQuestionOf: null, sideQuestionPromotedAt: promotedAt };
+  const runId = RunId.make("promoted-run");
+  const attemptId = RunAttemptId.make("promoted-attempt");
+  const turn = (startedAt: DateTime.Utc, status: "completed" | "failed" = "completed") => ({
+    providerThreadId,
+    runAttemptId: attemptId,
+    status,
+    startedAt,
+  });
+  const note = (input: {
+    readonly thread?: Parameters<typeof sideQuestionPromotedTurnNote>[0]["thread"];
+    readonly providerThreadId?: ProviderThreadId;
+    readonly status?: "completed" | "rolled_back";
+    readonly providerTurns?: ReadonlyArray<ReturnType<typeof turn>>;
+    readonly compaction?: boolean;
+  }) =>
+    sideQuestionPromotedTurnNote({
+      thread: input.thread ?? thread,
+      providerThreadId: input.providerThreadId ?? providerThreadId,
+      runs: [{ id: runId, status: input.status ?? "completed" }],
+      attempts: [{ id: attemptId, runId }],
+      providerTurns: input.providerTurns ?? [],
+      compactionRunIds: new Set(input.compaction === true ? [runId] : []),
+    });
+
+  it("is owed until a turn after promotion reaches the provider thread", () => {
+    assert.strictEqual(
+      note({ providerTurns: [turn(before)] }),
+      SIDE_QUESTION_PROMOTED_INSTRUCTIONS,
+    );
+    assert.strictEqual(note({ providerTurns: [turn(before), turn(after)] }), "");
+  });
+
+  it("is still owed after a failed, rolled-back, or compaction turn", () => {
+    assert.strictEqual(
+      note({ providerTurns: [turn(after, "failed")] }),
+      SIDE_QUESTION_PROMOTED_INSTRUCTIONS,
+    );
+    assert.strictEqual(
+      note({ status: "rolled_back", providerTurns: [turn(after)] }),
+      SIDE_QUESTION_PROMOTED_INSTRUCTIONS,
+    );
+    assert.strictEqual(
+      note({ compaction: true, providerTurns: [turn(after)] }),
+      SIDE_QUESTION_PROMOTED_INSTRUCTIONS,
+    );
+  });
+
+  it("is owed separately by another provider thread", () => {
+    assert.strictEqual(
+      note({
+        providerThreadId: ProviderThreadId.make("switched-provider-thread"),
+        providerTurns: [turn(after)],
+      }),
+      SIDE_QUESTION_PROMOTED_INSTRUCTIONS,
+    );
+  });
+
+  it("is never owed by a thread that was not promoted, or is still a side question", () => {
+    assert.strictEqual(note({ thread: { sideQuestionOf: null } }), "");
+    assert.strictEqual(
+      note({ thread: { sideQuestionOf: parentThreadId, sideQuestionPromotedAt: promotedAt } }),
+      "",
+    );
+  });
+
+  it("is kept by a fork only when its fork point started before promotion", () => {
+    assert.strictEqual(forkSideQuestionPromotedAt(thread, { startedAt: before }), promotedAt);
+    assert.isNull(forkSideQuestionPromotedAt(thread, { startedAt: after }));
+    assert.isNull(
+      forkSideQuestionPromotedAt({ sideQuestionPromotedAt: null }, { startedAt: before }),
+    );
   });
 });

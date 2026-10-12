@@ -16,6 +16,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
+import { forkSideQuestionPromotedAt } from "./SideQuestion.ts";
+
 export interface ThreadForkPlanV2 {
   readonly targetThread: OrchestrationV2AppThread;
   readonly transfer: OrchestrationV2ContextTransfer;
@@ -102,6 +104,14 @@ export const layer: Layer.Layer<ThreadForkServiceV2> = Layer.succeed(
             threadId: input.sourceProjection.thread.id,
             runId: input.sourceRun.id,
           },
+          ...(input.sourceProjection.thread.sideQuestionPromotedAt == null
+            ? {}
+            : {
+                sideQuestionPromotedAt: forkSideQuestionPromotedAt(
+                  input.sourceProjection.thread,
+                  input.sourceRun,
+                ),
+              }),
           createdAt: input.createdAt,
           updatedAt: input.createdAt,
           archivedAt: null,

@@ -3094,6 +3094,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return {
             ...thread,
             sideQuestionOf: null,
+            sideQuestionPromotedAt: now,
             runtimeMode: promotedRuntimeMode,
             updatedAt: now,
           };

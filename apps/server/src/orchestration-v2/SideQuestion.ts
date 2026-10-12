@@ -8,7 +8,9 @@
  * (wake routing, read-only) paths never apply to it. Its first run receives
  * the parent's visible history, including the run still in flight, as a
  * context handoff, and every turn is told to answer without changing the
- * checkout until the thread is promoted.
+ * checkout until the thread is promoted. After promotion, each provider thread
+ * is told once that those instructions no longer apply: dropping the note is
+ * invisible to an agent whose native history still carries it.
  *
  * @module SideQuestion
  */
@@ -17,9 +19,14 @@ import type {
   OrchestrationV2Actor,
   OrchestrationV2AppThread,
   OrchestrationV2CreationSource,
+  OrchestrationV2ProviderTurn,
+  OrchestrationV2Run,
+  OrchestrationV2RunAttempt,
+  ProviderThreadId,
+  RunId,
   ThreadId,
 } from "@t3tools/contracts";
-import type * as DateTime from "effect/DateTime";
+import * as DateTime from "effect/DateTime";
 
 /** Unarchived side questions a parent keeps; asking another archives the oldest. */
 export const SIDE_QUESTION_MAX_UNARCHIVED_PER_PARENT = 5;
@@ -44,6 +51,63 @@ export function sideQuestionTurnNote(
   thread: Pick<OrchestrationV2AppThread, "sideQuestionOf">,
 ): string {
   return isSideQuestionThread(thread) ? SIDE_QUESTION_INSTRUCTIONS : "";
+}
+
+/** Prepended once per provider thread after a side question is promoted. */
+export const SIDE_QUESTION_PROMOTED_INSTRUCTIONS =
+  "This thread was a side question and has been promoted to a regular thread. The earlier instruction not to modify files or change state no longer applies; work on the user's requests as this thread's agent.";
+
+/**
+ * The promotion note for a provider turn on `providerThreadId`, or "". Owed
+ * until a turn on that provider thread started after promotion and reached the
+ * provider, so delivery is derived rather than cleared. Compactions carry no
+ * notes and rolled-back runs leave native history, so neither counts; an
+ * earlier attempt of the starting run (a steer) does.
+ */
+export function sideQuestionPromotedTurnNote(input: {
+  readonly thread: Pick<OrchestrationV2AppThread, "sideQuestionOf" | "sideQuestionPromotedAt">;
+  /** The provider thread the turn starts on. */
+  readonly providerThreadId: ProviderThreadId;
+  readonly runs: ReadonlyArray<Pick<OrchestrationV2Run, "id" | "status">>;
+  readonly attempts: ReadonlyArray<Pick<OrchestrationV2RunAttempt, "id" | "runId">>;
+  readonly providerTurns: ReadonlyArray<
+    Pick<OrchestrationV2ProviderTurn, "providerThreadId" | "runAttemptId" | "status" | "startedAt">
+  >;
+  readonly compactionRunIds: ReadonlySet<RunId>;
+}): string {
+  const promotedAt = input.thread.sideQuestionPromotedAt ?? null;
+  if (promotedAt === null || isSideQuestionThread(input.thread)) return "";
+  const rolledBackRunIds = new Set(
+    input.runs.filter((run) => run.status === "rolled_back").map((run) => run.id),
+  );
+  const runIdByAttempt = new Map(input.attempts.map((attempt) => [attempt.id, attempt.runId]));
+  const delivered = input.providerTurns.some((turn) => {
+    if (turn.providerThreadId !== input.providerThreadId) return false;
+    if (turn.status !== "completed" && turn.status !== "interrupted") return false;
+    if (turn.startedAt === null || DateTime.isLessThan(turn.startedAt, promotedAt)) return false;
+    const runId = turn.runAttemptId === null ? undefined : runIdByAttempt.get(turn.runAttemptId);
+    return (
+      runId !== undefined && !rolledBackRunIds.has(runId) && !input.compactionRunIds.has(runId)
+    );
+  });
+  return delivered ? "" : SIDE_QUESTION_PROMOTED_INSTRUCTIONS;
+}
+
+/**
+ * The promotion time a fork of `source` at `sourceRun` keeps. The fork copies
+ * native history up to `sourceRun`, so a run that started after promotion
+ * already carried the promotion note into it.
+ */
+export function forkSideQuestionPromotedAt(
+  source: Pick<OrchestrationV2AppThread, "sideQuestionPromotedAt">,
+  sourceRun: Pick<OrchestrationV2Run, "startedAt">,
+): DateTime.Utc | null {
+  const promotedAt = source.sideQuestionPromotedAt ?? null;
+  return promotedAt !== null &&
+    sourceRun.startedAt !== null &&
+    !DateTime.isLessThan(sourceRun.startedAt, promotedAt)
+    ? null
+    : promotedAt;
 }
 
 /**

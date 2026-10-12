@@ -381,6 +381,11 @@ export const OrchestrationV2AppThread = Schema.Struct({
    * fork and subagent paths never treat a side question as either.
    */
   sideQuestionOf: Schema.optional(Schema.NullOr(ThreadId)),
+  /**
+   * Fork-only: when `thread.side-question.promote` ran. Provider threads that
+   * saw the side-question instructions are told once that they no longer apply.
+   */
+  sideQuestionPromotedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   forkedFrom: Schema.NullOr(
     Schema.Union([
       Schema.Struct({ type: Schema.Literal("run"), threadId: ThreadId, runId: RunId }),
@@ -1886,6 +1891,7 @@ export const OrchestrationV2AppThreadJson = OrchestrationV2AppThread.mapFields((
   snoozedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
+  sideQuestionPromotedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtcFromString)),
   lastVisitedAt: Schema.NullOr(Schema.DateTimeUtcFromString).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
