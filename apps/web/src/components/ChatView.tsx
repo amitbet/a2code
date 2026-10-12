@@ -88,6 +88,7 @@ import { readPastedComposerContext } from "./composerInlineTokenPaste";
 import { isPasteAsTextShortcut } from "@t3tools/client-runtime/text-paste";
 import { effectiveSnoozed, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
 import {
+  isSideQuestion,
   parseSideQuestionCommand,
   resolveSideQuestionSubmission,
   sideQuestionFromComposerText,
@@ -300,6 +301,7 @@ import {
   ChevronDownIcon,
   DownloadIcon,
   GitBranchIcon,
+  MessageCircleQuestionIcon,
   WifiOffIcon,
 } from "lucide-react";
 import { cn, randomUUID } from "~/lib/utils";
@@ -1543,7 +1545,8 @@ export default function ChatView(props: ChatViewProps) {
   } = props;
   const draftId = routeKind === "draft" ? props.draftId : null;
   const handleNewThread = useNewThreadHandler();
-  const { settleThread, pinThread, confirmAndUnpinThread, askSideQuestion } = useThreadActions();
+  const { settleThread, pinThread, confirmAndUnpinThread, askSideQuestion, promoteSideQuestion } =
+    useThreadActions();
   const routeThreadRef = useMemo(
     () => scopeThreadRef(environmentId, threadId),
     [environmentId, threadId],
@@ -7377,6 +7380,26 @@ export default function ChatView(props: ChatViewProps) {
     isUnsnoozing,
     isUnsettling,
   ]);
+  // A side question opened in the full view stays one (still told not to change
+  // files) until it is promoted, so the way out lives here as well as in the panel.
+  const activeThreadIsSideQuestion = activeThreadShell ? isSideQuestion(activeThreadShell) : false;
+  const sideQuestionBannerItem = useMemo<ComposerBannerStackItem | null>(() => {
+    if (!activeThreadIsSideQuestion || !activeThreadRef) {
+      return null;
+    }
+    return {
+      id: `side-question:${activeThreadRef.threadId}`,
+      variant: "info",
+      icon: <MessageCircleQuestionIcon />,
+      title: "This is a side question",
+      description: "It answers without changing files",
+      actions: (
+        <Button size="xs" variant="ghost" onClick={() => void promoteSideQuestion(activeThreadRef)}>
+          Promote to thread
+        </Button>
+      ),
+    };
+  }, [activeThreadIsSideQuestion, activeThreadRef, promoteSideQuestion]);
   // Session-scoped dismissals, one key per (thread, snapshot). A set rather
   // than a single slot so dismissing the banner on one thread does not
   // resurface it on another thread dismissed earlier.
@@ -7530,6 +7553,7 @@ export default function ChatView(props: ChatViewProps) {
       resumeCompactionBannerItem === null ? [] : [resumeCompactionBannerItem];
     const wokeThreadItems = wokeThreadBannerItem === null ? [] : [wokeThreadBannerItem];
     const parkedThreadItems = parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem];
+    const sideQuestionItems = sideQuestionBannerItem === null ? [] : [sideQuestionBannerItem];
     // The user asked for this one, so it leads the notice tier instead of trailing it.
     const usageLimitsItems = usageLimitsBanner === null ? [] : [usageLimitsBanner];
     const projectCloneItems = projectCloneBannerItem === null ? [] : [projectCloneBannerItem];
@@ -7544,6 +7568,7 @@ export default function ChatView(props: ChatViewProps) {
         ...resumeCompactionItems,
         ...wokeThreadItems,
         ...parkedThreadItems,
+        ...sideQuestionItems,
       ];
     }
     return [
@@ -7594,6 +7619,7 @@ export default function ChatView(props: ChatViewProps) {
         },
       },
       ...parkedThreadItems,
+      ...sideQuestionItems,
     ];
   }, [
     activeBranchMismatchKey,
@@ -7609,6 +7635,7 @@ export default function ChatView(props: ChatViewProps) {
     projectCloneBannerItem,
     resumeCompactionBannerItem,
     showBranchMismatchBanner,
+    sideQuestionBannerItem,
     systemComposerBannerItems,
     usageLimitsBanner,
     wokeThreadBannerItem,

@@ -4,16 +4,16 @@
  * conversation, and the tab label for that surface.
  *
  * The panel is deliberately slim: the answer, a follow-up box, and the ways
- * out (open as a thread, promote to a regular thread, dismiss). Anything
- * richer, such as answering an approval request, happens in the full thread
- * view.
+ * out (promote to a regular thread, dismiss). Anything richer, such as
+ * answering an approval request, happens in the full view (open it from the
+ * sidebar), which stays a side question until it is promoted.
  */
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/models";
 import { isSideQuestion } from "@t3tools/client-runtime/state/side-questions";
 import { type EnvironmentId, type ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import { useRouter } from "@tanstack/react-router";
-import { ArrowUp, CircleStop, ExternalLink, GitFork, MessageCircleQuestion, X } from "lucide-react";
+import { ArrowUp, CircleStop, GitFork, MessageCircleQuestion, X } from "lucide-react";
 import { memo, useCallback, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import ChatMarkdown from "~/components/ChatMarkdown";
@@ -129,7 +129,7 @@ export function SideQuestionPanel(props: {
   );
   const cwd = shell?.worktreePath ?? project?.workspaceRoot ?? undefined;
 
-  const openAsThread = useCallback(() => {
+  const openFullView = useCallback(() => {
     void router.navigate({
       to: "/$environmentId/$threadId",
       params: buildThreadRouteParams(sideQuestionRef),
@@ -140,9 +140,9 @@ export function SideQuestionPanel(props: {
     const result = await promoteSideQuestion(sideQuestionRef);
     if (result._tag === "Success") {
       onClose();
-      openAsThread();
+      openFullView();
     }
-  }, [onClose, openAsThread, promoteSideQuestion, sideQuestionRef]);
+  }, [onClose, openFullView, promoteSideQuestion, sideQuestionRef]);
 
   const dismiss = useCallback(async () => {
     const result = await archiveThread(sideQuestionRef);
@@ -212,9 +212,6 @@ export function SideQuestionPanel(props: {
             <GitFork />
           </SideQuestionAction>
         ) : null}
-        <SideQuestionAction label="Open as thread" onClick={openAsThread}>
-          <ExternalLink />
-        </SideQuestionAction>
         <SideQuestionAction
           label={running ? "Stop the answer before dismissing" : "Dismiss"}
           disabled={running}
@@ -256,7 +253,7 @@ export function SideQuestionPanel(props: {
                   ? "The side question is waiting for your approval."
                   : "The side question is waiting for your answer."}
               </span>
-              <Button variant="outline" size="micro" onClick={openAsThread}>
+              <Button variant="outline" size="micro" onClick={openFullView}>
                 Open to respond
               </Button>
             </div>
