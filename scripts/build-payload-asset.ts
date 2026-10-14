@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Ed25519 payload signing has no Effect equivalent.
 import * as NodeCrypto from "node:crypto";
 
 import { DesktopPayloadManifestSchema } from "@t3tools/contracts";
@@ -17,7 +18,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
-import { Command, Flag } from "effect/unstable/cli";
+import { Command, Flag } from "effect/cli";
 
 /**
  * Builds the JS-only payload release asset consumed by the desktop payload

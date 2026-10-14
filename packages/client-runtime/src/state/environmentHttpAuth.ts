@@ -5,7 +5,8 @@ import {
   ORCHESTRATION_PROTOCOL_VERSION_TEXT,
 } from "@t3tools/contracts";
 import * as Result from "effect/Result";
-import { FetchHttpClient, type HttpMethod } from "effect/unstable/http";
+import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
+import { FetchHttpClient, type HttpMethod } from "effect/http";
 
 import type { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
 import type { PreparedConnection, PreparedHttpAuthorization } from "../connection/model.ts";
@@ -13,6 +14,7 @@ import type { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import {
   executeEnvironmentHttpRequest,
   makeEnvironmentHttpApiGroupClient,
+  makeEnvironmentHttpApiUrlBuilder,
   RemoteEnvironmentAuthFetchError,
   RemoteEnvironmentAuthTimeoutError,
   type RemoteEnvironmentRequestError,
@@ -95,6 +97,16 @@ export const buildEnvironmentAuthHeaders = (
     return { authorization: `DPoP ${authorization.accessToken}`, dpop: proof };
   });
 
+interface AuthenticatedEnvironmentRequestInput<A> {
+  readonly prepared: PreparedConnection;
+  readonly signer: Option.Option<ManagedRelayDpopSigner["Service"]>;
+  readonly remoteAuthorization?: Option.Option<RemoteEnvironmentAuthorization["Service"]>;
+  readonly method: HttpMethod.HttpMethod;
+  readonly timeoutMs: number;
+  /** Some endpoints report rejected credentials in a successful response. */
+  readonly isUnauthorizedResponse?: (response: NoInfer<A>) => boolean;
+}
+
 /**
  * Resolve relay credentials at request time without replacing the live socket.
  * A rejected credential gets one refresh and retry, with a new request-bound
@@ -104,23 +116,79 @@ export const buildEnvironmentAuthHeaders = (
  * the same credential handling; see {@link executeAuthenticatedEnvironmentHttpRequest}
  * for the typed HttpApi group variant.
  */
-export const executeAuthenticatedEnvironmentRawHttpRequest = Effect.fn(
-  "clientRuntime.state.executeAuthenticatedEnvironmentRawHttpRequest",
-)(function* <A, E, R>(input: {
-  readonly prepared: PreparedConnection;
-  readonly signer: Option.Option<ManagedRelayDpopSigner["Service"]>;
-  readonly remoteAuthorization?: Option.Option<RemoteEnvironmentAuthorization["Service"]>;
-  readonly method: HttpMethod.HttpMethod;
-  readonly url: (httpBaseUrl: string) => string;
-  readonly timeoutMs: number;
-  readonly request: (input: {
-    readonly httpBaseUrl: string;
-    readonly requestUrl: string;
-    readonly headers: EnvironmentHttpAuthHeaders;
-  }) => Effect.Effect<A, E, R>;
-  /** Some endpoints report rejected credentials in a successful response. */
-  readonly isUnauthorizedResponse?: (response: NoInfer<A>) => boolean;
-}): Effect.fn.Return<A, RemoteEnvironmentRequestError, R> {
+export const executeAuthenticatedEnvironmentRawHttpRequest = <A, E, R>(
+  input: Parameters<typeof executeEnvironmentRequest<A, E, R>>[0],
+) =>
+  withEnvironmentRequestSpan(input, RAW_ENVIRONMENT_REQUEST_SPAN, executeEnvironmentRequest(input));
+
+/** {@link executeAuthenticatedEnvironmentRawHttpRequest} for a typed HttpApi group. */
+export const executeAuthenticatedEnvironmentHttpRequest = <
+  Group extends Parameters<typeof makeEnvironmentHttpApiGroupClient>[1],
+  A,
+  E,
+  R,
+>(
+  input: AuthenticatedEnvironmentRequestInput<A> & {
+    /**
+     * The URL to sign, from the group's contract URL builder. It encodes path
+     * params exactly like the request client, so the DPoP proof matches the
+     * URL actually sent.
+     */
+    readonly url: (urls: ReturnType<typeof makeEnvironmentHttpApiUrlBuilder>[Group]) => string;
+    readonly group: Group;
+    readonly request: (input: {
+      readonly client: Effect.Success<ReturnType<typeof makeEnvironmentHttpApiGroupClient<Group>>>;
+      readonly headers: EnvironmentHttpAuthHeaders;
+    }) => Effect.Effect<A, E, R>;
+  },
+): Effect.Effect<
+  A,
+  RemoteEnvironmentRequestError,
+  Effect.Services<ReturnType<typeof makeEnvironmentHttpApiGroupClient<Group>>> | R
+> => {
+  const { group, request, url, ...rest } = input;
+  return withEnvironmentRequestSpan(
+    input,
+    ENVIRONMENT_REQUEST_SPAN,
+    executeEnvironmentRequest({
+      ...rest,
+      url: (httpBaseUrl) => url(makeEnvironmentHttpApiUrlBuilder(httpBaseUrl)[group]),
+      request: ({ httpBaseUrl, headers }) =>
+        makeEnvironmentHttpApiGroupClient(httpBaseUrl, group).pipe(
+          Effect.flatMap((client) => request({ client, headers })),
+        ),
+    }),
+  );
+};
+
+const ENVIRONMENT_REQUEST_SPAN = "clientRuntime.state.executeAuthenticatedEnvironmentHttpRequest";
+const RAW_ENVIRONMENT_REQUEST_SPAN =
+  "clientRuntime.state.executeAuthenticatedEnvironmentRawHttpRequest";
+
+/**
+ * A DPoP request is T3 Connect work, so its span starts an exported trace that
+ * the environment continues; its local caller's span would leave that trace
+ * without a root.
+ */
+const withEnvironmentRequestSpan = <A, E, R>(
+  input: { readonly prepared: PreparedConnection },
+  spanName: string,
+  request: Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, R> =>
+  input.prepared.httpAuthorization?._tag === "Dpop"
+    ? request.pipe(Effect.withSpan(spanName, { root: true }), withRelayClientTracing)
+    : request.pipe(Effect.withSpan(spanName));
+
+const executeEnvironmentRequest = Effect.fnUntraced(function* <A, E, R>(
+  input: AuthenticatedEnvironmentRequestInput<A> & {
+    readonly url: (httpBaseUrl: string) => string;
+    readonly request: (input: {
+      readonly httpBaseUrl: string;
+      readonly requestUrl: string;
+      readonly headers: EnvironmentHttpAuthHeaders;
+    }) => Effect.Effect<A, E, R>;
+  },
+): Effect.fn.Return<A, RemoteEnvironmentRequestError, R> {
   let httpBaseUrl = input.prepared.httpBaseUrl;
   return yield* Effect.gen(function* () {
     let rejectedAccessToken: string | undefined;
@@ -207,38 +275,3 @@ export const executeAuthenticatedEnvironmentRawHttpRequest = Effect.fn(
     }),
   );
 });
-
-/** {@link executeAuthenticatedEnvironmentRawHttpRequest} for a typed HttpApi group. */
-export const executeAuthenticatedEnvironmentHttpRequest = <
-  Group extends Parameters<typeof makeEnvironmentHttpApiGroupClient>[1],
-  A,
-  E,
-  R,
->(input: {
-  readonly prepared: PreparedConnection;
-  readonly signer: Option.Option<ManagedRelayDpopSigner["Service"]>;
-  readonly remoteAuthorization?: Option.Option<RemoteEnvironmentAuthorization["Service"]>;
-  readonly method: HttpMethod.HttpMethod;
-  readonly url: (httpBaseUrl: string) => string;
-  readonly timeoutMs: number;
-  readonly group: Group;
-  readonly request: (input: {
-    readonly client: Effect.Success<ReturnType<typeof makeEnvironmentHttpApiGroupClient<Group>>>;
-    readonly headers: EnvironmentHttpAuthHeaders;
-  }) => Effect.Effect<A, E, R>;
-  /** Some endpoints report rejected credentials in a successful response. */
-  readonly isUnauthorizedResponse?: (response: NoInfer<A>) => boolean;
-}): Effect.Effect<
-  A,
-  RemoteEnvironmentRequestError,
-  Effect.Services<ReturnType<typeof makeEnvironmentHttpApiGroupClient<Group>>> | R
-> => {
-  const { group, request, ...rest } = input;
-  return executeAuthenticatedEnvironmentRawHttpRequest({
-    ...rest,
-    request: ({ httpBaseUrl, headers }) =>
-      makeEnvironmentHttpApiGroupClient(httpBaseUrl, group).pipe(
-        Effect.flatMap((client) => request({ client, headers })),
-      ),
-  });
-};

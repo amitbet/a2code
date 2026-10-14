@@ -1,5 +1,6 @@
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { settlePromise } from "@t3tools/client-runtime/state/runtime";
+import type { ScopedProjectRef } from "@t3tools/contracts";
 import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
 import { useCallback, useMemo, useState } from "react";
 
@@ -123,7 +124,8 @@ export function useSidebarDraftRows(input: {
 export function useSidebarDraftContextMenu<TProject>(input: {
   readonly resolveProject: (session: DraftSessionState) => TProject | null;
   readonly resolveWorkspaceRoot: (session: DraftSessionState) => string | null;
-  readonly openProjectSettings: (project: TProject) => void;
+  /** Receives the draft's own project ref, so a grouped project opens the member the draft is on. */
+  readonly openProjectSettings: (project: TProject, projectRef: ScopedProjectRef) => void;
 }): (draftId: DraftId, position: { x: number; y: number }) => void {
   const { openProjectSettings, resolveProject, resolveWorkspaceRoot } = input;
   const { copyToClipboard: copyPathToClipboard } = useCopyToClipboard<{ path: string }>({
@@ -176,7 +178,12 @@ export function useSidebarDraftContextMenu<TProject>(input: {
         if (clicked._tag === "Failure") return;
         switch (clicked.value) {
           case "project-settings":
-            if (project !== null) openProjectSettings(project);
+            if (project !== null) {
+              openProjectSettings(
+                project,
+                scopeProjectRef(session.environmentId, session.projectId),
+              );
+            }
             return;
           case "copy-path":
             if (workspacePath) copyPathToClipboard(workspacePath, { path: workspacePath });

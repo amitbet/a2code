@@ -13,6 +13,57 @@ lives in its own migration ledger" below). It is applied in `SessionStore.issue`
 `AuthPairingLinks.ts`, `PairingGrantStore.ts`, `EnvironmentAuth.ts` and the
 `AuthCreatePairingCredentialInput` contract.
 
+## 2026-10-14 upstream merge (Effect 4.0.1 paths, tsc-rs, upstream find) — migration notes
+
+Merged `upstream/main` through `9c9ae43d80` (751 commits). 79 conflicts.
+
+- **Effect 4.0.1 moved `effect/unstable/*` to `effect/*`** (`effect/sql`, `effect/http`,
+  `effect/reactivity`, `effect/cli`, `effect/process`). Fork-only files do not conflict, so they
+  break silently at typecheck: `git grep "effect/unstable/"` after every merge.
+- **Typecheck is `tsc-rs`**, and upstream renamed layers to `layerX` (`httpClientLayer` →
+  `layerHttpClient`, `makeTestLayer` → `layerTest`, …). Fork tests are the usual casualties.
+- **In-chat find is upstream's** (#10439, `chat.find` on `mod+f`, searches the server-side thread
+  history). The fork's find (`chatSearch`, `ChatSearchBar`, `useChatSearchHighlight`, the
+  `expandAllDisclosures`/`searchReveal` timeline helpers, `::highlight(chat-search)` CSS) is
+  deleted: both registered capture-phase Cmd+F listeners. Lost: matching collapsed tool-row labels.
+- **Keybinding collision:** upstream's `threadPanel.toggle` defaulted to `mod+shift+b`, the fork's
+  `/btw`. The fork keeps `mod+shift+b` on `thread.askSideQuestion` and moves `threadPanel.toggle`
+  to `mod+alt+shift+b` (`packages/shared/src/keybindings.ts`).
+- **Fork migration ledger:** `Layers/Sqlite.ts` is now `persistence/Sqlite.ts`.
+  `reconcileForkMigrationLedger` now detects a pre-split ledger by **fork migration names**, not
+  an id, because upstream's own ids now pass 56 (057-062 arrived).
+- **MCP:** upstream now lets agents read and write threads across projects. The fork adds only
+  `t3_thread_search` `scope: "all"` with the project filter applied in SQL before the limit.
+  `enableCrossProjectThreadSearch` in `settings.ts` is dead.
+- **Thread action menu:** `copy-thread-ref` and `export-zip` are read-only
+  (`threadActionRequiresOperate`), so clients without operate access keep them; `fork` is not.
+- **Mobile iOS:** upstream's tab bar renders no home header on iOS, so the machine switcher moved
+  into upstream's `ThreadListFilters.tsx` environment pill: no "All" entry, and reset clears only
+  the project. Android keeps the header switcher. Still open: on the native iPad split view a
+  machine switch from the Home sidebar does not send an open other-machine thread back to Home.
+- **Desktop:** upstream's new `DesktopLegacyLocalStorage` imported from the upstream T3 Code
+  profile; its `load` is a no-op here because the fork profile never moved. The Alpha build name
+  stays "A2 Code" (upstream dropped the parenthesized stage). Upstream's `t3` launcher
+  (`DesktopCliShim.ts`) is payload-aware here: it is rewritten on every backend start and runs the
+  active payload's `bin.mjs` with the same `--import` module hook as the backend. An AppImage mounts
+  somewhere new each run, so its launcher passes the shell entry in `T3CODE_PAYLOAD_SHELL_ENTRY`,
+  which the hook prefers over its baked-in path.
+- **fff 0.11 moved its entry to `dist/index.js`.** The fork names it by path in two places
+  (`DESKTOP_FFF_NODE_ENTRY` in `WorkspaceSearchIndex.ts`, and `DesktopBackendConfiguration.ts`);
+  the stale `dist/src/index.js` broke workspace file search in every packaged backend.
+  `WorkspaceSearchIndex.test.ts` now fails when an fff upgrade moves it again.
+- **Payload `minShellVersion` raised to `0.0.160`** in `release.yml`: fff 0.11 (native, loaded
+  from the shell), Electron 44.4.5, and new shell-resolved externals (`@muse-code/sdk`).
+- Linux `.deb` metadata (`com.t3tools.t3code.metainfo.xml`) is upstream-named; harmless because
+  the fork builds only the AppImage.
+- `provider/CodexRateLimits.ts` is deleted: it lost its caller in the 2026-10-05 rebuild. A window
+  reset now reaches the meter on the next provider status probe or turn.
+- **Cite is a right-click action** (fork divergence from upstream's #9146). Upstream's floating
+  `AssistantSelectionToolbar.tsx` is deleted; `chat/useAssistantSelectionContextMenu.ts` shows
+  **Cite in composer** / **Copy** when the right-click lands on selected assistant text (Copy
+  because claiming the event suppresses Electron's native menu). Upstream edits to the toolbar
+  arrive as modify/delete conflicts: keep it deleted and port the change into the hook.
+
 ## 2026-10-05 upstream merge (orchestration v2) — read this first
 
 Merged `upstream/main` through `a1d9d72aef` (212 commits), including upstream's new orchestrator
@@ -621,8 +672,7 @@ window `id`.
   `lib/useAccountRateLimitSnapshot.ts`. `lib/rateLimits.ts` was cut from 284 lines to presentation
   helpers only. **Do not re-introduce client-side derivation, merging, or persistence of quota** —
   it existed only to work around quota arriving over evictable per-thread activity streams.
-- **Kept:** `CodexRateLimits.ts` now holds only `nextCodexRateLimitResetRefreshAt`, the
-  reset-deadline refresh scheduler, which upstream has no equivalent for.
+- `CodexRateLimits.ts` (the reset-deadline refresh scheduler) was deleted in the 2026-10-14 merge.
 - **Two fork-owned fields were added to upstream's contract** (`packages/contracts/src/providerUsageLimits.ts`):
   `ServerProviderUsageWindow.detail` (the Claude spend window's `$169.27 / $1,000.00`, which a
   percentage cannot carry) and `ServerProviderUsageLimits.planType` (the meter's plan chip, from
@@ -1920,17 +1970,6 @@ the next merge; the per-feature sections below were updated to match.
 Retired 2026-10-05: upstream's server queue owns this (see the 2026-10-05 merge notes). The only
 fork addition is **Fork** on a queued row (`QueuedRunsControl.tsx` → `useThreadActions.forkQueuedRun`).
 
-### In-chat find (Cmd/Ctrl+F)
-
-- A find toolbar over the chat timeline. The timeline is virtualized, so native find-in-page only
-  sees mounted rows; this searches the row data, scrolls each match into view and paints highlights
-  over the rendered DOM. Cmd/Ctrl+F is a hard-coded listener (skipped inside the terminal), not a
-  keybinding command.
-- Since 2026-10-05 it indexes the v2 timeline with every fold open and opens only the fold hiding
-  the active match. Collapsed tool rows match on their visible label only (expanding fetches over
-  the network). Files: `components/chat/{chatSearch,ChatSearchBar,useChatSearchHighlight}.ts(x)`,
-  wiring in `ChatView.tsx` and `MessagesTimeline.tsx`.
-
 ### Answered user-input exchanges (questions + answers in the timeline)
 
 Upstream's v2 timeline shows an answered question as a one-line preview in the work log. The fork
@@ -2093,8 +2132,6 @@ selectedProviderEntry?.snapshot.usageLimits ?? null`, passed to `ComposerFooterP
     resolution (macOS Keychain included) are the fork's; the normalizer emits upstream's shape.
     `CursorDriver` reads it through `readCursorProviderUsageLimits` for both the provider check and
     the 5-minute `readUsageLimits` loop, in place of upstream's `cursorUsageLimits.ts`.
-  - `apps/server/src/provider/Layers/CodexRateLimits.ts` — fork-added, now only
-    `nextCodexRateLimitResetRefreshAt` (schedules a re-read just after a window resets).
 - The Claude spend window renders only when `get_usage` returns a numeric `extra_usage.utilization`
   with `is_enabled !== false`.
 - **Merge rule:** upstream owns the pipeline. Take its changes and re-apply the composer wiring plus
@@ -2521,12 +2558,6 @@ build:desktop` → `vp run dist:payload:asset`, using the
   merge and the `ComboboxItem` button is the entry point.
 - If upstream renames these again, redo the merge with `git merge-file` per the
   2026-08-14 notes rather than trusting git's rename detection.
-
-### Chat timeline search wiring
-
-In-chat find (`chatSearch.ts`, `ChatSearchBar.tsx`, `useChatSearchHighlight.ts`) indexes the v2
-timeline rows with every fold open, and opens only the fold hiding the active match. Re-check it when
-upstream changes `MessagesTimeline.logic.ts` row kinds.
 
 ### Payload hot-update channel (desktop JS-only updates)
 

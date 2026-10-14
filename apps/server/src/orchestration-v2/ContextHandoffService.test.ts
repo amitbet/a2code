@@ -12,13 +12,14 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- asserts the on-disk attachment paths handoffs print.
 import * as NodePath from "node:path";
 
 import * as ServerConfig from "../config.ts";
 import * as ContextHandoffService from "./ContextHandoffService.ts";
-import * as IdAllocator from "./IdAllocator.ts";
+import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 
-const TestLayer = ContextHandoffService.layer.pipe(
+const layerTest = ContextHandoffService.layer.pipe(
   Layer.provide(IdAllocator.layer),
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "t3-context-handoff-" })),
   Layer.provide(NodeServices.layer),
@@ -74,7 +75,7 @@ function importedItem(
       };
 }
 
-it.layer(TestLayer)("ContextHandoffService legacy import", (it) => {
+it.layer(layerTest)("ContextHandoffService legacy import", (it) => {
   it.effect("prepares imported history for the first native v2 turn", () =>
     Effect.gen(function* () {
       const service = yield* ContextHandoffService.ContextHandoffServiceV2;
@@ -210,7 +211,7 @@ const sourceItems = [
   sourceItem({ role: "user", id: "follow-up", text: "Fix it.", ordinal: 3 }),
 ];
 
-it.layer(TestLayer)("ContextHandoffService attachments", (it) => {
+it.layer(layerTest)("ContextHandoffService attachments", (it) => {
   it.effect("names earlier attachments with their on-disk paths on a provider switch", () =>
     Effect.gen(function* () {
       const { attachmentsDir } = yield* ServerConfig.ServerConfig;

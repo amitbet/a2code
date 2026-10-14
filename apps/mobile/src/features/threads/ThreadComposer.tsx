@@ -40,6 +40,8 @@ import {
   type RefObject,
 } from "react";
 import { Alert, Keyboard, Platform, Pressable, View, type ViewStyle } from "react-native";
+import { composerImageGallery } from "../../lib/composerImageGallery";
+import { filePreviewGallery } from "../../lib/filePreviewGallery";
 import { FilePreviewModal, type FilePreviewSource } from "../../components/FilePreviewModal";
 import {
   composerAttachmentUploadBlockReason,
@@ -108,6 +110,7 @@ import {
   type ComposerSendPresentation,
 } from "./composerSendPresentation";
 import { ComposerCommandPopover } from "./ComposerCommandPopover";
+import { ComposerPopoverAnchor } from "./ComposerPopoverAnchor";
 import { ComposerQueuedEditAttachments } from "./ComposerQueuedEdit";
 import { useComposerCommandMenu } from "./use-composer-command-menu";
 import {
@@ -146,6 +149,7 @@ export const COMPOSER_COLLAPSED_CHROME = 60;
 export const COMPOSER_EXPANDED_CHROME = 156;
 
 export interface ThreadComposerProps {
+  readonly canOperateThread: boolean;
   readonly draftMessage: string;
   readonly draftAttachments: ReadonlyArray<DraftComposerAttachment>;
   readonly placeholder: string;
@@ -450,7 +454,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const currentRuntimeMode = props.selectedThread.runtimeMode;
   const modelUnavailable =
     props.connectionState === "connected" &&
-    isModelSelectionUnavailable(props.serverConfig, currentModelSelection);
+    isModelSelectionUnavailable(
+      props.serverConfig,
+      currentModelSelection,
+      props.selectedThread.projectId,
+    );
   const selectedProviderStatus = useMemo(() => {
     if (!props.serverConfig) return null;
     return (
@@ -565,6 +573,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     (pendingPastedTextAttachmentCount > 0 ? "Attaching pasted text" : null) ??
     attachmentBlockReason;
   const canSend =
+    (props.canOperateThread || props.connectionState !== "connected") &&
     hasContent &&
     !contextImports[composerDraftKey] &&
     !voiceInput.blocksSubmission &&
@@ -580,9 +589,15 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     (source: FilePreviewSource) => {
       wasExpandedBeforePreviewRef.current = isFocused;
       setPreviewVideo(null);
-      setPreviewFile((current) => current ?? source);
+      setPreviewFile(
+        (current) =>
+          current ?? {
+            ...source,
+            gallery: filePreviewGallery(source, composerImageGallery(props.draftAttachments)),
+          },
+      );
     },
-    [isFocused],
+    [isFocused, props.draftAttachments],
   );
 
   const closePreview = useCallback(() => {
@@ -717,8 +732,19 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     ? undefined
     : currentModelSelection.instanceId;
   const modelOptions = useMemo(
-    () => buildModelOptions(props.serverConfig, currentModelSelection, lockedProviderInstanceId),
-    [props.serverConfig, currentModelSelection, lockedProviderInstanceId],
+    () =>
+      buildModelOptions(
+        props.serverConfig,
+        currentModelSelection,
+        lockedProviderInstanceId,
+        props.selectedThread.projectId,
+      ),
+    [
+      props.serverConfig,
+      currentModelSelection,
+      lockedProviderInstanceId,
+      props.selectedThread.projectId,
+    ],
   );
   const threadProviderGroups = useMemo(() => groupByProvider(modelOptions), [modelOptions]);
   const currentModelOption =
@@ -740,7 +766,9 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     () => ({
       ownerId: settingsOwnerId,
       environmentId: props.environmentId,
+      projectId: props.selectedThread.projectId,
       providerInstanceId: currentModelSelection.instanceId,
+      ...(lockedProviderInstanceId ? { lockedProviderInstanceId } : {}),
       providerGroups: threadProviderGroups,
       selectedModel: currentModelSelection,
       reportedModelSelection: props.reportedModelSelection,
@@ -766,7 +794,9 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       props.onUpdateRuntimeMode,
       providerOptionDescriptors,
       settingsOwnerId,
+      lockedProviderInstanceId,
       threadProviderGroups,
+      props.selectedThread.projectId,
     ],
   );
   const openSettings = useCallback(() => {
@@ -840,7 +870,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         {!voiceInput.isBusy &&
         composerMenu.trigger &&
         (composerMenu.items.length > 0 || composerMenu.trigger.kind === "pull-request") ? (
-          <View className="absolute inset-x-0 bottom-full z-10 mb-2">
+          <ComposerPopoverAnchor>
             <ComposerCommandPopover
               items={composerMenu.items}
               triggerKind={composerMenu.trigger.kind}
@@ -848,7 +878,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
               error={composerMenu.error}
               onSelect={composerMenu.onSelect}
             />
-          </View>
+          </ComposerPopoverAnchor>
         ) : null}
 
         {selectedProviderStatus?.compatibilityAdvisory?.message &&
@@ -1125,6 +1155,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                     accessibilityLabel="Stop agent"
                     icon="stop.fill"
                     variant="danger"
+                    disabled={!props.canOperateThread}
                     onPress={props.onStopThread}
                   />
                 ) : (
@@ -1219,6 +1250,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                       accessibilityLabel="Stop agent"
                       icon="stop.fill"
                       variant="danger"
+                      disabled={!props.canOperateThread}
                       onPress={props.onStopThread}
                     />
                   ) : voicePresentation.showsSend ? (
@@ -1234,6 +1266,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             </ComposerDictationToolbar>
           </Animated.View>
         </ComposerSurface>
+
+        {props.connectionState === "connected" && !props.canOperateThread ? (
+          <Text className="pt-2 text-xs text-foreground-muted">
+            This connection cannot control this task. You can still edit your draft.
+          </Text>
+        ) : null}
       </Animated.View>
 
       <VideoPreviewModal source={previewVideo} onRequestClose={closePreview} />

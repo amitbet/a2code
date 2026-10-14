@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { WS_METHODS } from "@t3tools/contracts";
-import { Atom } from "effect/unstable/reactivity";
+import { Atom } from "effect/reactivity";
 
 import { appAtomRegistry } from "./atomRegistry";
 
@@ -32,7 +32,6 @@ const pendingRpcAckRequests = new Map<string, PendingRpcAckRequest>();
 // interaction after idle; nothing waits on them, so an unreachable remote
 // environment must not surface as a slow request.
 const untrackedRpcAckMethods = new Set<string>([
-  WS_METHODS.previewAutomationConnect,
   WS_METHODS.serverGetUsageSummary,
   WS_METHODS.serverReportClientActivity,
 ]);

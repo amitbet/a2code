@@ -5,6 +5,7 @@ import type {
   EnvironmentId,
   MessageId,
   OrchestrationProjectShell,
+  OrchestrationV2ProviderGoal,
   OrchestrationV2RunStatus,
   OrchestrationV2ProviderFailureClass,
   OrchestrationV2ThreadProjection,
@@ -21,6 +22,8 @@ import { formatSubagentDisplayTitle } from "./subagentDisplay.ts";
 
 export interface EnvironmentProject extends OrchestrationProjectShell {
   readonly environmentId: EnvironmentId;
+  /** Derived from the environment's configured scratch root, never persisted. */
+  readonly isScratch?: true;
 }
 
 /**
@@ -112,6 +115,8 @@ export interface EnvironmentThreadShell {
   >;
   /** Provider instances that have owned the root conversation, oldest first. */
   readonly providerInstanceHistory: ReadonlyArray<ProviderInstanceId>;
+  /** Native `/goal` on the active provider thread. */
+  readonly goal: OrchestrationV2ProviderGoal | null;
   readonly itemCount: number;
   readonly visibleItemCount: number;
   readonly createdAt: string;
@@ -173,16 +178,18 @@ function terminalRunStatus(status: OrchestrationV2RunStatus): boolean {
 // Provider-native subagents have no runs; the server reports their live root
 // turn as activityRunStatus, which alone is enough to present a runtime.
 function shellRuntime(thread: OrchestrationV2ThreadShell): ThreadRuntimeSummary | null {
-  if (
-    thread.latestRunId === null &&
-    thread.activeProviderThreadId === null &&
-    (thread.activityRunStatus ?? null) === null
-  ) {
-    return null;
-  }
   const parkAtIdle =
     backgroundWorkHoldsCompletion(thread.pendingBackgroundTasks ?? []) &&
     thread.status !== "failed";
+  // A pull request watch can hold a thread that never ran.
+  if (
+    thread.latestRunId === null &&
+    thread.activeProviderThreadId === null &&
+    (thread.activityRunStatus ?? null) === null &&
+    !parkAtIdle
+  ) {
+    return null;
+  }
   const status = parkAtIdle ? "idle" : (thread.activityRunStatus ?? thread.status);
   return {
     status,
@@ -262,6 +269,7 @@ export function presentThreadShell(
     hasActionableProposedPlan: thread.hasActionableProposedPlan,
     pendingBackgroundTasks: thread.pendingBackgroundTasks ?? [],
     providerInstanceHistory: thread.providerInstanceHistory ?? [],
+    goal: thread.goal ?? null,
     itemCount: thread.itemCount,
     visibleItemCount: thread.visibleItemCount,
     createdAt: iso(thread.createdAt),

@@ -1,6 +1,6 @@
 import * as Effect from "effect/Effect";
-import * as Migrator from "effect/unstable/sql/Migrator";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Migrator from "effect/sql/Migrator";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { FORK_MIGRATIONS_TABLE } from "./ForkMigrations.ts";
 import { migrationEntries } from "./Migrations.ts";
@@ -24,7 +24,6 @@ const UPSTREAM_NAME_BY_FORK_NAME = new Map([
 ]);
 /** Fork-only migrations that still have a fork-ledger counterpart. */
 const FORK_LEDGER_ID_BY_NAME = new Map([["AuthPairingSessionLifetime", 1]]);
-const FORK_LEDGER_MARKER = { id: 33, name: "ProjectionThreadsForkedFrom" } as const;
 
 /**
  * Rewrites a pre-split fork ledger into upstream ids, once.
@@ -47,9 +46,9 @@ export const reconcileForkMigrationLedger = Effect.fn("reconcileForkMigrationLed
       const history = yield* sql<{ readonly migration_id: number; readonly name: string }>`
         SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id
       `;
-      const isForkLedger = history.some(
-        (row) => row.migration_id === FORK_LEDGER_MARKER.id && row.name === FORK_LEDGER_MARKER.name,
-      );
+      // Detected by name, never by id: upstream now records its own migrations
+      // at ids the fork once used (57-60), and a reconciled ledger holds no fork names.
+      const isForkLedger = history.some((row) => FORK_ONLY_NAMES.has(row.name));
       if (!isForkLedger) return false;
 
       const upstreamIdByName = new Map<string, number>(

@@ -1,3 +1,4 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Ed25519 verification of payload signatures has no Effect equivalent.
 import * as NodeCrypto from "node:crypto";
 
 /**

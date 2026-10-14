@@ -6,7 +6,7 @@ import {
   type MachineScopeSelection,
   resolveMachineEnvironmentId,
 } from "@t3tools/client-runtime/state/machine-scope";
-import { Atom } from "effect/unstable/reactivity";
+import { Atom } from "effect/reactivity";
 
 import { environmentCatalog } from "../connection/catalog";
 import { appAtomRegistry } from "../rpc/atomRegistry";

@@ -5,7 +5,7 @@ import {
   settlePromise,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId } from "@t3tools/contracts";
+import { AuthOrchestrationOperateScope, type EnvironmentId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback } from "react";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
@@ -25,6 +25,7 @@ import {
   useMachineEnvironmentId,
 } from "../state/environments";
 import { projectEnvironment } from "../state/projects";
+import { readEnvironmentScope } from "../state/session";
 import { useAtomCommand } from "../state/use-atom-command";
 import { buildThreadRouteParams } from "../threadRoutes";
 import { useNewThreadHandler } from "./useHandleNewThread";
@@ -144,6 +145,16 @@ export function useAddProjectFromPath(): (input: AddProjectFromPathInput) => Pro
         return true;
       }
 
+      if (!readEnvironmentScope(input.environmentId, AuthOrchestrationOperateScope)) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Cannot add project",
+            description: "This connection cannot add projects.",
+          }),
+        );
+        return false;
+      }
       const projectId = newProjectId();
       const createResult = await createProject({
         environmentId: input.environmentId,

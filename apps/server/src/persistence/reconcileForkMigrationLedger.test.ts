@@ -1,7 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import { FORK_MIGRATIONS_TABLE, runForkMigrations } from "./ForkMigrations.ts";
 import { migrationManifest, runMigrations } from "./Migrations.ts";
@@ -78,6 +78,9 @@ const migrate = Effect.gen(function* () {
   return { upstream, fork };
 });
 
+/** Upstream migrations from orchestration v2 on, which no pre-split fork ledger recorded. */
+const UPSTREAM_AFTER_FORK = migrationManifest.filter(([id]) => id >= 55);
+
 const sqlite = NodeSqliteClient.layer({ filename: ":memory:" });
 
 describe("reconcileForkMigrationLedger", () => {
@@ -88,10 +91,7 @@ describe("reconcileForkMigrationLedger", () => {
 
       const { upstream, fork } = yield* migrate;
 
-      assert.deepStrictEqual(upstream, [
-        [55, "OrchestrationV2"],
-        [56, "RemoveRedundantProjectionIndexes"],
-      ]);
+      assert.deepStrictEqual(upstream, UPSTREAM_AFTER_FORK);
       assert.deepStrictEqual(fork, []);
       assert.deepStrictEqual(yield* readLedger("effect_sql_migrations"), migrationManifest);
       assert.deepStrictEqual(yield* readLedger(FORK_MIGRATIONS_TABLE), [
@@ -113,8 +113,7 @@ describe("reconcileForkMigrationLedger", () => {
 
       assert.deepStrictEqual(upstream, [
         [54, "ProjectionThreadsAutoSettleDisabledAt"],
-        [55, "OrchestrationV2"],
-        [56, "RemoveRedundantProjectionIndexes"],
+        ...UPSTREAM_AFTER_FORK,
       ]);
       assert.deepStrictEqual(fork, [[1, "AuthPairingSessionLifetime"]]);
       assert.deepStrictEqual(yield* readLedger("effect_sql_migrations"), migrationManifest);
@@ -128,6 +127,26 @@ describe("reconcileForkMigrationLedger", () => {
       assert.deepStrictEqual(upstream, migrationManifest);
       assert.deepStrictEqual(fork, [[1, "AuthPairingSessionLifetime"]]);
       assert.isFalse(yield* reconcileForkMigrationLedger());
+    }).pipe(Effect.provide(sqlite)),
+  );
+
+  it.effect("leaves a reconciled ledger alone when upstream records ids the fork once used", () =>
+    Effect.gen(function* () {
+      // A database reconciled before upstream added 57+: upstream ids through 56.
+      yield* runMigrations({ toMigrationInclusive: 56 });
+      yield* runForkMigrations();
+
+      assert.isFalse(yield* reconcileForkMigrationLedger());
+      const upstream = yield* runMigrations();
+      assert.deepStrictEqual(
+        upstream,
+        migrationManifest.filter(([id]) => id > 56),
+      );
+      // Upstream now owns 57-62; the ledger still reads as upstream's own.
+      assert.isTrue(upstream.some(([id]) => id === 60));
+      assert.isFalse(yield* reconcileForkMigrationLedger());
+      assert.deepStrictEqual(yield* readLedger("effect_sql_migrations"), migrationManifest);
+      assert.deepStrictEqual(yield* migrate, { upstream: [], fork: [] });
     }).pipe(Effect.provide(sqlite)),
   );
 });

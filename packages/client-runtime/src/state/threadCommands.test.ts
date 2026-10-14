@@ -18,12 +18,12 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { Atom, AtomRegistry } from "effect/unstable/reactivity";
+import { Atom, AtomRegistry } from "effect/reactivity";
 
 import * as EnvironmentRegistry from "../connection/registry.ts";
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import type { RpcSession } from "../rpc/session.ts";
-import { remoteHttpClientLayer } from "../rpc/http.ts";
+import { layerRemoteHttpClient } from "../rpc/http.ts";
 import { createThreadEnvironmentAtoms } from "./threadCommands.ts";
 import { ThreadSnapshotLoader } from "./threadSnapshotHttp.ts";
 
@@ -121,7 +121,7 @@ const makeHarness = Effect.fn("TestThreadCommands.makeHarness")(function* () {
         ThreadSnapshotLoader,
         ThreadSnapshotLoader.of({ load: () => Effect.die("unused") }),
       ),
-      remoteHttpClientLayer(() => Promise.reject(new Error("unused"))),
+      layerRemoteHttpClient(() => Promise.reject(new Error("unused"))),
     ),
   );
   const snapshotAtom = Atom.family((_environmentId: EnvironmentId) => Atom.make(SNAPSHOT));

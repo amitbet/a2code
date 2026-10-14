@@ -23,7 +23,7 @@ import * as Effect from "effect/Effect";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
-import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
+import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import {
   forkSideQuestionPromotedAt,
@@ -33,12 +33,12 @@ import {
   sideQuestionPromotedTurnNote,
   sideQuestionTurnNote,
 } from "./SideQuestion.ts";
-import { makeOrchestratorV2ReplayLayerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
+import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
 
 const driver = ProviderDriverKind.make("codex");
 const instanceId = ProviderInstanceId.make("codex");
 const modelSelection = { instanceId, model: "test-model" };
-const adapter: ProviderAdapterV2Shape = {
+const adapter: ProviderAdapter.ProviderAdapterV2["Service"] = {
   instanceId,
   driver,
   getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
@@ -46,9 +46,9 @@ const adapter: ProviderAdapterV2Shape = {
   // The effect worker is off: dispatch decisions are inspected, never executed.
   openSession: () => Effect.die("Side question tests inspect dispatch only"),
 };
-const layer = makeOrchestratorV2ReplayLayerWithRegistry(
+const layer = ProviderReplayHarness.layerWithRegistry(
   { name: "side-question" },
-  ProviderAdapterRegistry.makeLayer([adapter]),
+  ProviderAdapterRegistry.layerFromAdapters([adapter]),
   { runEffectWorker: false },
 );
 

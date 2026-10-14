@@ -9,7 +9,7 @@
  * existed may already carry their schema (see `reconcileForkMigrationLedger`).
  */
 import * as Effect from "effect/Effect";
-import * as Migrator from "effect/unstable/sql/Migrator";
+import * as Migrator from "effect/sql/Migrator";
 
 import ForkMigration0001 from "./ForkMigrations/001_AuthPairingSessionLifetime.ts";
 

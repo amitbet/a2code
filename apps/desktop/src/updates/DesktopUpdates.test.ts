@@ -55,7 +55,7 @@ const makeHarness = (options: UpdatesHarnessOptions = {}) =>
     ): Effect.Effect<DesktopPayloadUpdateState> =>
       f ? SubscriptionRef.updateAndGet(payloadRef, f) : SubscriptionRef.get(payloadRef);
 
-    const payloadLayer = Layer.succeed(DesktopPayloadUpdates.DesktopPayloadUpdates, {
+    const layerPayload = Layer.succeed(DesktopPayloadUpdates.DesktopPayloadUpdates, {
       getState: SubscriptionRef.get(payloadRef),
       refreshCurrentVersion: transition(options.onRefresh),
       changes: SubscriptionRef.changes(payloadRef),
@@ -75,7 +75,7 @@ const makeHarness = (options: UpdatesHarnessOptions = {}) =>
       }).pipe(Effect.andThen(transition(options.onUpdate))),
     } satisfies DesktopPayloadUpdates.DesktopPayloadUpdates["Service"]);
 
-    const windowLayer = Layer.succeed(ElectronWindow.ElectronWindow, {
+    const layerWindow = Layer.succeed(ElectronWindow.ElectronWindow, {
       create: () => Effect.die("unexpected BrowserWindow creation"),
       main: Effect.succeed(Option.none()),
       currentMainOrFirst: Effect.succeed(Option.none()),
@@ -96,7 +96,7 @@ const makeHarness = (options: UpdatesHarnessOptions = {}) =>
       T3CODE_HOME: `/tmp/t3-desktop-updates-test-${process.pid}`,
     };
 
-    const environmentLayer = DesktopEnvironment.layer({
+    const layerEnvironment = DesktopEnvironment.layer({
       dirname: "/repo/apps/desktop/src",
       homeDirectory: `/tmp/t3-desktop-updates-home-${process.pid}`,
       platform: "darwin",
@@ -109,7 +109,7 @@ const makeHarness = (options: UpdatesHarnessOptions = {}) =>
     }).pipe(Layer.provide(Layer.mergeAll(NodeServices.layer, DesktopConfig.layerTest(configEnv))));
 
     const setUpdateChannelError = options.setUpdateChannelError;
-    const settingsLayer = setUpdateChannelError
+    const layerSettings = setUpdateChannelError
       ? Layer.succeed(DesktopAppSettings.DesktopAppSettings, {
           get: Effect.succeed(DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS),
           load: Effect.succeed(DesktopAppSettings.DEFAULT_DESKTOP_SETTINGS),
@@ -127,11 +127,11 @@ const makeHarness = (options: UpdatesHarnessOptions = {}) =>
       : DesktopAppSettings.layer;
 
     const layer = DesktopUpdates.layer.pipe(
-      Layer.provideMerge(windowLayer),
-      Layer.provideMerge(payloadLayer),
-      Layer.provideMerge(settingsLayer),
+      Layer.provideMerge(layerWindow),
+      Layer.provideMerge(layerPayload),
+      Layer.provideMerge(layerSettings),
       Layer.provideMerge(DesktopConfig.layerTest(configEnv)),
-      Layer.provideMerge(environmentLayer),
+      Layer.provideMerge(layerEnvironment),
       Layer.provideMerge(NodeServices.layer),
     );
 

@@ -12,8 +12,10 @@ import type {
   ScopedProjectRef,
   ScopedThreadRef,
   ServerConfig,
+  ThreadId,
 } from "@t3tools/contracts";
-import { Atom } from "effect/unstable/reactivity";
+import { hasThreadLinks, relabelThreadLinks } from "@t3tools/shared/threadLinks";
+import { Atom } from "effect/reactivity";
 import { useMemo } from "react";
 
 import { useMachineEnvironmentId } from "./machineScope";
@@ -33,6 +35,25 @@ const EMPTY_SIDE_QUESTION_SHELLS_ATOM = Atom.make<ReadonlyArray<EnvironmentThrea
 const EMPTY_SERVER_CONFIG_ATOM = Atom.make<ServerConfig | null>(null).pipe(
   Atom.withLabel("mobile-server-config:empty"),
 );
+const EMPTY_THREAD_TITLES: ReadonlyMap<ThreadId, string> = new Map();
+const EMPTY_THREAD_TITLES_ATOM = Atom.make(EMPTY_THREAD_TITLES).pipe(
+  Atom.withLabel("mobile-thread-titles:empty"),
+);
+
+/** Thread titles in one environment. Emits when a title changes, not on every shell update. */
+const threadTitlesAtom = Atom.family((environmentId: EnvironmentId) => {
+  let previous = EMPTY_THREAD_TITLES;
+  return Atom.make((get) => {
+    const index = get(environmentThreadShells.environmentThreadIndexAtom(environmentId));
+    const unchanged =
+      index.size === previous.size &&
+      Array.from(index).every(([threadId, shell]) => previous.get(threadId) === shell.title);
+    if (!unchanged) {
+      previous = new Map(Array.from(index, ([threadId, shell]) => [threadId, shell.title]));
+    }
+    return previous;
+  }).pipe(Atom.withLabel(`mobile-thread-titles:${environmentId}`));
+});
 
 /** Resolves when the project event reaches the live client store. */
 export function waitForProject(
@@ -81,34 +102,27 @@ function filterToMachine<A extends { readonly environmentId: EnvironmentId }>(
     : entities.filter((entity) => entity.environmentId === environmentId);
 }
 
+/** `rows` narrowed to the machine selected in the machine switcher. */
+export function useMachineScopedRows<A extends { readonly environmentId: EnvironmentId }>(
+  rows: ReadonlyArray<A>,
+): ReadonlyArray<A> {
+  const machineEnvironmentId = useMachineEnvironmentId();
+  return useMemo(() => filterToMachine(rows, machineEnvironmentId), [machineEnvironmentId, rows]);
+}
+
 /** Projects on the machine selected in the machine switcher. */
 export function useMachineProjects(): ReadonlyArray<EnvironmentProject> {
-  const projects = useProjects();
-  const machineEnvironmentId = useMachineEnvironmentId();
-  return useMemo(
-    () => filterToMachine(projects, machineEnvironmentId),
-    [machineEnvironmentId, projects],
-  );
+  return useMachineScopedRows(useProjects());
 }
 
 /** Every thread shell (including archived and subagent threads) on the selected machine. */
 export function useMachineThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
-  const threads = useThreadShells();
-  const machineEnvironmentId = useMachineEnvironmentId();
-  return useMemo(
-    () => filterToMachine(threads, machineEnvironmentId),
-    [machineEnvironmentId, threads],
-  );
+  return useMachineScopedRows(useThreadShells());
 }
 
 /** Thread-list shells (see `useNavigationThreadShells`) on the selected machine. */
 export function useMachineNavigationThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
-  const threads = useNavigationThreadShells();
-  const machineEnvironmentId = useMachineEnvironmentId();
-  return useMemo(
-    () => filterToMachine(threads, machineEnvironmentId),
-    [machineEnvironmentId, threads],
-  );
+  return useMachineScopedRows(useNavigationThreadShells());
 }
 
 export function useProject(ref: ScopedProjectRef | null): EnvironmentProject | null {
@@ -129,6 +143,24 @@ export function useSideQuestionShells(
     ref === null
       ? EMPTY_SIDE_QUESTION_SHELLS_ATOM
       : environmentThreadShells.sideQuestionShellsAtom(ref),
+  );
+}
+
+export function useChildThreadInputs(ref: ScopedThreadRef) {
+  return useAtomValue(environmentThreadShells.childThreadInputsAtom(ref));
+}
+
+/** `markdown` with each thread link labeled by the thread's current title in `environmentId`. */
+export function useLiveThreadLinkLabels(markdown: string, environmentId: EnvironmentId): string {
+  const titles = useAtomValue(
+    hasThreadLinks(markdown) ? threadTitlesAtom(environmentId) : EMPTY_THREAD_TITLES_ATOM,
+  );
+  return useMemo(
+    () =>
+      titles.size === 0
+        ? markdown
+        : relabelThreadLinks(markdown, (threadId) => titles.get(threadId)),
+    [markdown, titles],
   );
 }
 
