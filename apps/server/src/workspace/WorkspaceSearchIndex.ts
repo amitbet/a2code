@@ -44,6 +44,8 @@ const CONTENT_SEARCH_MAX_MATCHES_PER_FILE = 100;
 // runtime packages remain in the installed shell, so a payload must import fff
 // from that stable location instead of resolving it beside its own bin.mjs.
 const DESKTOP_FFF_NODE_MODULE_PATH = "T3CODE_DESKTOP_FFF_NODE_MODULE_PATH";
+/** fff's ESM entry inside the shell's server root. Keep in step with DesktopBackendConfiguration. */
+export const DESKTOP_FFF_NODE_ENTRY = "node_modules/@ff-labs/fff-node/dist/index.js";
 
 export class WorkspaceSearchIndexCreateFailed extends Schema.TaggedError<WorkspaceSearchIndexCreateFailed>()(
   "WorkspaceSearchIndexCreateFailed",
@@ -140,11 +142,7 @@ function bundledDesktopFffNodeModulePath(platform: NodeJS.Platform): string | un
     return undefined;
   }
   const serverArchive = platform === "win32" ? "server.asar" : "app.asar";
-  return NodePath.join(
-    resourcesPath,
-    serverArchive,
-    "node_modules/@ff-labs/fff-node/dist/src/index.js",
-  );
+  return NodePath.join(resourcesPath, serverArchive, DESKTOP_FFF_NODE_ENTRY);
 }
 
 const loadFileFinderModule = (

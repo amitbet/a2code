@@ -575,7 +575,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
     const serverVersion = Option.getOrElse(activePayloadVersion, () => environment.appVersion);
     const bundledFffNodeModulePath = environment.path.join(
       environment.serverRoot,
-      "node_modules/@ff-labs/fff-node/dist/src/index.js",
+      "node_modules/@ff-labs/fff-node/dist/index.js",
     );
 
     const bootstrap = {

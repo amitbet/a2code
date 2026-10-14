@@ -34,6 +34,14 @@ it.effect("loads fff from the desktop shell path for hot-update payloads", () =>
   }),
 );
 
+// The desktop names fff's entry by path; an fff release that moves it breaks
+// workspace search in every packaged app without failing anything else.
+it("names the entry the installed fff package exports", () => {
+  expect(import.meta.resolve("@ff-labs/fff-node")).toMatch(
+    new RegExp(`/${WorkspaceSearchIndex.DESKTOP_FFF_NODE_ENTRY.replaceAll(".", "\\.")}$`),
+  );
+});
+
 it.effect("scans only the requested workspace root", () =>
   Effect.gen(function* () {
     const finder = {
