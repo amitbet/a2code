@@ -189,7 +189,7 @@ import { MessageCopyButton } from "./MessageCopyButton";
 import { promptLinkFor } from "../promptLinks/copyPromptLink";
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import { WorkspaceEntryIcon, WorkspaceEntryTooltip } from "./WorkspaceEntryIcon";
-import { AssistantSelectionToolbar } from "./AssistantSelectionToolbar";
+import { useAssistantSelectionContextMenu } from "./useAssistantSelectionContextMenu";
 import type { AssistantCitationSourceAnchor } from "~/lib/assistantTextSelection";
 import {
   AssistantCitationSource,
@@ -1085,6 +1085,11 @@ const ConversationTimeline = memo(function ConversationTimeline({
   const [timelineViewportElement, setTimelineViewportElement] = useState<HTMLDivElement | null>(
     null,
   );
+  useAssistantSelectionContextMenu({
+    viewport: timelineViewportElement,
+    threadRef: citationThreadRef,
+    onCite: onCiteAssistantText,
+  });
   // Re-measure the minimap gutter when the chat column changes width without a viewport resize.
   const chatWidth = useClientSettings((settings) => settings.chatWidth);
   const {
@@ -1641,13 +1646,6 @@ const ConversationTimeline = memo(function ConversationTimeline({
               className="relative h-full min-h-0"
               data-assistant-citation-viewport="true"
             >
-              {onCiteAssistantText && citationThreadRef ? (
-                <AssistantSelectionToolbar
-                  viewport={timelineViewportElement}
-                  threadRef={citationThreadRef}
-                  onCite={onCiteAssistantText}
-                />
-              ) : null}
               <LegendList<MessagesTimelineRow>
                 ref={setTimelineList}
                 data={rows}
