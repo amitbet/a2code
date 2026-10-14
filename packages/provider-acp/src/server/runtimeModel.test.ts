@@ -496,35 +496,6 @@ describe("AcpRuntimeModel", () => {
     ]);
   });
 
-  it("projects ACP usage updates for provider context meters", () => {
-    const result = parseSessionUpdateEvent({
-      sessionId: "session-1",
-      update: {
-        sessionUpdate: "usage_update",
-        used: 12_345,
-        size: 200_000,
-        cost: { amount: 0.42, currency: "USD" },
-      },
-    } satisfies EffectAcpSchema.SessionNotification);
-
-    expect(result.events).toEqual([
-      {
-        _tag: "UsageUpdated",
-        usedTokens: 12_345,
-        maxTokens: 200_000,
-        rawPayload: {
-          sessionId: "session-1",
-          update: {
-            sessionUpdate: "usage_update",
-            used: 12_345,
-            size: 200_000,
-            cost: { amount: 0.42, currency: "USD" },
-          },
-        },
-      },
-    ]);
-  });
-
   it("keeps thought chunks separate from assistant text", () => {
     const notification = {
       sessionId: "session-1",

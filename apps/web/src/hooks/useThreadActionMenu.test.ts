@@ -72,6 +72,12 @@ vi.mock("../state/use-atom-command", () => ({
     return AsyncResult.success(undefined);
   },
 }));
+// Fork: thread export and transcript fetches.
+vi.mock("../connection/runtime", () => ({ connectionAtomRuntime: {} }));
+vi.mock("@t3tools/client-runtime/state/thread-export", () => ({
+  fetchEnvironmentThreadExport: vi.fn(),
+  fetchEnvironmentThreadTranscript: vi.fn(),
+}));
 vi.mock("../localApi", () => ({
   readLocalApi: () => ({
     contextMenu: { show: state.show, close: () => {} },
