@@ -135,6 +135,73 @@ describe("renderCliShim", () => {
     ]);
   });
 
+  it("runs an applied payload's server with its module hook", () => {
+    const root = tempRoot();
+    const executable = NodePath.join(root, "app");
+    writeExecutable(executable, REPORTER);
+    const shim = NodePath.join(root, "bin", "t3");
+    writeExecutable(
+      shim,
+      renderCliShim({
+        target: { kind: "direct", executable, entry: "/app.asar/bin.mjs" },
+        shimPath: shim,
+        t3Home: `${root}/home`,
+        payload: { entry: "/payloads/1.2.4/bin.mjs", importHook: "data:text/javascript,a%20b'c" },
+      }),
+    );
+    expect(run(shim, ["pair"]).stdout.split("\n").slice(1)).toEqual([
+      "--import",
+      "data:text/javascript,a%20b'c",
+      "/payloads/1.2.4/bin.mjs",
+      "pair",
+      "",
+    ]);
+  });
+
+  it("points a payload's hook at the AppImage's current mount", () => {
+    const root = tempRoot();
+    const image = NodePath.join(root, "image");
+    writeExecutable(
+      NodePath.join(image, "t3code"),
+      '#!/bin/sh\necho "shell=$T3CODE_PAYLOAD_SHELL_ENTRY"\nprintf "%s\\n" "$@"\n',
+    );
+    const appImage = NodePath.join(root, "T3 Code.AppImage");
+    writeExecutable(
+      appImage,
+      `#!/bin/sh\necho '${image}'\ntrap 'exit 0' TERM\nwhile :; do sleep 0.05; done\n`,
+    );
+    const shim = NodePath.join(root, "bin", "t3");
+    writeExecutable(
+      shim,
+      renderCliShim({
+        target: { kind: "appimage", appImage, executableName: "t3code" },
+        shimPath: shim,
+        t3Home: `${root}/home`,
+        payload: { entry: "/payloads/1.2.4/bin.mjs", importHook: "data:hook" },
+      }),
+    );
+    expect(run(shim, ["pair"]).stdout.split("\n")).toEqual([
+      `shell=${image}/resources/app.asar/apps/server/dist/bin.mjs`,
+      "--import",
+      "data:hook",
+      "/payloads/1.2.4/bin.mjs",
+      "pair",
+      "",
+    ]);
+  });
+
+  it("writes a Windows launcher that runs an applied payload", () => {
+    const script = renderCliShim({
+      target: { kind: "windows", executable: "C:\\T3\\T3 Code.exe", entry: "C:\\T3\\bin.mjs" },
+      shimPath: "C:\\Users\\me\\.t3\\bin\\t3.cmd",
+      t3Home: "C:\\Users\\me\\.t3",
+      payload: { entry: "C:\\Users\\me\\payloads\\bin.mjs", importHook: "data:a%20b" },
+    });
+    expect(script.split("\r\n")).toContain(
+      '"C:\\T3\\T3 Code.exe" --import "data:a%%20b" "C:\\Users\\me\\payloads\\bin.mjs" %*',
+    );
+  });
+
   it("tells a person whose app moved to reopen it", () => {
     const root = tempRoot();
     const shim = writeShim(root, {

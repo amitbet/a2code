@@ -3,6 +3,11 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 
+import * as DesktopPayloadLayout from "../updates/payloadLayout.ts";
+import {
+  PAYLOAD_SHELL_ENTRY_ENV,
+  makePayloadModuleResolutionImport,
+} from "../updates/payloadModuleResolution.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import { makeComponentLogger } from "./DesktopObservability.ts";
 
@@ -26,6 +31,13 @@ const cmdWord = (value: string) => `"${cmdText(value)}"`;
 
 const MOVED = "T3 Code has moved or been removed. Open the app once to update this command.";
 
+/**
+ * Fork: an applied hot-update payload's server, run with the hook that resolves
+ * its external packages from the shell, so `t3` runs the same server code as
+ * the app's backend instead of the one bundled in the shell.
+ */
+export type CliShimPayload = { readonly entry: string; readonly importHook: string };
+
 export type CliShimTarget =
   | { readonly kind: "appimage"; readonly appImage: string; readonly executableName: string }
   | { readonly kind: "direct"; readonly executable: string; readonly entry: string }
@@ -42,8 +54,9 @@ export const renderCliShim = (input: {
   readonly target: CliShimTarget;
   readonly shimPath: string;
   readonly t3Home: string;
+  readonly payload?: CliShimPayload | undefined;
 }) => {
-  const { target } = input;
+  const { target, payload } = input;
   if (target.kind === "windows") {
     const utf8 = [target.executable, target.entry, input.shimPath, input.t3Home].some((value) =>
       [...value].some((character) => character.codePointAt(0)! > 0x7f),
@@ -72,7 +85,9 @@ export const renderCliShim = (input: {
       `echo ${MOVED} 1>&2`,
       "exit /b 127",
       ":run",
-      `${cmdWord(target.executable)} ${cmdWord(target.entry)} %*`,
+      payload
+        ? `${cmdWord(target.executable)} --import ${cmdWord(payload.importHook)} ${cmdWord(payload.entry)} %*`
+        : `${cmdWord(target.executable)} ${cmdWord(target.entry)} %*`,
       'set "t3_exit=%ERRORLEVEL%"',
       ...restore,
       "exit /b %t3_exit%",
@@ -92,11 +107,18 @@ export const renderCliShim = (input: {
     "  exit 127",
     "fi",
   ];
+  const payloadArgs = payload
+    ? `--import ${shellWord(payload.importHook)} ${shellWord(payload.entry)}`
+    : undefined;
   if (target.kind === "direct") {
-    return [...header, `exec "$app" ${shellWord(target.entry)} "$@"`, ""].join("\n");
+    return [...header, `exec "$app" ${payloadArgs ?? shellWord(target.entry)} "$@"`, ""].join("\n");
   }
+  // The AppImage mounts somewhere new each run, so a payload's hook learns the
+  // shell's server entry from the environment rather than the baked-in path.
   const run = (root: string) =>
-    `"${root}/${target.executableName}" "${root}/resources/app.asar/${SERVER_ENTRY}" "$@"`;
+    payloadArgs
+      ? `${PAYLOAD_SHELL_ENTRY_ENV}="${root}/resources/app.asar/${SERVER_ENTRY}" "${root}/${target.executableName}" ${payloadArgs} "$@"`
+      : `"${root}/${target.executableName}" "${root}/resources/app.asar/${SERVER_ENTRY}" "$@"`;
   return [
     ...header,
     // Extract-and-run would make the runtime start the app instead of mounting it.
@@ -157,7 +179,19 @@ export const install = Effect.gen(function* () {
         // macOS and .deb installs live at a fixed path, so the launcher runs the app directly.
         onNone: () => ({ kind: "direct" as const, executable: process.execPath, entry }),
       });
-  const content = renderCliShim({ target, shimPath, t3Home: environment.baseDir });
+  // Rewritten on every backend start, so it follows the payload the backend runs.
+  const activeEntry = yield* DesktopPayloadLayout.resolveActiveBackendEntryPath;
+  const payload =
+    activeEntry === environment.bundledBackendEntryPath
+      ? undefined
+      : {
+          entry: activeEntry,
+          importHook: makePayloadModuleResolutionImport({
+            bundledEntryPath: environment.bundledBackendEntryPath,
+            payloadsDir: environment.payloadsDir,
+          }),
+        };
+  const content = renderCliShim({ target, shimPath, t3Home: environment.baseDir, payload });
 
   return yield* Effect.gen(function* () {
     const existing = yield* fs.readFileString(shimPath).pipe(Effect.option);

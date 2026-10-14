@@ -5,7 +5,10 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
-import { makePayloadModuleResolutionImport } from "./payloadModuleResolution.ts";
+import {
+  PAYLOAD_SHELL_ENTRY_ENV,
+  makePayloadModuleResolutionImport,
+} from "./payloadModuleResolution.ts";
 
 const writePackage = Effect.fn("writePackage")(function* (
   directory: string,
@@ -65,6 +68,23 @@ it.layer(NodeServices.layer)("payloadModuleResolution", (it) => {
 
       // The payload stays the main module, which the server's entrypoint check needs.
       assert.deepEqual(JSON.parse(output.trim()), ["esm", "cjs", "MODULE_NOT_FOUND", true]);
+
+      // An AppImage launcher names the shell's entry for this mount in the environment.
+      const remounted = yield* spawner.string(
+        ChildProcess.make(
+          process.execPath,
+          [
+            "--import",
+            makePayloadModuleResolutionImport({
+              bundledEntryPath: path.join(root, "old-mount/apps/server/dist/bin.mjs"),
+              payloadsDir,
+            }),
+            payloadEntryPath,
+          ],
+          { env: { [PAYLOAD_SHELL_ENTRY_ENV]: bundledEntryPath }, extendEnv: true },
+        ),
+      );
+      assert.deepEqual(JSON.parse(remounted.trim()), ["esm", "cjs", "MODULE_NOT_FOUND", true]);
     }).pipe(Effect.scoped),
   );
 });

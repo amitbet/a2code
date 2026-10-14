@@ -22,7 +22,9 @@ import * as Fs from "node:fs";
 import * as Module from "node:module";
 import * as Url from "node:url";
 
-const { bundledEntryPath, payloadsDir } = JSON.parse(__INPUT__);
+const input = JSON.parse(__INPUT__);
+const { payloadsDir } = input;
+const bundledEntryPath = process.env[input.shellEntryEnv] || input.bundledEntryPath;
 const fallbackParentURL = Url.pathToFileURL(bundledEntryPath).href;
 const directoryURL = (path) => Url.pathToFileURL(path).href.replace(/\\/?$/, "/");
 // Module URLs are real paths, so also match a payloads dir reached through a symlink.
@@ -56,6 +58,12 @@ Module.registerHooks?.({
 });
 `;
 
+/**
+ * Overrides the shell's server entry the hook resolves from. The `t3` launcher
+ * sets it for an AppImage, whose mount point changes on every run.
+ */
+export const PAYLOAD_SHELL_ENTRY_ENV = "T3CODE_PAYLOAD_SHELL_ENTRY";
+
 /** The `--import` argument value for a backend launched from a payload. */
 export function makePayloadModuleResolutionImport(input: {
   readonly bundledEntryPath: string;
@@ -64,7 +72,11 @@ export function makePayloadModuleResolutionImport(input: {
   const source = HOOK_SOURCE.replace(
     "__INPUT__",
     JSON.stringify(
-      JSON.stringify({ bundledEntryPath: input.bundledEntryPath, payloadsDir: input.payloadsDir }),
+      JSON.stringify({
+        bundledEntryPath: input.bundledEntryPath,
+        payloadsDir: input.payloadsDir,
+        shellEntryEnv: PAYLOAD_SHELL_ENTRY_ENV,
+      }),
     ),
   );
   return `data:text/javascript,${encodeURIComponent(source)}`;
