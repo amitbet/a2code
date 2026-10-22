@@ -1,5 +1,7 @@
+import { settlePromise } from "@t3tools/client-runtime/state/runtime";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { deriveThreadQueueWorkflowState } from "@t3tools/client-runtime/state/thread-workflows";
+import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { replaceComposerContextReferences } from "@t3tools/shared/composerContextReferences";
 import type {
   ChatAttachment as ContractChatAttachment,
@@ -17,7 +19,7 @@ import {
   MessageCircleQuestionIcon,
   PencilIcon,
 } from "lucide-react";
-import { useId, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
+import { useId, useImperativeHandle, useRef, useState, type Ref } from "react";
 
 import { useRightPanelStore } from "../../rightPanelStore";
 import { useAssetUrls } from "../../assets/assetUrls";
@@ -56,6 +58,19 @@ export interface QueuedRunsControlHandle {
   editLatest: (repeat: boolean) => boolean;
 }
 
+type ThreadQueueProjection = Parameters<typeof deriveThreadQueueWorkflowState>[0];
+
+function queuedImageResources(projection: ThreadQueueProjection | undefined) {
+  if (!projection) return [];
+  return deriveThreadQueueWorkflowState(projection).queuedRuns.flatMap(({ attachments }) =>
+    attachments.flatMap((attachment) =>
+      attachment.type === "image"
+        ? [{ _tag: "attachment" as const, attachmentId: attachment.id }]
+        : [],
+    ),
+  );
+}
+
 export function QueuedRunsControl({
   ref,
   ...props
@@ -69,7 +84,6 @@ export function QueuedRunsControl({
   readonly optimisticMessages: ReadonlyArray<
     Pick<ChatMessage, "id" | "inputIntent" | "text" | "attachments">
   >;
-  /** The saved queue entry stays visible while its draft is edited in the composer. */
   readonly editingRunId: RunId | null;
   readonly onEditQueuedRun: (request: EditQueuedRunRequest) => void;
   readonly onCancelEdit: () => void;
@@ -79,13 +93,12 @@ export function QueuedRunsControl({
   )?.projection;
   const reorder = useAtomCommand(threadEnvironment.reorderQueuedRun);
   const promote = useAtomCommand(threadEnvironment.promoteQueuedRun);
+  const resume = useAtomCommand(threadEnvironment.resumeThreadQueue);
   const cancel = useAtomCommand(threadEnvironment.cancelQueuedRun);
   const { forkQueuedRun, askSideQuestion } = useThreadActions();
   const [expanded, setExpanded] = useState(true);
   const queueListId = useId();
   const [busyRunId, setBusyRunId] = useState<RunId | null>(null);
-  // Live drag-reorder state: the dragged run and the queue index the row
-  // would be inserted at (0..queued.length) as of the latest dragover.
   const [dragState, setDragState] = useState<{
     readonly runId: RunId;
     readonly insertIndex: number | null;
@@ -93,50 +106,26 @@ export function QueuedRunsControl({
   // Drags must start from the grip, not from an accidental text-drag on the
   // row. The grip arms its run id on pointerdown; dragstart verifies it.
   const dragArmedRunIdRef = useRef<RunId | null>(null);
-  const workflow = useMemo(
-    () => (projection ? deriveThreadQueueWorkflowState(projection) : null),
-    [projection],
-  );
-  const queued = workflow?.queuedRuns ?? [];
-  const activeRun = workflow?.activeRun ?? null;
-  const canReorder = workflow?.canReorder === true;
-  const queuedImageAttachmentIds = useMemo(() => {
-    const ids: string[] = [];
-    for (const { attachments } of workflow?.queuedRuns ?? []) {
-      for (const attachment of attachments) {
-        if (attachment.type === "image") ids.push(attachment.id);
-      }
-    }
-    return ids;
-  }, [workflow]);
-  const queuedImageAttachmentResources = useMemo(
-    () =>
-      queuedImageAttachmentIds.map((attachmentId) => ({
-        _tag: "attachment" as const,
-        attachmentId,
-      })),
-    [queuedImageAttachmentIds],
-  );
+  const steerInFlightRef = useRef(false);
+  // Once the projection holds the message the optimistic copy is stale no
+  // matter what happened to its run — keying on still-queued runs alone would
+  // resurrect a phantom "pending" row after the run is cancelled or started.
+  const acknowledgedMessageIds = new Set((projection?.messages ?? []).map((message) => message.id));
+  const queuedImageAttachmentResources = queuedImageResources(projection);
   const queuedImageAttachmentUrls = useAssetUrls(
     props.environmentId,
     queuedImageAttachmentResources,
   );
-  const queuedImageUrlById = useMemo(
-    () =>
-      new Map(
-        queuedImageAttachmentIds.flatMap((attachmentId, index) => {
-          const url = queuedImageAttachmentUrls[index];
-          return url ? [[attachmentId, url] as const] : [];
-        }),
-      ),
-    [queuedImageAttachmentIds, queuedImageAttachmentUrls],
-  );
-  // Once the projection holds the message the optimistic copy is stale no
-  // matter what happened to its run — keying on still-queued runs alone would
-  // resurrect a phantom "pending" row after the run is cancelled or started.
-  const acknowledgedMessageIds = useMemo(
-    () => new Set((projection?.messages ?? []).map((message) => message.id)),
-    [projection],
+  const workflow = projection ? deriveThreadQueueWorkflowState(projection) : null;
+  const queued = workflow?.queuedRuns ?? [];
+  const activeRun = workflow?.activeRun ?? null;
+  const canReorder = workflow?.canReorder === true;
+  const canSend = workflow?.canSendNow === true || workflow?.canPromoteToSteer === true;
+  const queuedImageUrlById = new Map(
+    queuedImageAttachmentUrls.flatMap((url, index) => {
+      const resource = queuedImageAttachmentResources[index];
+      return url && resource ? [[resource.attachmentId, url] as const] : [];
+    }),
   );
   const optimisticQueued = props.optimisticMessages.filter(
     (message) => message.inputIntent === "queued_turn" && !acknowledgedMessageIds.has(message.id),
@@ -178,14 +167,11 @@ export function QueuedRunsControl({
 
   const move = async (runId: RunId, beforeRunId: RunId | null) => {
     setBusyRunId(runId);
-    try {
-      await reorder({
-        environmentId: props.environmentId,
-        input: { threadId: props.threadId, runId, beforeRunId },
-      });
-    } finally {
-      setBusyRunId(null);
-    }
+    await reorder({
+      environmentId: props.environmentId,
+      input: { threadId: props.threadId, runId, beforeRunId },
+    });
+    setBusyRunId(null);
   };
 
   const completeDrag = (runId: RunId, insertIndex: number | null) => {
@@ -194,25 +180,27 @@ export function QueuedRunsControl({
     if (insertIndex === null || busyRunId !== null) return;
     const draggedIndex = queued.findIndex(({ run }) => run.id === runId);
     if (draggedIndex === -1) return;
-    // Inserting immediately before or after itself is a no-op.
     if (insertIndex === draggedIndex || insertIndex === draggedIndex + 1) return;
     void move(runId, queued[insertIndex]?.run.id ?? null);
   };
 
-  const steerInFlightRef = useRef(false);
-  const steer = async (queuedRunId: RunId) => {
-    if (activeRun === null || !workflow?.canPromoteToSteer || steerInFlightRef.current) return;
+  const sendQueuedMessage = async (queuedRunId: RunId) => {
+    if (!canSend || steerInFlightRef.current) return;
     steerInFlightRef.current = true;
     setBusyRunId(queuedRunId);
-    try {
+    if (workflow?.canSendNow) {
+      await resume({
+        environmentId: props.environmentId,
+        input: { threadId: props.threadId, runId: queuedRunId },
+      });
+    } else if (activeRun !== null) {
       await promote({
         environmentId: props.environmentId,
         input: { threadId: props.threadId, queuedRunId, targetRunId: activeRun.id },
       });
-    } finally {
-      steerInFlightRef.current = false;
-      setBusyRunId(null);
     }
+    steerInFlightRef.current = false;
+    setBusyRunId(null);
   };
 
   // Fork: run this message in a fork now instead of waiting behind the active run.
@@ -223,7 +211,7 @@ export function QueuedRunsControl({
   }) => {
     const queuedRun = queued.find((entry) => entry.run.id === item.runId);
     setBusyRunId(item.runId);
-    try {
+    const cleanupResult0 = await settlePromise(async () => {
       const result = await forkQueuedRun(scopeThreadRef(props.environmentId, props.threadId), {
         runId: item.runId,
         text: item.text,
@@ -240,9 +228,9 @@ export function QueuedRunsControl({
           }),
         );
       }
-    } finally {
-      setBusyRunId(null);
-    }
+    });
+    setBusyRunId(null);
+    if (cleanupResult0._tag === "Failure") throw squashAtomCommandFailure(cleanupResult0);
   };
 
   const askInFlightRef = useRef(false);
@@ -253,7 +241,7 @@ export function QueuedRunsControl({
     askInFlightRef.current = true;
     const target = scopeThreadRef(props.environmentId, props.threadId);
     setBusyRunId(runId);
-    try {
+    const cleanupResult1 = await settlePromise(async () => {
       const result = await askSideQuestion(target, entry.text, { queuedRunId: runId });
       if (result._tag === "Failure") {
         if (!isAtomCommandInterrupted(result)) {
@@ -269,17 +257,17 @@ export function QueuedRunsControl({
         return;
       }
       useRightPanelStore.getState().openSideQuestion(target, result.value.threadId);
-    } finally {
-      askInFlightRef.current = false;
-      setBusyRunId(null);
-    }
+    });
+    askInFlightRef.current = false;
+    setBusyRunId(null);
+    if (cleanupResult1._tag === "Failure") throw squashAtomCommandFailure(cleanupResult1);
   };
 
   useImperativeHandle(ref, () => ({
     steerNext(repeat) {
       const next = queued[0];
-      if (!next || !workflow?.canPromoteToSteer) return false;
-      if (!repeat && busyRunId === null) void steer(next.run.id);
+      if (!next || !canSend) return false;
+      if (!repeat && busyRunId === null) void sendQueuedMessage(next.run.id);
       return true;
     },
     // Declines while a queued message is already being edited so the key keeps
@@ -304,14 +292,11 @@ export function QueuedRunsControl({
 
   const remove = async (runId: RunId) => {
     setBusyRunId(runId);
-    try {
-      await cancel({
-        environmentId: props.environmentId,
-        input: { threadId: props.threadId, runId },
-      });
-    } finally {
-      setBusyRunId(null);
-    }
+    await cancel({
+      environmentId: props.environmentId,
+      input: { threadId: props.threadId, runId },
+    });
+    setBusyRunId(null);
   };
 
   return (
@@ -343,8 +328,10 @@ export function QueuedRunsControl({
         <ComposerBanner.Scroll className={cn("max-h-32", !expanded && "hidden")}>
           <ComposerBanner.Children render={<ol />} id={queueListId}>
             {items.map((item) => {
-              const previewText = replaceComposerContextReferences(item.text, (reference) =>
-                reference.kind === "image" && item.thumbnails.length > 0 ? "" : reference.label,
+              const previewText = assistantCitationsToPlainText(
+                replaceComposerContextReferences(item.text, (reference) =>
+                  reference.kind === "image" && item.thumbnails.length > 0 ? "" : reference.label,
+                ),
               ).trim();
               const rowRunId = item.runId;
               const rowServerIndex = item.serverIndex;
@@ -570,18 +557,16 @@ export function QueuedRunsControl({
                               }
                               onClick={() => {
                                 if (item.runId !== null) {
-                                  void steer(item.runId);
+                                  void sendQueuedMessage(item.runId);
                                 }
                               }}
                             >
                               <CornerUpRightIcon />
-                              Steer
+                              {workflow?.canSendNow ? "Send now" : "Steer"}
                             </Button>
                           </TooltipTrigger>
                           <TooltipPopup>
-                            {activeRun === null
-                              ? "There is no active run to steer"
-                              : `Send as a steer instead${item.serverIndex === 0 && props.steerShortcutLabel ? ` (${props.steerShortcutLabel})` : ""}`}
+                            {`${workflow?.canSendNow ? "Start a turn with this message" : "Send as a steer instead"}${item.serverIndex === 0 && props.steerShortcutLabel ? ` (${props.steerShortcutLabel})` : ""}`}
                           </TooltipPopup>
                         </Tooltip>
                         <Tooltip>

@@ -1,3 +1,4 @@
+import { useStableCallback } from "~/hooks/useStableCallback";
 /**
  * `/btw` side questions beside their parent thread: the chip strip above the
  * parent's composer, the right-panel surface that shows one side question's
@@ -100,10 +101,8 @@ export function SideQuestionPanel(props: {
 }) {
   const { onClose } = props;
   const router = useRouter();
-  const sideQuestionRef = useMemo(
-    () => scopeThreadRef(props.environmentId, ThreadId.make(props.sideQuestionThreadId)),
-    [props.environmentId, props.sideQuestionThreadId],
-  );
+  const sideQuestionRef = (() =>
+    scopeThreadRef(props.environmentId, ThreadId.make(props.sideQuestionThreadId)))();
   const shell = useThreadShell(sideQuestionRef);
   const turnItems = useThreadVisibleTurnItems(sideQuestionRef);
   const project = useProject(shell ? scopeProjectRef(props.environmentId, shell.projectId) : null);
@@ -114,52 +113,49 @@ export function SideQuestionPanel(props: {
 
   const running = shell ? threadRuntimeIsActive(shell.runtime) : false;
   const stillSideQuestion = shell ? isSideQuestion(shell) : false;
-  const messages = useMemo(
-    () =>
-      turnItems.flatMap(({ item }): SideQuestionMessage[] => {
-        if (item.type === "user_message") {
-          return [{ id: item.id, role: "user", text: item.text, streaming: false }];
-        }
-        if (item.type === "assistant_message") {
-          return [{ id: item.id, role: "assistant", text: item.text, streaming: item.streaming }];
-        }
-        return [];
-      }),
-    [turnItems],
-  );
+  const messages = (() =>
+    turnItems.flatMap(({ item }): SideQuestionMessage[] => {
+      if (item.type === "user_message") {
+        return [{ id: item.id, role: "user", text: item.text, streaming: false }];
+      }
+      if (item.type === "assistant_message") {
+        return [{ id: item.id, role: "assistant", text: item.text, streaming: item.streaming }];
+      }
+      return [];
+    }))();
   const cwd = shell?.worktreePath ?? project?.workspaceRoot ?? undefined;
 
-  const openFullView = useCallback(() => {
+  const openFullView = useStableCallback(() => {
     void router.navigate({
       to: "/$environmentId/$threadId",
       params: buildThreadRouteParams(sideQuestionRef),
     });
-  }, [router, sideQuestionRef]);
+  });
 
-  const promote = useCallback(async () => {
+  const promote = useStableCallback(async () => {
     const result = await promoteSideQuestion(sideQuestionRef);
     if (result._tag === "Success") {
       onClose();
       openFullView();
     }
-  }, [onClose, openFullView, promoteSideQuestion, sideQuestionRef]);
+  });
 
-  const dismiss = useCallback(async () => {
+  const dismiss = useStableCallback(async () => {
     const result = await archiveThread(sideQuestionRef);
     if (result._tag === "Success") {
       onClose();
     }
-  }, [archiveThread, onClose, sideQuestionRef]);
+  });
 
-  const stop = useCallback(() => {
+  const stop = useStableCallback(() => {
     void interruptTurn({
       environmentId: props.environmentId,
       input: { threadId: sideQuestionRef.threadId },
     });
-  }, [interruptTurn, props.environmentId, sideQuestionRef.threadId]);
+  });
 
   // A follow-up sent while the answer is running queues behind it on the server.
-  const sendFollowUp = useCallback(() => {
+  const sendFollowUp = useStableCallback(() => {
     const text = followUp.trim();
     if (text.length === 0 || shell === null) return;
     void startTurn({
@@ -172,17 +168,14 @@ export function SideQuestionPanel(props: {
       },
     });
     setFollowUp("");
-  }, [followUp, props.environmentId, shell, sideQuestionRef.threadId, startTurn]);
+  });
 
-  const onFollowUpKeyDown = useCallback(
-    (event: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-        event.preventDefault();
-        sendFollowUp();
-      }
-    },
-    [sendFollowUp],
-  );
+  const onFollowUpKeyDown = useStableCallback((event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      sendFollowUp();
+    }
+  });
 
   if (shell === null) {
     return (

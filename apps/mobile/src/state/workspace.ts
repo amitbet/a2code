@@ -2,8 +2,8 @@ import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentShellState } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
-import { Atom } from "effect/reactivity";
 import { useMemo } from "react";
+import { Atom } from "effect/reactivity";
 
 import { environmentShell, environmentShellSummaryAtom } from "./shell";
 import { projectWorkspaceState } from "./workspaceModel";
@@ -16,6 +16,16 @@ export const workspaceConnections = createWorkspaceConnectionAtoms({
   networkStatusValueAtom: environmentCatalog.networkStatusValueAtom,
   presentationAtom: environmentPresentations.presentationAtom,
 });
+
+// A disconnected environment's retries also leave its shell synchronizing.
+const hasSyncingConnectedEnvironmentAtom = Atom.make((get) =>
+  get(workspaceConnections.environmentsAtom).some(
+    (environment) =>
+      environment.isEnabled &&
+      environment.connectionState === "connected" &&
+      get(environmentShell.stateValueAtom(environment.environmentId)).status === "synchronizing",
+  ),
+).pipe(Atom.withLabel("mobile:has-syncing-connected-environment"));
 
 export function useWorkspaceEnvironments() {
   return useAtomValue(workspaceConnections.environmentsAtom);
@@ -77,6 +87,7 @@ export function useWorkspaceState(environmentId: EnvironmentId | null = null) {
         : allEnvironments.filter((environment) => environment.environmentId === environmentId),
     [allEnvironments, environmentId],
   );
+  const hasSyncingConnectedEnvironment = useAtomValue(hasSyncingConnectedEnvironmentAtom);
   const state = useMemo(
     () =>
       projectWorkspaceState({
@@ -84,8 +95,9 @@ export function useWorkspaceState(environmentId: EnvironmentId | null = null) {
         networkStatus,
         environments: projectedEnvironments,
         shellSummary,
+        hasSyncingConnectedEnvironment,
       }),
-    [isReady, networkStatus, projectedEnvironments, shellSummary],
+    [isReady, networkStatus, projectedEnvironments, shellSummary, hasSyncingConnectedEnvironment],
   );
 
   return {

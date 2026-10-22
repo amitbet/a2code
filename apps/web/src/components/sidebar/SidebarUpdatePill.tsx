@@ -1,3 +1,6 @@
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
+import { settlePromise } from "@t3tools/client-runtime/state/runtime";
+import { useStableCallback } from "~/hooks/useStableCallback";
 import type { DesktopBridge, DesktopUpdateState } from "@t3tools/contracts";
 import { TriangleAlertIcon } from "lucide-react";
 import { type ComponentProps, useCallback, useEffect, useId, useRef, useState } from "react";
@@ -155,18 +158,18 @@ async function downloadLocalUpdate(
     Failures toast. A refused install (the download is not marked ready yet)
     leaves the restart to the user. An in-place payload arms its pending
     pointer and relaunches, so there is nothing to report. */
-async function installLocalUpdate(bridge: DesktopBridge): Promise<void> {
+async function installLocalUpdate(bridge: DesktopBridge): Promise<boolean> {
   try {
     const result = await bridge.installUpdate();
-    if (result.requiresRelaunch) return;
+    if (result.requiresRelaunch) return true;
     if (!result.accepted) {
       showDesktopUpdateDownloadedToast(bridge, result.state);
-      return;
+      return false;
     }
     const actionError = shouldToastDesktopUpdateActionResult(result)
       ? getDesktopUpdateActionError(result)
       : null;
-    if (!actionError) return;
+    if (!actionError) return result.accepted;
     toastManager.add(
       stackedThreadToast({
         type: "error",
@@ -183,6 +186,7 @@ async function installLocalUpdate(bridge: DesktopBridge): Promise<void> {
       }),
     );
   }
+  return false;
 }
 
 /**
@@ -208,13 +212,13 @@ function SidebarUpdateControl() {
   const releaseNotesTriggerId = useId();
   const prefersReducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
 
-  useEffect(() => {
-    if (prefersReducedMotion) {
-      setIsCheckAnimationLatched(false);
-    } else if (state?.status === "checking") {
-      setIsCheckAnimationLatched(true);
-    }
-  }, [prefersReducedMotion, state?.status]);
+  const animationStatus = prefersReducedMotion ? "reduced" : state?.status;
+  const [previousAnimationStatus, setPreviousAnimationStatus] = useState(animationStatus);
+  if (previousAnimationStatus !== animationStatus) {
+    setPreviousAnimationStatus(animationStatus);
+    if (prefersReducedMotion) setIsCheckAnimationLatched(false);
+    else if (state?.status === "checking") setIsCheckAnimationLatched(true);
+  }
 
   const action = state ? resolveDesktopUpdateButtonAction(state) : "none";
   const isDownloading = state?.status === "downloading";
@@ -272,7 +276,7 @@ function SidebarUpdateControl() {
     }
   }, [releaseNotesPopoverHandle, releaseNotesTriggerId, showReleaseNotesPopover]);
 
-  const handleAction = useCallback(() => {
+  const handleAction = useStableCallback(() => {
     const bridge = window.desktopBridge;
     if (isInteractionDisabled) return;
 
@@ -328,9 +332,9 @@ function SidebarUpdateControl() {
         );
       })
       .finally(() => setIsActionPending(false));
-  }, [action, isInteractionDisabled, prefersReducedMotion, runsEverything, state]);
+  });
 
-  const runEverything = useCallback(async () => {
+  const runEverything = useStableCallback(async () => {
     const bridge = window.desktopBridge;
     setIsConfirmingEverything(false);
     setIsActionPending(true);
@@ -350,20 +354,19 @@ function SidebarUpdateControl() {
           description: error instanceof Error ? error.message : "An unexpected error occurred.",
         }),
       );
-    } finally {
-      setIsUpdatingEverything(false);
-      setIsActionPending(false);
     }
-  }, [action, everything]);
+    setIsUpdatingEverything(false);
+    setIsActionPending(false);
+  });
 
-  const handleCheckAnimationIteration = useCallback(() => {
+  const handleCheckAnimationIteration = useStableCallback(() => {
     setIsCheckAnimationLatched(
       shouldContinueDesktopUpdateCheckAnimation({
         isChecking: state?.status === "checking",
         prefersReducedMotion,
       }),
     );
-  }, [prefersReducedMotion, state?.status]);
+  });
 
   // Web has no local app to check, so it only shows the button for remote work.
   if (!isElectron && !runsEverything && !isUpdatingEverything) return null;
@@ -491,6 +494,7 @@ function SidebarUpdateControl() {
         summary={everything.summary}
         lines={everything.lines}
         restarts={everything.restarts}
+        skipped={everything.skipped}
         onConfirm={() => void runEverything()}
       />
     </SidebarMenuItem>

@@ -5,7 +5,7 @@ import { useMemo } from "react";
 import { useMachineEnvironmentId } from "./machineScope";
 import { buildPendingNewTasks, type PendingNewTask } from "./pending-new-tasks-model";
 import { flattenQueuedThreadMessages } from "./thread-outbox-model";
-import { composerDraftsAtom } from "./use-composer-drafts";
+import { newTaskComposerDraftsAtom } from "./use-composer-drafts";
 import { useThreadOutboxMessages } from "./use-thread-outbox";
 
 export type {
@@ -23,7 +23,7 @@ export function usePendingNewTasks(
   scopedEnvironmentId?: EnvironmentId | null,
 ): ReadonlyArray<PendingNewTask> {
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
-  const drafts = useAtomValue(composerDraftsAtom);
+  const drafts = useAtomValue(newTaskComposerDraftsAtom);
   const machineEnvironmentId = useMachineEnvironmentId();
   const environmentId =
     scopedEnvironmentId === undefined ? machineEnvironmentId : scopedEnvironmentId;

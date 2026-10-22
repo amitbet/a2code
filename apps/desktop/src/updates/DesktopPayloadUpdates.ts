@@ -171,126 +171,121 @@ export const make = Effect.gen(function* () {
   const resolveAssetUrl = (manifest: DesktopPayloadManifest): string =>
     new URL(manifest.fileName, manifestUrl).toString();
 
-  const verifyArchive = (
+  const verifyArchive = Effect.fn("Payload.verifyArchive")(function* (
     manifest: DesktopPayloadManifest,
     bytes: Uint8Array,
-  ): Effect.Effect<void, string> =>
-    Effect.gen(function* () {
-      if (bytes.byteLength !== manifest.sizeBytes) {
-        return yield* Effect.fail(
-          `Payload size mismatch (expected ${manifest.sizeBytes}, got ${bytes.byteLength}).`,
-        );
+  ) {
+    if (bytes.byteLength !== manifest.sizeBytes) {
+      return yield* Effect.fail(
+        `Payload size mismatch (expected ${manifest.sizeBytes}, got ${bytes.byteLength}).`,
+      );
+    }
+    const sha256 = computeSha256Hex(bytes);
+    if (sha256 !== manifest.sha256) {
+      return yield* Effect.fail("Payload checksum did not match the manifest.");
+    }
+    if (signatureRequired) {
+      const ok = verifyPayloadSignature({
+        sha256Hex: manifest.sha256,
+        signatureBase64: manifest.signature,
+        publicKeyPem,
+      });
+      if (!ok) {
+        return yield* Effect.fail("Payload signature verification failed.");
       }
-      const sha256 = computeSha256Hex(bytes);
-      if (sha256 !== manifest.sha256) {
-        return yield* Effect.fail("Payload checksum did not match the manifest.");
-      }
-      if (signatureRequired) {
-        const ok = verifyPayloadSignature({
-          sha256Hex: manifest.sha256,
-          signatureBase64: manifest.signature,
-          publicKeyPem,
-        });
-        if (!ok) {
-          return yield* Effect.fail("Payload signature verification failed.");
-        }
-      } else {
-        yield* logPayloadWarning("applying payload without signature verification (dev override)");
-      }
-    });
+    } else {
+      yield* logPayloadWarning("applying payload without signature verification (dev override)");
+    }
+  });
 
-  const downloadArchive = (
+  const downloadArchive = Effect.fn("Payload.downloadArchive")(function* (
     response: HttpClientResponse.HttpClientResponse,
     expectedBytes: number,
-  ): Effect.Effect<Uint8Array, string> =>
-    Effect.gen(function* () {
-      const chunks: Uint8Array[] = [];
-      let downloadedBytes = 0;
-      let lastEmittedPercent = 0;
+  ) {
+    const chunks: Uint8Array[] = [];
+    let downloadedBytes = 0;
+    let lastEmittedPercent = 0;
 
-      let observedBytes = 0;
-      const boundedStream =
-        expectedBytes > 0
-          ? response.stream.pipe(
-              Stream.takeUntil((chunk) => {
-                observedBytes += chunk.byteLength;
-                return observedBytes >= expectedBytes;
-              }),
-            )
-          : response.stream;
+    let observedBytes = 0;
+    const boundedStream =
+      expectedBytes > 0
+        ? response.stream.pipe(
+            Stream.takeUntil((chunk) => {
+              observedBytes += chunk.byteLength;
+              return observedBytes >= expectedBytes;
+            }),
+          )
+        : response.stream;
 
-      yield* Stream.runForEach(boundedStream, (chunk) =>
-        Effect.gen(function* () {
-          chunks.push(chunk);
-          downloadedBytes += chunk.byteLength;
+    yield* Stream.runForEach(boundedStream, (chunk) =>
+      Effect.gen(function* () {
+        chunks.push(chunk);
+        downloadedBytes += chunk.byteLength;
 
-          if (expectedBytes <= 0) return;
-          const percent = Math.min(99, Math.floor((downloadedBytes / expectedBytes) * 100));
-          if (percent <= lastEmittedPercent) return;
-          lastEmittedPercent = percent;
-          yield* setState((state) => ({
-            ...state,
-            status: "downloading",
-            downloadPercent: percent,
-          }));
-        }),
-      ).pipe(
-        Effect.catchCause((cause) =>
-          expectedBytes > 0 && downloadedBytes >= expectedBytes
-            ? Effect.void
-            : Effect.fail(`Failed to download payload archive: ${Cause.pretty(cause)}`),
-        ),
-      );
+        if (expectedBytes <= 0) return;
+        const percent = Math.min(99, Math.floor((downloadedBytes / expectedBytes) * 100));
+        if (percent <= lastEmittedPercent) return;
+        lastEmittedPercent = percent;
+        yield* setState((state) => ({
+          ...state,
+          status: "downloading",
+          downloadPercent: percent,
+        }));
+      }),
+    ).pipe(
+      Effect.catchCause((cause) =>
+        expectedBytes > 0 && downloadedBytes >= expectedBytes
+          ? Effect.void
+          : Effect.fail(`Failed to download payload archive: ${Cause.pretty(cause)}`),
+      ),
+    );
 
-      const bytes = new Uint8Array(downloadedBytes);
-      let offset = 0;
-      for (const chunk of chunks) {
-        bytes.set(chunk, offset);
-        offset += chunk.byteLength;
-      }
-      return bytes;
-    });
+    const bytes = new Uint8Array(downloadedBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return bytes;
+  });
 
-  const extractToVersionDir = (
+  const extractToVersionDir = Effect.fn("Payload.extractToVersionDir")(function* (
     manifest: DesktopPayloadManifest,
     bytes: Uint8Array,
-  ): Effect.Effect<void, string> =>
-    Effect.gen(function* () {
-      const entries = yield* Effect.try({
-        try: () => extractPayloadArchive(bytes),
-        catch: (cause) => `Failed to extract payload archive: ${String(cause)}`,
-      });
-      const finalDir = payloadVersionDir(environment, manifest.version);
-      const partialDir = `${finalDir}.partial`;
-      yield* fileSystem.remove(partialDir, { recursive: true }).pipe(Effect.ignore);
-      yield* fileSystem
-        .makeDirectory(partialDir, { recursive: true })
-        .pipe(Effect.mapError((cause) => `Failed to create payload directory: ${String(cause)}`));
-      yield* Effect.forEach(
-        entries,
-        (entry) =>
-          Effect.gen(function* () {
-            const target = environment.path.join(partialDir, entry.path);
-            yield* fileSystem.makeDirectory(environment.path.dirname(target), { recursive: true });
-            yield* fileSystem.writeFile(target, entry.data);
-          }),
-        { concurrency: 8, discard: true },
-      ).pipe(Effect.mapError((cause) => `Failed to write payload files: ${String(cause)}`));
-      // Swap the freshly-extracted tree into place atomically-ish.
-      yield* fileSystem.remove(finalDir, { recursive: true }).pipe(Effect.ignore);
-      yield* fileSystem
-        .rename(partialDir, finalDir)
-        .pipe(Effect.mapError((cause) => `Failed to finalize payload directory: ${String(cause)}`));
+  ) {
+    const entries = yield* Effect.try({
+      try: () => extractPayloadArchive(bytes),
+      catch: (cause) => `Failed to extract payload archive: ${String(cause)}`,
     });
+    const finalDir = payloadVersionDir(environment, manifest.version);
+    const partialDir = `${finalDir}.partial`;
+    yield* fileSystem.remove(partialDir, { recursive: true }).pipe(Effect.ignore);
+    yield* fileSystem
+      .makeDirectory(partialDir, { recursive: true })
+      .pipe(Effect.mapError((cause) => `Failed to create payload directory: ${String(cause)}`));
+    yield* Effect.forEach(
+      entries,
+      (entry) =>
+        Effect.gen(function* () {
+          const target = environment.path.join(partialDir, entry.path);
+          yield* fileSystem.makeDirectory(environment.path.dirname(target), { recursive: true });
+          yield* fileSystem.writeFile(target, entry.data);
+        }),
+      { concurrency: 8, discard: true },
+    ).pipe(Effect.mapError((cause) => `Failed to write payload files: ${String(cause)}`));
+    // Swap the freshly-extracted tree into place atomically-ish.
+    yield* fileSystem.remove(finalDir, { recursive: true }).pipe(Effect.ignore);
+    yield* fileSystem
+      .rename(partialDir, finalDir)
+      .pipe(Effect.mapError((cause) => `Failed to finalize payload directory: ${String(cause)}`));
+  });
 
   // Download + verify + extract a payload to its version dir and remember its
   // pointer in memory. Does NOT write the on-disk `pending` pointer — that
   // happens only in `applyImpl`, so staged-but-unapplied payloads never activate
   // on a normal restart.
-  const stageManifest = (
-    manifest: DesktopPayloadManifest,
-  ): Effect.Effect<DesktopPayloadUpdateState> =>
-    Effect.gen(function* () {
+  const stageManifest = Effect.fn("Payload.stageManifest")(
+    function* (manifest: DesktopPayloadManifest) {
       yield* setState((state) => ({ ...state, status: "downloading", downloadPercent: null }));
       yield* logPayloadInfo("downloading payload", { version: manifest.version });
       const assetUrl = resolveAssetUrl(manifest);
@@ -320,39 +315,40 @@ export const make = Effect.gen(function* () {
         downloadPercent: 100,
         message: null,
       }));
-    }).pipe(
-      Effect.scoped,
-      Effect.catch((error) => {
-        const message = typeof error === "string" ? error : String(error);
-        return logPayloadError("payload download/stage failed", { message }).pipe(
-          Effect.andThen(setState((state) => ({ ...state, status: "error", message }))),
-        );
-      }),
-    );
-
-  const stageManifestInBackground = (manifest: DesktopPayloadManifest): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      const inFlightVersion = yield* Ref.get(backgroundStageInFlightRef);
-      if (Option.isSome(inFlightVersion) && inFlightVersion.value === manifest.version) {
-        return;
-      }
-
-      yield* Ref.set(backgroundStageInFlightRef, Option.some(manifest.version));
-      yield* stageManifest(manifest).pipe(
-        Effect.catchCause((cause) =>
-          Cause.hasInterruptsOnly(cause)
-            ? Effect.failCause(cause)
-            : logPayloadError("background payload stage failed", { cause: Cause.pretty(cause) }),
-        ),
-        Effect.ensuring(
-          Ref.update(backgroundStageInFlightRef, (current) =>
-            Option.isSome(current) && current.value === manifest.version ? Option.none() : current,
-          ),
-        ),
-        Effect.forkDetach,
-        Effect.asVoid,
+    },
+    Effect.scoped,
+    Effect.catch((error) => {
+      const message = typeof error === "string" ? error : String(error);
+      return logPayloadError("payload download/stage failed", { message }).pipe(
+        Effect.andThen(setState((state) => ({ ...state, status: "error", message }))),
       );
-    });
+    }),
+  );
+
+  const stageManifestInBackground = Effect.fn("Payload.stageManifestInBackground")(function* (
+    manifest: DesktopPayloadManifest,
+  ) {
+    const inFlightVersion = yield* Ref.get(backgroundStageInFlightRef);
+    if (Option.isSome(inFlightVersion) && inFlightVersion.value === manifest.version) {
+      return;
+    }
+
+    yield* Ref.set(backgroundStageInFlightRef, Option.some(manifest.version));
+    yield* stageManifest(manifest).pipe(
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.failCause(cause)
+          : logPayloadError("background payload stage failed", { cause: Cause.pretty(cause) }),
+      ),
+      Effect.ensuring(
+        Ref.update(backgroundStageInFlightRef, (current) =>
+          Option.isSome(current) && current.value === manifest.version ? Option.none() : current,
+        ),
+      ),
+      Effect.forkDetach,
+      Effect.asVoid,
+    );
+  });
 
   const fetchManifest: Effect.Effect<DesktopPayloadManifest, string> = httpClient
     .get(manifestUrl)
@@ -362,118 +358,116 @@ export const make = Effect.gen(function* () {
       Effect.mapError((cause) => `Failed to fetch payload manifest: ${String(cause)}`),
     );
 
-  const evaluateManifest = (
+  const evaluateManifest = Effect.fn("Payload.evaluateManifest")(function* (
     manifest: DesktopPayloadManifest,
     currentVersion: string,
     checkedAt: string,
-  ): Effect.Effect<DesktopPayloadUpdateState> =>
-    Effect.gen(function* () {
-      if (compareSemverVersions(manifest.version, currentVersion) <= 0) {
-        return yield* setState((state) => ({
-          ...state,
-          status: "up-to-date",
-          checkedAt,
-          availableVersion: null,
-          message: null,
-        }));
-      }
-      if (!shellSatisfiesPayload(shellVersion, manifest.minShellVersion)) {
-        return yield* setState((state) => ({
-          ...state,
-          status: "up-to-date",
-          checkedAt,
-          availableVersion: null,
-          message: `Payload ${manifest.version} requires app ${manifest.minShellVersion}; install the full update.`,
-        }));
-      }
-      yield* logPayloadInfo("payload update available", { version: manifest.version });
-      const currentState = yield* SubscriptionRef.get(stateRef);
-      if (currentState.stagedVersion === manifest.version) {
-        return yield* setState((state) => ({
-          ...state,
-          status: "staged",
-          checkedAt,
-          stagedVersion: manifest.version,
-          availableVersion: manifest.version,
-          downloadPercent: 100,
-          message: null,
-        }));
-      }
-      const alreadyStaged = yield* Ref.get(stagedPointerRef);
-      if (Option.isSome(alreadyStaged) && alreadyStaged.value.version === manifest.version) {
-        return yield* setState((state) => ({
-          ...state,
-          status: "staged",
-          checkedAt,
-          stagedVersion: manifest.version,
-          availableVersion: manifest.version,
-          downloadPercent: 100,
-          message: null,
-        }));
-      }
-      const stagingVersion = yield* Ref.get(backgroundStageInFlightRef);
-      if (Option.isSome(stagingVersion) && stagingVersion.value === manifest.version) {
-        return yield* setState((state) => ({
-          ...state,
-          status: state.status === "downloading" ? "downloading" : "available",
-          checkedAt,
-          availableVersion: manifest.version,
-          message: null,
-        }));
-      }
-      if (yield* Ref.get(actionInFlightRef)) {
-        return yield* SubscriptionRef.get(stateRef);
-      }
-
-      const availableState = yield* setState((state) => ({
+  ) {
+    if (compareSemverVersions(manifest.version, currentVersion) <= 0) {
+      return yield* setState((state) => ({
         ...state,
-        status: "available",
+        status: "up-to-date",
         checkedAt,
-        availableVersion: manifest.version,
-        downloadPercent: null,
+        availableVersion: null,
         message: null,
       }));
-      // Auto-download in the background so the update is staged and ready; the
-      // user still applies it explicitly via the button (a one-click restart).
-      yield* stageManifestInBackground(manifest);
-      return availableState;
-    });
+    }
+    if (!shellSatisfiesPayload(shellVersion, manifest.minShellVersion)) {
+      return yield* setState((state) => ({
+        ...state,
+        status: "up-to-date",
+        checkedAt,
+        availableVersion: null,
+        message: `Payload ${manifest.version} requires app ${manifest.minShellVersion}; install the full update.`,
+      }));
+    }
+    yield* logPayloadInfo("payload update available", { version: manifest.version });
+    const currentState = yield* SubscriptionRef.get(stateRef);
+    if (currentState.stagedVersion === manifest.version) {
+      return yield* setState((state) => ({
+        ...state,
+        status: "staged",
+        checkedAt,
+        stagedVersion: manifest.version,
+        availableVersion: manifest.version,
+        downloadPercent: 100,
+        message: null,
+      }));
+    }
+    const alreadyStaged = yield* Ref.get(stagedPointerRef);
+    if (Option.isSome(alreadyStaged) && alreadyStaged.value.version === manifest.version) {
+      return yield* setState((state) => ({
+        ...state,
+        status: "staged",
+        checkedAt,
+        stagedVersion: manifest.version,
+        availableVersion: manifest.version,
+        downloadPercent: 100,
+        message: null,
+      }));
+    }
+    const stagingVersion = yield* Ref.get(backgroundStageInFlightRef);
+    if (Option.isSome(stagingVersion) && stagingVersion.value === manifest.version) {
+      return yield* setState((state) => ({
+        ...state,
+        status: state.status === "downloading" ? "downloading" : "available",
+        checkedAt,
+        availableVersion: manifest.version,
+        message: null,
+      }));
+    }
+    if (yield* Ref.get(actionInFlightRef)) {
+      return yield* SubscriptionRef.get(stateRef);
+    }
 
-  const performCheck = (reason: string): Effect.Effect<DesktopPayloadUpdateState> =>
-    Effect.gen(function* () {
-      if (!enabled) {
-        return yield* SubscriptionRef.get(stateRef);
-      }
-      if (yield* Ref.get(checkInFlightRef)) {
-        return yield* SubscriptionRef.get(stateRef);
-      }
-      yield* Ref.set(checkInFlightRef, true);
-      return yield* Effect.gen(function* () {
-        const currentVersion = yield* runningServerVersion;
-        yield* setState((state) => ({
-          ...state,
-          status: "checking",
-          currentPayloadVersion:
-            currentVersion === shellVersion ? state.currentPayloadVersion : currentVersion,
-        }));
-        yield* logPayloadInfo("checking for payload update", { reason });
+    const availableState = yield* setState((state) => ({
+      ...state,
+      status: "available",
+      checkedAt,
+      availableVersion: manifest.version,
+      downloadPercent: null,
+      message: null,
+    }));
+    // Auto-download in the background so the update is staged and ready; the
+    // user still applies it explicitly via the button (a one-click restart).
+    yield* stageManifestInBackground(manifest);
+    return availableState;
+  });
 
-        return yield* fetchManifest.pipe(
-          Effect.flatMap((manifest) =>
-            currentIsoTimestamp.pipe(
-              Effect.flatMap((checkedAt) => evaluateManifest(manifest, currentVersion, checkedAt)),
+  const performCheck = Effect.fn("Payload.performCheck")(function* (reason: string) {
+    if (!enabled) {
+      return yield* SubscriptionRef.get(stateRef);
+    }
+    if (yield* Ref.get(checkInFlightRef)) {
+      return yield* SubscriptionRef.get(stateRef);
+    }
+    yield* Ref.set(checkInFlightRef, true);
+    return yield* Effect.gen(function* () {
+      const currentVersion = yield* runningServerVersion;
+      yield* setState((state) => ({
+        ...state,
+        status: "checking",
+        currentPayloadVersion:
+          currentVersion === shellVersion ? state.currentPayloadVersion : currentVersion,
+      }));
+      yield* logPayloadInfo("checking for payload update", { reason });
+
+      return yield* fetchManifest.pipe(
+        Effect.flatMap((manifest) =>
+          currentIsoTimestamp.pipe(
+            Effect.flatMap((checkedAt) => evaluateManifest(manifest, currentVersion, checkedAt)),
+          ),
+        ),
+        Effect.catch((message) =>
+          currentIsoTimestamp.pipe(
+            Effect.flatMap((checkedAt) =>
+              setState((state) => ({ ...state, status: "error", checkedAt, message })),
             ),
           ),
-          Effect.catch((message) =>
-            currentIsoTimestamp.pipe(
-              Effect.flatMap((checkedAt) =>
-                setState((state) => ({ ...state, status: "error", checkedAt, message })),
-              ),
-            ),
-          ),
-        );
-      }).pipe(Effect.ensuring(Ref.set(checkInFlightRef, false)));
-    });
+        ),
+      );
+    }).pipe(Effect.ensuring(Ref.set(checkInFlightRef, false)));
+  });
 
   // Re-fetch the manifest and stage the newest compatible payload. Used only by
   // explicit user actions, never by the background poller.
@@ -550,16 +544,15 @@ export const make = Effect.gen(function* () {
   );
 
   // Serialize user-initiated actions so a download and an apply never overlap.
-  const runExclusive = (
+  const runExclusive = Effect.fn("Payload.runExclusive")(function* (
     effect: Effect.Effect<DesktopPayloadUpdateState>,
-  ): Effect.Effect<DesktopPayloadUpdateState> =>
-    Effect.gen(function* () {
-      if (yield* Ref.get(actionInFlightRef)) {
-        return yield* SubscriptionRef.get(stateRef);
-      }
-      yield* Ref.set(actionInFlightRef, true);
-      return yield* effect.pipe(Effect.ensuring(Ref.set(actionInFlightRef, false)));
-    });
+  ) {
+    if (yield* Ref.get(actionInFlightRef)) {
+      return yield* SubscriptionRef.get(stateRef);
+    }
+    yield* Ref.set(actionInFlightRef, true);
+    return yield* effect.pipe(Effect.ensuring(Ref.set(actionInFlightRef, false)));
+  });
 
   const startPollers: Effect.Effect<void, never, Scope.Scope> = Effect.gen(function* () {
     yield* Effect.sleep(STARTUP_DELAY).pipe(

@@ -2,9 +2,9 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import { useMemo } from "react";
 import { Pressable, View } from "react-native";
 
-import { ControlPillMenu } from "./ControlPill";
-import { SymbolView } from "./AppSymbol";
-import { AppText as Text } from "./AppText";
+import { Menu } from "./ui/Menu";
+import { SymbolView } from "./ui/AppSymbol";
+import { AppText as Text } from "./ui/AppText";
 import { useUniwindTheme } from "../lib/useUniwindTheme";
 
 export interface MachineSwitcherEnvironment {
@@ -64,7 +64,7 @@ export function MachineSwitcher(props: {
   );
 
   return props.environments.length > 1 ? (
-    <ControlPillMenu
+    <Menu
       actions={actions}
       title="Active environment"
       onPressAction={(event) => {
@@ -75,7 +75,7 @@ export function MachineSwitcher(props: {
       }}
     >
       {button}
-    </ControlPillMenu>
+    </Menu>
   ) : (
     <View>{button}</View>
   );

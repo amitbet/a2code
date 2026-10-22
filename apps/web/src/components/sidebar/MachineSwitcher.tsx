@@ -1,3 +1,4 @@
+import { useStableCallback } from "~/hooks/useStableCallback";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { CloudIcon, LayersIcon, MonitorIcon, ServerIcon } from "lucide-react";
@@ -49,30 +50,27 @@ export function MachineSwitcher({ onBackdrop }: { readonly onBackdrop: boolean }
       : routeTarget?.kind === "draft"
         ? draftEnvironmentId
         : null;
-  const machineItems = useMemo(() => machineItemsFromEnvironments(environments), [environments]);
+  const machineItems = (() => machineItemsFromEnvironments(environments))();
   const activeMachine =
     machineItems.find((machine) => machine.environmentId === machineEnvironmentId) ??
     machineItems[0] ??
     null;
 
-  const handleScopeChange = useCallback(
-    (value: string) => {
-      if (value === OVERVIEW_VALUE) {
-        if (overviewActive) return;
-        // The overview contains every machine, so the current route is still in
-        // scope — widening the scope never orphans where the user is standing.
-        setMachineOverview();
-        return;
-      }
-      const environmentId = value as EnvironmentId;
-      if (!overviewActive && environmentId === machineEnvironmentId) return;
-      setMachineEnvironmentId(environmentId);
-      if (routeEnvironmentId !== null && routeEnvironmentId !== environmentId) {
-        void navigate({ to: "/", replace: true });
-      }
-    },
-    [machineEnvironmentId, navigate, overviewActive, routeEnvironmentId],
-  );
+  const handleScopeChange = useStableCallback((value: string) => {
+    if (value === OVERVIEW_VALUE) {
+      if (overviewActive) return;
+      // The overview contains every machine, so the current route is still in
+      // scope — widening the scope never orphans where the user is standing.
+      setMachineOverview();
+      return;
+    }
+    const environmentId = value as EnvironmentId;
+    if (!overviewActive && environmentId === machineEnvironmentId) return;
+    setMachineEnvironmentId(environmentId);
+    if (routeEnvironmentId !== null && routeEnvironmentId !== environmentId) {
+      void navigate({ to: "/", replace: true });
+    }
+  });
 
   if (activeMachine === null) {
     return null;

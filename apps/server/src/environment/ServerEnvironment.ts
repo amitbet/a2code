@@ -171,7 +171,7 @@ const makeIdentity = Effect.gen(function* () {
       return persisted;
     }
 
-    const generated = yield* crypto.randomUUIDv4;
+    const generated = yield* crypto.randomUUIDv4();
     yield* persistEnvironmentId(generated, "create");
     let winner = yield* readPersistedEnvironmentId;
     if (winner === null) {
@@ -193,7 +193,7 @@ const makeIdentity = Effect.gen(function* () {
   });
 });
 
-/** @public Service construction is part of the canonical Effect module API. */
+/** @public */
 export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig.ServerConfig;
@@ -244,9 +244,12 @@ export const make = Effect.gen(function* () {
       threadAutoSettlement: true,
       storageCleanup: true,
       storageCleanupRun: true,
+      databaseStorage: true,
       otlpEndpointCheck: true,
       projectWorktreeCleanup: true,
+      settledWorktreeCleanup: true,
       worktreesDirectory: true,
+      threadAutoSettlementScope: true,
       threadRestartContinuation: true,
       projectSettingsOverrides: true,
       projectProviderInstanceOverrides: true,
@@ -262,18 +265,19 @@ export const make = Effect.gen(function* () {
       threadQueuedSideQuestions: true,
       threadAutoSettleOptOut: true,
       threadTitleRegeneration: true,
+      commandOutputStreaming: true,
       threadVisitedTracking: true,
       threadPullRequests: true,
       threadPullRequestWatch: true,
       pullRequestStackActions: true,
       threadPullRequestLinking: true,
       serverResolvedCommandContext: true,
+      threadStop: true,
       environmentIcon: true,
       projectCloneTracking: true,
+      ignoredFileListing: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
       ...(serverInstallation === null ? {} : { serverInstallation }),
-      // V2 restart recovery uses the environment-owned opt-in. The old
-      // per-update request flag is not wired into the V2 update RPC path.
       ...(serverSelfUpdate === "boot-service" || desktopAppUpdate
         ? { serverSelfUpdateProgress: true }
         : {}),

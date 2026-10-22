@@ -16,9 +16,50 @@ Keep these guards on top of upstream's settings reload/concurrency changes. They
 upstream's model-preference migration retry guard, unchanged device-host reconciliation, and
 disabled snapshot processing; those fixes do not replace server-side no-op suppression.
 
+## 2026-10-22 upstream merge (0.1.1, extracted composer and provider packages)
+
+Merged upstream through `ff525478e2` (1,875 commits since `9c9ae43d80`). Prefer the
+upstream refactors when merging again; fork behavior now belongs at these new seams:
+
+- Pairing expiry moved into `AuthorizedClientsSettings.tsx`; `ConnectionsSettings` no longer
+  owns link creation. Keep the fork migration ledger separate from upstream's public
+  `migrationManifest` and run it from `persistence/Sqlite.ts`.
+- `ChatView` uses upstream's extracted composer/send/action hooks. Preserve `/btw` submission,
+  promotion and history, queued forks, Markdown/ZIP exports, copy reference, and machine
+  scoping on those hooks. Machine selection remains global; per-draft automatic selection
+  must not reappear. Provider defaults flow through `useComposerProviderModel` only for drafts.
+- Quota display now lives in `ComposerFooterControls`. Keep Claude spend details and the
+  five-minute usage refresh alongside upstream's provider identity and cache invalidation.
+  Effect 4.0.5 returns the refreshed cache value directly; do not keep the old refresh/get pair.
+- `RightPanelSurfaceContent` and `RightPanelTab` own side-question content/titles. Answered
+  requests remain separate timeline rows in `TimelineUserInputAnswerRow`; contextual citation
+  uses the context menu, with selection-safe highlighting in `MarkdownCodeBlock`.
+- Machine scoping applies to quiet thread-shell queries and the legacy sidebar. Mobile uses
+  the upstream thread/workspace toolbar slots for the machine switcher, including the iOS
+  filters pill. Keep nested provider activity visible and project-scoped thread search in SQL.
+- `packages/provider-core` owns the fork's cached status checks and demand-driven usage refresh.
+  Upstream's new Effect/React Compiler constraints also apply to fork components: avoid manual
+  memoization and keep async cleanup outside `finally` in compiled UI code.
+- Payload-only desktop updates, A2 Code identity/profile paths, beta display name, and fork
+  launcher argument stay intact. `upstreamVersion` is `0.1.1`; branded package versions remain
+  `0.0.25-amit`. The Effect reference snapshot is synced to 4.0.5, with subtree metadata restored
+  so subsequent `sync:repos` pulls work.
+- CI still contains only the fork's `ci.yml` and `release.yml`. The release workflow's sole
+  change is raising minimum payload shell to `0.0.161`: Electron is now 44.9.3, and older shells
+  must take a full installer. The Discord nightly-workflow integration test was removed because
+  that upstream release flow is deliberately absent; its CLI behavior tests remain. The Vercel
+  workflow-output integration test was also dropped with its absent web-preview workflow.
+
+Validation uses a real `TMPDIR` on macOS (see the existing host-failure note below). Web/mobile
+unit suites, shared packages, web production build, targeted desktop/payload tests, lint and
+workspace typechecks were exercised. Linux icon-case tests and Claude's organization-change
+fallback test fail identically in a pristine upstream checkout; the latter is not caused by the
+fork's usage refresher. VS Code Insiders discovery also reproduces upstream on this host.
+Kotlin native lint runs; SwiftLint needs Xcode/SourceKit, unavailable on this machine.
+
 ## Pairing-link session lifetime (fork feature) — fork migration 1
 
-Settings → Connections → Create link has a session expiry picker (1 month, 1 year, 10 years,
+Settings → Authorized clients → Create link has a session expiry picker (1 month, 1 year, 10 years,
 never). The choice is stored in `auth_pairing_links.session_lifetime`, added by **fork migration 1**
 (`apps/server/src/persistence/ForkMigrations/001_AuthPairingSessionLifetime.ts`, see "Fork schema
 lives in its own migration ledger" below). It is applied in `SessionStore.issue` via
@@ -845,7 +886,7 @@ install to \_do* in a fork whose shell updates are a manual reinstall.
   hardcoded switch. The fork's sendTurn context-window sync call site was updated. Because it is now
   catalog-driven, the fork's test had to move off the real `claude-opus-4-6` onto upstream's
   `SYNTHETIC_CLAUDE_MODEL_CATALOG` fixture (`SYNTHETIC_CLAUDE_CAPABLE_MODEL` + `contextWindow:
-"expanded"` = 1M). **Any fork test that names a real Claude model will silently stop resolving —
+  "expanded"` = 1M). **Any fork test that names a real Claude model will silently stop resolving —
   use the synthetic fixture.**
 
 ### Claude usage normalization: fork keeps its own semantics
@@ -856,11 +897,11 @@ window. The fork deliberately does neither unless the reading is _context-accura
 the live window). Resolution:
 
 - Re-applied the fork's expectations to two shared tests (`completes with result usage without
-querying current context usage`, `emits Claude context window on result completion usage
-snapshots`) — both had gained `maxTokens: 200000`.
+  querying current context usage`, `emits Claude context window on result completion usage
+  snapshots`) — both had gained `maxTokens: 200000`.
 - **Deleted upstream's `clamps oversized Claude usage to the reported context window`** test: it
   directly contradicts the fork's `keeps oversized Claude result totals when no context-accurate
-usage exists`, which is the deliberate fork fix.
+  usage exists`, which is the deliberate fork fix.
 
 ### Command-row detail: fork keeps output-as-detail
 
@@ -908,7 +949,7 @@ inside the extracted hook.
   `thread.settled`. `startProviderSession` took upstream's version (adds `provider` and
   `refreshWorkspaceSnapshot`).
 - **Thread action menu order** is now `rename, fork, mark-unread, copy, project-settings,
-export-zip, archive, delete` — `project-settings` sits directly after `copy` so upstream's
+  export-zip, archive, delete` — `project-settings` sits directly after `copy` so upstream's
   adjacency assertion holds, with the fork's `export-zip` after it.
 - **`settings.ts`**: upstream's conflict side was a _duplicate_ `legacySidebarEnabled` declaration
   (default `false`); the fork's existing one (default `true`, project-tree sidebar) was kept.
@@ -946,7 +987,7 @@ mechanical except the draft-promotion one below.
 - **The fork's `threadHasAuthoritativeUserMessage` draft-promotion gate was RETIRED.** Upstream
   reworked `resolveDraftPromotionNavigationTarget` (`apps/web/src/components/ChatView.logic.ts`) to
   take the whole `serverThread` and gate on `latestTurn.startedAt != null || session.status is
-error/stopped/interrupted`. That gate fires strictly later than the fork's "the server echoed a
+  error/stopped/interrupted`. That gate fires strictly later than the fork's "the server echoed a
   user message" check (the prompt event that creates the user message also creates the turn), so the
   fork's concern — remounting `ChatView` before the optimistic first prompt is durable — is
   subsumed. Upstream's version additionally promotes on a startup failure with no user message, so
@@ -959,14 +1000,14 @@ error/stopped/interrupted`. That gate fires strictly later than the fork's "the 
   next to `working` as a text-less live status row. **Any future upstream row kind will break this
   switch the same way; that is the intended tripwire, so add the case rather than a `default`.**
 - **`ChatComposer` slash menu:** upstream added `slashCommandItemsForPromptPosition(items,
-isAtPromptStart)`. The fork's `/fork` item now goes _inside_ that call's item array (the helper
+  isAtPromptStart)`. The fork's `/fork` item now goes _inside_ that call's item array (the helper
   only filters `type === "skill"`, so wrapping `/fork` is a no-op today but keeps the fork item on
   the same code path).
 - **`ServerEnvironment.ts`:** upstream split identity acquisition into `makeIdentity`. The fork's
   `resolveServerVersion` export (payload-aware `T3CODE_SERVER_VERSION` override) sits above it
   untouched and is still consumed by the descriptor's `serverVersion`.
 - **`ChatView.tsx` send path:** upstream deleted the `beginLocalDispatch({ preparingWorktree: false
-})` call before `backgroundThreadRef` (worktree status now stays visible via the new
+  })` call before `backgroundThreadRef` (worktree status now stays visible via the new
   `isPreparingWorktree` prop on `MessagesTimeline`). Git aligned that deletion against the fork's
   `shouldQueuePrompt` branch; the resolution keeps the fork's queue/else split and drops the line
   from the else arm only. The two other `preparingWorktree: false` dispatches are upstream's and
@@ -2084,7 +2125,7 @@ forks use upstream's portable handoff; see the 2026-10-05 notes for the full-tra
     `tsgo` directly on `apps/mobile` can report ~65 spurious
     `navigation.navigate` "parameter of type 'never'" errors — tsgo's
     react-navigation static-API inference (`RootNavigator extends
-RootStackType` in `src/Stack.tsx`) is unstable near its complexity limit
+    RootStackType` in `src/Stack.tsx`) is unstable near its complexity limit
     and flips with unrelated byte-level changes. Trust `vp run typecheck`
     (which uses the package script); do not switch mobile to tsgo.
 
@@ -2134,7 +2175,7 @@ both sidebars and the chat header menu. Threads imported from v1 export messages
   - `apps/web/src/lib/rateLimits.ts` — presentation helpers only (staleness, "updated Xm ago",
     reset countdowns). **No derivation, merging, or persistence belongs here.**
   - `apps/web/src/components/chat/ChatComposer.tsx` — **modified**: `activeRateLimits =
-selectedProviderEntry?.snapshot.usageLimits ?? null`, passed to `ComposerFooterPrimaryActions`.
+    selectedProviderEntry?.snapshot.usageLimits ?? null`, passed to `ComposerFooterPrimaryActions`.
     One line; re-apply it on top of any upstream composer-footer refactor.
   - `packages/contracts/src/providerUsageLimits.ts` — **upstream's file, two fork fields**:
     `ServerProviderUsageWindow.detail` and `ServerProviderUsageLimits.planType`. Preserve both, and
@@ -2358,9 +2399,9 @@ Legend List scroll upgrade, and a `vite-plus` major bump. Fork-feature touch poi
 
 - **The fork added `apps/mobile/src/vitest.d.ts`** (`declare module "vitest" { export
   - from "vite-plus/test"; }`) and pinned a `vitest`catalog alias to`@voidzero-dev/vite-plus-test`. This worked while `vite-plus`≤ 0.1.24, where`vite-plus/test` had concrete exports. **`vite-plus@0.2.x`made`vite-plus/test`do`export _ from 'vitest'`**, so the shim became a **circular re-export**
-(`vitest`→`vite-plus/test`→`vitest`) that collapses every test helper
-(`describe`/`it`/`expect`/`vi`) to nothing — ~270 `TS2305/TS2349`errors across
-every mobile`_.test.ts`under mobile's`tsc`+`customConditions: ["react-native"]`
+    (`vitest`→`vite-plus/test`→`vitest`) that collapses every test helper
+    (`describe`/`it`/`expect`/`vi`) to nothing — ~270 `TS2305/TS2349`errors across
+    every mobile`_.test.ts`under mobile's`tsc`+`customConditions: ["react-native"]`
     (apps/web is unaffected because tsgo resolves without that condition).
 - **Fix applied (2026-06-30):** deleted `apps/mobile/src/vitest.d.ts` (vite-plus@0.2.1
   bundles real `vitest@4.1.9`, so no shim is needed) and pinned
@@ -2392,7 +2433,7 @@ every mobile`_.test.ts`under mobile's`tsc`+`customConditions: ["react-native"]`
     **unsigned** artifact. **Drop** upstream's matrix-based Azure Trusted Signing /
     Apple code-signing flow and the ImageMagick step. A dedicated **`build_payload`**
     job (on `ubuntu-24.04`) builds the **payload hot-update asset** (`vp run
-build:desktop` → `vp run dist:payload:asset`, using the
+    build:desktop` → `vp run dist:payload:asset`, using the
     `T3CODE_PAYLOAD_SIGNING_KEY` secret) and uploads it as the `desktop-payload`
     artifact. The `release` job depends on `build_payload` (NOT the macOS build) and
     publishes `payload-*.tar.gz` + `payload-manifest.json`, so release creation is

@@ -1,3 +1,6 @@
+import { useComposerDraftStore as composerStore } from "../../composerDraftStore";
+const getComposerDraftStore = () => composerStore.getState();
+import { useStableCallback } from "~/hooks/useStableCallback";
 import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { settlePromise } from "@t3tools/client-runtime/state/runtime";
 import type { ScopedProjectRef } from "@t3tools/contracts";
@@ -78,7 +81,7 @@ export function useSidebarDraftRows(input: {
     let row: SidebarDraftRowData | null = null;
     if (routeDraftId !== null) {
       const draftId = DraftId.make(routeDraftId);
-      const store = useComposerDraftStore.getState();
+      const store = getComposerDraftStore();
       const session = store.getDraftSession(draftId);
       const composer = store.getComposerDraft(draftId);
       row =
@@ -88,7 +91,7 @@ export function useSidebarDraftRows(input: {
     }
     setFrozenActive({ routeDraftId, row });
   }
-  return useMemo(() => {
+  return (() => {
     const rows: SidebarDraftRowData[] = [];
     // Every non-promoted session with content gets a row, mapped or not:
     // new-thread surfaces mint fresh drafts and leave invested ones behind
@@ -117,7 +120,7 @@ export function useSidebarDraftRows(input: {
     }
     rows.sort((left, right) => right.session.createdAt.localeCompare(left.session.createdAt));
     return rows;
-  }, [draftThreadsByThreadKey, draftsByThreadKey, frozenActive, routeDraftId, projectKeys]);
+  })();
 }
 
 /** Right-click menu for an unsent draft row: copy path/branch, project settings, discard. */
@@ -157,56 +160,44 @@ export function useSidebarDraftContextMenu<TProject>(input: {
       );
     },
   });
-  return useCallback(
-    (draftId: DraftId, position: { x: number; y: number }) => {
-      void (async () => {
-        const api = readLocalApi();
-        const session = useComposerDraftStore.getState().getDraftSession(draftId);
-        if (!api || !session || session.promotedTo) return;
-        const project = resolveProject(session);
-        const workspacePath = session.worktreePath ?? resolveWorkspaceRoot(session);
-        const clicked = await settlePromise(() =>
-          api.contextMenu.show(
-            buildDraftActionMenuItems({
-              hasPath: Boolean(workspacePath),
-              hasBranch: Boolean(session.branch),
-              hasProject: project !== null,
-            }),
-            position,
-          ),
-        );
-        if (clicked._tag === "Failure") return;
-        switch (clicked.value) {
-          case "project-settings":
-            if (project !== null) {
-              openProjectSettings(
-                project,
-                scopeProjectRef(session.environmentId, session.projectId),
-              );
-            }
-            return;
-          case "copy-path":
-            if (workspacePath) copyPathToClipboard(workspacePath, { path: workspacePath });
-            return;
-          case "copy-branch":
-            if (session.branch) copyBranchToClipboard(session.branch, { branch: session.branch });
-            return;
-          case "discard": {
-            // The menu can stay open while the draft sends; discarding a
-            // promoting draft would strand the send.
-            const current = useComposerDraftStore.getState().getDraftSession(draftId);
-            if (current && !current.promotedTo) discardComposerDraft(draftId);
-            return;
+  return useStableCallback((draftId: DraftId, position: { x: number; y: number }) => {
+    void (async () => {
+      const api = readLocalApi();
+      const session = getComposerDraftStore().getDraftSession(draftId);
+      if (!api || !session || session.promotedTo) return;
+      const project = resolveProject(session);
+      const workspacePath = session.worktreePath ?? resolveWorkspaceRoot(session);
+      const clicked = await settlePromise(() =>
+        api.contextMenu.show(
+          buildDraftActionMenuItems({
+            hasPath: Boolean(workspacePath),
+            hasBranch: Boolean(session.branch),
+            hasProject: project !== null,
+          }),
+          position,
+        ),
+      );
+      if (clicked._tag === "Failure") return;
+      switch (clicked.value) {
+        case "project-settings":
+          if (project !== null) {
+            openProjectSettings(project, scopeProjectRef(session.environmentId, session.projectId));
           }
+          return;
+        case "copy-path":
+          if (workspacePath) copyPathToClipboard(workspacePath, { path: workspacePath });
+          return;
+        case "copy-branch":
+          if (session.branch) copyBranchToClipboard(session.branch, { branch: session.branch });
+          return;
+        case "discard": {
+          // The menu can stay open while the draft sends; discarding a
+          // promoting draft would strand the send.
+          const current = getComposerDraftStore().getDraftSession(draftId);
+          if (current && !current.promotedTo) discardComposerDraft(draftId);
+          return;
         }
-      })();
-    },
-    [
-      copyBranchToClipboard,
-      copyPathToClipboard,
-      openProjectSettings,
-      resolveProject,
-      resolveWorkspaceRoot,
-    ],
-  );
+      }
+    })();
+  });
 }

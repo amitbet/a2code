@@ -49,36 +49,33 @@ export function payloadVersionEntryPath(
 }
 
 /** Read + decode a pointer file, returning none for missing/corrupt pointers. */
-export const readPayloadPointer = (
+export const readPayloadPointer = Effect.fn("Payload.readPayloadPointer")(function* (
   pointerPath: string,
-): Effect.Effect<Option.Option<PayloadPointer>, never, FileSystem.FileSystem> =>
-  Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-    const raw = yield* fileSystem.readFileString(pointerPath).pipe(Effect.option);
-    if (Option.isNone(raw)) {
-      return Option.none<PayloadPointer>();
-    }
-    return yield* decodePayloadPointerJson(raw.value).pipe(
-      Effect.map(Option.some),
-      Effect.orElseSucceed(() => Option.none<PayloadPointer>()),
-    );
-  });
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const raw = yield* fileSystem.readFileString(pointerPath).pipe(Effect.option);
+  if (Option.isNone(raw)) {
+    return Option.none<PayloadPointer>();
+  }
+  return yield* decodePayloadPointerJson(raw.value).pipe(
+    Effect.map(Option.some),
+    Effect.orElseSucceed(() => Option.none<PayloadPointer>()),
+  );
+});
 
-export const writePayloadPointer = (
+export const writePayloadPointer = Effect.fn("Payload.writePayloadPointer")(function* (
   pointerPath: string,
   pointer: PayloadPointer,
-): Effect.Effect<void, never, FileSystem.FileSystem> =>
-  Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-    const json = yield* encodePayloadPointerJson(pointer).pipe(Effect.orDie);
-    yield* fileSystem.writeFileString(pointerPath, json).pipe(Effect.ignore);
-  });
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const json = yield* encodePayloadPointerJson(pointer).pipe(Effect.orDie);
+  yield* fileSystem.writeFileString(pointerPath, json).pipe(Effect.ignore);
+});
 
-const removePointer = (pointerPath: string): Effect.Effect<void, never, FileSystem.FileSystem> =>
-  Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-    yield* fileSystem.remove(pointerPath).pipe(Effect.ignore);
-  });
+const removePointer = Effect.fn("Payload.removePointer")(function* (pointerPath: string) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  yield* fileSystem.remove(pointerPath).pipe(Effect.ignore);
+});
 
 export const clearActivePayload: Effect.Effect<
   Option.Option<PayloadPointer>,
@@ -96,16 +93,15 @@ export function shellSatisfiesPayload(shellVersion: string, minShellVersion: str
   return compareSemverVersions(shellVersion, minShellVersion) >= 0;
 }
 
-const payloadEntryExists = (
+const payloadEntryExists = Effect.fn("Payload.payloadEntryExists")(function* (
   environment: DesktopEnvironment.DesktopEnvironment["Service"],
   version: string,
-): Effect.Effect<boolean, never, FileSystem.FileSystem> =>
-  Effect.gen(function* () {
-    const fileSystem = yield* FileSystem.FileSystem;
-    return yield* fileSystem
-      .exists(payloadVersionEntryPath(environment, version))
-      .pipe(Effect.orElseSucceed(() => false));
-  });
+) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  return yield* fileSystem
+    .exists(payloadVersionEntryPath(environment, version))
+    .pipe(Effect.orElseSucceed(() => false));
+});
 
 /**
  * Promote a staged `pending` payload to `active` when its files are present and

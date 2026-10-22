@@ -1,3 +1,5 @@
+import * as Schema from "effect/Schema";
+import * as PlatformError from "effect/PlatformError";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
@@ -6,8 +8,6 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as PlatformError from "effect/PlatformError";
-import * as Schema from "effect/Schema";
 
 import { DEFAULT_SIGNAL_EXPORT } from "@t3tools/shared/observability";
 import * as HostProcess from "@t3tools/shared/HostProcess";
@@ -137,6 +137,13 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
         expect(descriptor.capabilities.serverSelfUpdate).toBe(
           mode === "web" ? undefined : "desktop-managed",
         );
+        expect(descriptor.capabilities).toMatchObject({
+          settledWorktreeCleanup: true,
+          storageCleanupRun: true,
+          projectWorktreeCleanup: true,
+          worktreesDirectory: true,
+          threadAutoSettlementScope: true,
+        });
       }
     }),
   );
@@ -177,7 +184,6 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
                   if (path !== serverConfig.environmentIdPath || remaining > 0 || value.trim()) {
                     return;
                   }
-                  // Both observe the empty file, but one repairs it after the other has finished.
                   if (++emptyReads === 2) {
                     yield* Deferred.succeed(bothReadEmpty, undefined);
                     yield* Deferred.await(firstInitialized);
@@ -190,14 +196,15 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
         }),
         Effect.provideService(Crypto.Crypto, {
           ...crypto,
-          randomUUIDv4: Effect.gen(function* () {
-            const id = yield* crypto.randomUUIDv4;
-            if (--remaining === 0) {
-              yield* Deferred.succeed(bothGenerated, undefined);
-            }
-            yield* Deferred.await(bothGenerated);
-            return id;
-          }),
+          randomUUIDv4: (() =>
+            Effect.gen(function* () {
+              const id = yield* crypto.randomUUIDv4();
+              if (--remaining === 0) {
+                yield* Deferred.succeed(bothGenerated, undefined);
+              }
+              yield* Deferred.await(bothGenerated);
+              return id;
+            })) as Crypto.Crypto["randomUUIDv4"],
         }),
       );
 
@@ -265,15 +272,10 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
         const unlinked = yield* serverEnvironment.getDescriptor;
         expect(unlinked.capabilities.agentActivityPublishing).toBe(false);
 
-        // The opt-in alone is not enough: without relay link credentials no
-        // publish would leave this environment.
         yield* secrets.set(PUBLISH_AGENT_ACTIVITY_SECRET, encode("true"));
         const withoutLink = yield* serverEnvironment.getDescriptor;
         expect(withoutLink.capabilities.agentActivityPublishing).toBe(false);
 
-        // Empty credentials are as unconfigured as missing ones: the
-        // publisher's truthiness gate skips them, so the capability must not
-        // advertise publishing.
         yield* secrets.set(RELAY_URL_SECRET, encode(""));
         yield* secrets.set(RELAY_ENVIRONMENT_CREDENTIAL_SECRET, encode("credential"));
         const emptyUrl = yield* serverEnvironment.getDescriptor;
@@ -283,8 +285,6 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
         const linked = yield* serverEnvironment.getDescriptor;
         expect(linked.capabilities.agentActivityPublishing).toBe(true);
 
-        // The toggle changes at runtime, so the same service instance must
-        // reflect a flip without a restart.
         yield* secrets.set(PUBLISH_AGENT_ACTIVITY_SECRET, encode("false"));
         const disabled = yield* serverEnvironment.getDescriptor;
         expect(disabled.capabilities.agentActivityPublishing).toBe(false);

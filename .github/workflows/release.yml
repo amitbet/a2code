@@ -144,11 +144,9 @@ jobs:
         env:
           T3CODE_PAYLOAD_VERSION: ${{ needs.preflight.outputs.version }}
           T3CODE_PAYLOAD_SIGNING_KEY: ${{ secrets.T3CODE_PAYLOAD_SIGNING_KEY }}
-          # 0.0.160 ships fff 0.11 (native addon loaded from the shell), Electron 44.4.5
-          # and new shell-resolved externals (@muse-code/sdk); older shells must install
-          # the full app instead of pulling a payload they cannot start. Raise again on
-          # the next native change.
-          T3CODE_PAYLOAD_MIN_SHELL_VERSION: "0.0.160"
+          # 0.0.161 ships Electron 44.9.3 and the updated shell-resolved dependencies.
+          # Older shells must install the full app before loading this payload.
+          T3CODE_PAYLOAD_MIN_SHELL_VERSION: "0.0.161"
         run: |
           vp run dist:payload:asset
 

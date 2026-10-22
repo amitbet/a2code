@@ -127,7 +127,9 @@ export const make = Effect.gen(function* () {
     // without rewriting preview sessions (which breaks Turnstile, #7110). The
     // fork's Alpha build has no stage suffix, matching its display name.
     const { baseName, stageLabel } = environment.branding;
-    yield* electronApp.setName(stageLabel === "Alpha" ? baseName : `${baseName} ${stageLabel}`);
+    yield* electronApp.setName(
+      stageLabel === "Alpha" || stageLabel === "Beta" ? baseName : `${baseName} ${stageLabel}`,
+    );
     yield* configureAboutPanel();
 
     if (environment.platform === "win32") {

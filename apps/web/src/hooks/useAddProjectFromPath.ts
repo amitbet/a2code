@@ -1,3 +1,4 @@
+import { useStableCallback } from "~/hooks/useStableCallback";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { canCreateProjectInEnvironment } from "@t3tools/client-runtime/operations/projects";
 import {
@@ -56,139 +57,122 @@ export function useAddProjectFromPath(): (input: AddProjectFromPathInput) => Pro
     reportFailure: false,
   });
 
-  return useCallback(
-    async (input: AddProjectFromPathInput) => {
-      if (!isEnvironmentInMachineScope(input.environmentId, machineEnvironmentId)) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "warning",
-            title: "Switch machines first",
-            description: "Projects can only be opened on the machine shown in the picker.",
-          }),
-        );
-        return false;
-      }
-      const environment = environments.find(
-        (candidate) => candidate.environmentId === input.environmentId,
+  return useStableCallback(async (input: AddProjectFromPathInput) => {
+    if (!isEnvironmentInMachineScope(input.environmentId, machineEnvironmentId)) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "warning",
+          title: "Switch machines first",
+          description: "Projects can only be opened on the machine shown in the picker.",
+        }),
       );
-      if (!canCreateProjectInEnvironment(environment?.connection.phase)) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Environment unavailable",
-            description: `${environment?.label ?? "The selected environment"} is not connected.`,
-          }),
-        );
-        return false;
-      }
-      const rawCwd = input.rawCwd;
-
-      if (isUnsupportedWindowsProjectPath(rawCwd.trim(), input.platform)) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Failed to add project",
-            description: "Windows-style paths are only supported on Windows.",
-          }),
-        );
-        return false;
-      }
-
-      if (isExplicitRelativeProjectPath(rawCwd.trim()) && !input.currentProjectCwd) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Failed to add project",
-            description: "Relative paths require an active project.",
-          }),
-        );
-        return false;
-      }
-
-      const cwd = resolveProjectPathForDispatch(rawCwd, input.currentProjectCwd);
-      if (cwd.length === 0) return false;
-
-      const existing = findProjectByPath(
-        projects.filter((project) => project.environmentId === input.environmentId),
-        cwd,
+      return false;
+    }
+    const environment = environments.find(
+      (candidate) => candidate.environmentId === input.environmentId,
+    );
+    if (!canCreateProjectInEnvironment(environment?.connection.phase)) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Environment unavailable",
+          description: `${environment?.label ?? "The selected environment"} is not connected.`,
+        }),
       );
-      if (existing) {
-        const latestThread = getLatestThreadForProject(
-          threads.filter((thread) => thread.environmentId === existing.environmentId),
-          existing.id,
-          sidebarThreadSortOrder,
-        );
-        // A settled thread is done; reopening it would resurrect finished work.
-        if (latestThread && latestThread.settledOverride !== "settled") {
-          await navigate({
-            to: "/$environmentId/$threadId",
-            params: buildThreadRouteParams(
-              scopeThreadRef(latestThread.environmentId, latestThread.id),
-            ),
-          });
-        } else {
-          const navigationResult = await settlePromise(() =>
-            handleNewThread(scopeProjectRef(existing.environmentId, existing.id)),
-          );
-          if (navigationResult._tag === "Failure") {
-            const error = squashAtomCommandFailure(navigationResult);
-            toastManager.add(
-              stackedThreadToast({
-                type: "error",
-                title: "Failed to open project",
-                description: error instanceof Error ? error.message : "An error occurred.",
-              }),
-            );
-            return false;
-          }
-        }
-        return true;
-      }
+      return false;
+    }
+    const rawCwd = input.rawCwd;
 
-      if (!readEnvironmentScope(input.environmentId, AuthOrchestrationOperateScope)) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Cannot add project",
-            description: "This connection cannot add projects.",
-          }),
+    if (isUnsupportedWindowsProjectPath(rawCwd.trim(), input.platform)) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to add project",
+          description: "Windows-style paths are only supported on Windows.",
+        }),
+      );
+      return false;
+    }
+
+    if (isExplicitRelativeProjectPath(rawCwd.trim()) && !input.currentProjectCwd) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to add project",
+          description: "Relative paths require an active project.",
+        }),
+      );
+      return false;
+    }
+
+    const cwd = resolveProjectPathForDispatch(rawCwd, input.currentProjectCwd);
+    if (cwd.length === 0) return false;
+
+    const existing = findProjectByPath(
+      projects.filter((project) => project.environmentId === input.environmentId),
+      cwd,
+    );
+    if (existing) {
+      const latestThread = getLatestThreadForProject(
+        threads.filter((thread) => thread.environmentId === existing.environmentId),
+        existing.id,
+        sidebarThreadSortOrder,
+      );
+      // A settled thread is done; reopening it would resurrect finished work.
+      if (latestThread && latestThread.settledOverride !== "settled") {
+        await navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(
+            scopeThreadRef(latestThread.environmentId, latestThread.id),
+          ),
+        });
+      } else {
+        const navigationResult = await settlePromise(() =>
+          handleNewThread(scopeProjectRef(existing.environmentId, existing.id)),
         );
-        return false;
-      }
-      const projectId = newProjectId();
-      const createResult = await createProject({
-        environmentId: input.environmentId,
-        input: {
-          projectId,
-          title: inferProjectTitleFromPath(cwd),
-          workspaceRoot: cwd,
-          createWorkspaceRootIfMissing: true,
-          // Project creation never exposes a model choice, so seeding one here
-          // reads back as an explicit user default it never was. Upstream
-          // reversed its own seeding (#9142) and ships migration 047 to clear
-          // the rows it already wrote.
-          defaultModelSelection: null,
-        },
-      });
-      if (createResult._tag === "Failure") {
-        if (!isAtomCommandInterrupted(createResult)) {
-          const error = squashAtomCommandFailure(createResult);
+        if (navigationResult._tag === "Failure") {
+          const error = squashAtomCommandFailure(navigationResult);
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Failed to add project",
+              title: "Failed to open project",
               description: error instanceof Error ? error.message : "An error occurred.",
             }),
           );
+          return false;
         }
-        return false;
       }
+      return true;
+    }
 
-      const navigationResult = await settlePromise(() =>
-        handleNewThread(scopeProjectRef(input.environmentId, projectId)),
+    if (!readEnvironmentScope(input.environmentId, AuthOrchestrationOperateScope)) {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Cannot add project",
+          description: "This connection cannot add projects.",
+        }),
       );
-      if (navigationResult._tag === "Failure") {
-        const error = squashAtomCommandFailure(navigationResult);
+      return false;
+    }
+    const projectId = newProjectId();
+    const createResult = await createProject({
+      environmentId: input.environmentId,
+      input: {
+        projectId,
+        title: inferProjectTitleFromPath(cwd),
+        workspaceRoot: cwd,
+        createWorkspaceRootIfMissing: true,
+        // Project creation never exposes a model choice, so seeding one here
+        // reads back as an explicit user default it never was. Upstream
+        // reversed its own seeding (#9142) and ships migration 047 to clear
+        // the rows it already wrote.
+        defaultModelSelection: null,
+      },
+    });
+    if (createResult._tag === "Failure") {
+      if (!isAtomCommandInterrupted(createResult)) {
+        const error = squashAtomCommandFailure(createResult);
         toastManager.add(
           stackedThreadToast({
             type: "error",
@@ -196,19 +180,24 @@ export function useAddProjectFromPath(): (input: AddProjectFromPathInput) => Pro
             description: error instanceof Error ? error.message : "An error occurred.",
           }),
         );
-        return false;
       }
-      return true;
-    },
-    [
-      createProject,
-      environments,
-      handleNewThread,
-      navigate,
-      projects,
-      sidebarThreadSortOrder,
-      threads,
-      machineEnvironmentId,
-    ],
-  );
+      return false;
+    }
+
+    const navigationResult = await settlePromise(() =>
+      handleNewThread(scopeProjectRef(input.environmentId, projectId)),
+    );
+    if (navigationResult._tag === "Failure") {
+      const error = squashAtomCommandFailure(navigationResult);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Failed to add project",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        }),
+      );
+      return false;
+    }
+    return true;
+  });
 }

@@ -34,7 +34,6 @@ export function getSyntaxHighlighterPromise(language: string): Promise<DiffsHigh
       // succeed, at the cost of one more attempt per language and per mount.
       throw error;
     }
-    // Language not supported by Shiki — fall back to "text"
     return getSyntaxHighlighterPromise("text");
   });
   highlighterPromiseCache.set(language, promise);

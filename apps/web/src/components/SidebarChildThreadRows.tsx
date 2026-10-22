@@ -33,8 +33,8 @@ const SidebarChildThreadRows = memo(function SidebarChildThreadRows(props: {
   onOpen: (threadRef: ScopedThreadRef) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const toggleRender = useMemo(() => <button type="button" />, []);
-  const rowRender = useMemo(() => <button type="button" />, []);
+  const toggleRender = (() => <button type="button" />)();
+  const rowRender = (() => <button type="button" />)();
   const { shells } = props;
   if (shells.length === 0) {
     return null;

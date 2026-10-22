@@ -83,7 +83,7 @@ export function RateLimitMeter(props: { limits: ServerProviderUsageLimits; isRun
           >
             {rows.map((row) => (
               <span key={row.id} className="inline-flex items-center gap-1">
-                <span className="text-[9px] font-medium uppercase tracking-[0.06em] text-muted-foreground/70">
+                <span className="text-3xs font-medium uppercase tracking-wider text-muted-foreground/70">
                   {shortLabel(row.label)}
                 </span>
                 <MiniBar usedPercent={row.usedPercent} />
@@ -92,20 +92,20 @@ export function RateLimitMeter(props: { limits: ServerProviderUsageLimits; isRun
           </button>
         }
       />
-      <PopoverPopup tooltipStyle side="top" align="end" className="w-max max-w-none px-3 py-2">
+      <PopoverPopup tooltipStyle side="top" align="end" className="w-max max-w-none">
         <div className="space-y-2 leading-tight">
           <div className="flex items-center justify-between gap-3">
-            <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+            <span className="text-2xs font-medium uppercase tracking-wider text-muted-foreground">
               Quota usage
             </span>
             {limits.planType ? (
-              <span className="text-[11px] text-muted-foreground/70 capitalize">
+              <span className="text-2xs text-muted-foreground/70 capitalize">
                 {limits.planType}
               </span>
             ) : null}
           </div>
           {isStale && updatedAgo ? (
-            <div className="text-[11px] text-muted-foreground/60">{updatedAgo}</div>
+            <div className="text-2xs text-muted-foreground/60">{updatedAgo}</div>
           ) : null}
           {rows.map((row) => {
             const reset = formatRateLimitReset(row.resetsAt, nowMs);
@@ -128,7 +128,7 @@ export function RateLimitMeter(props: { limits: ServerProviderUsageLimits; isRun
                     style={{ width: `${Math.max(0, Math.min(100, row.usedPercent))}%` }}
                   />
                 </div>
-                {reset ? <div className="text-[11px] text-muted-foreground/70">{reset}</div> : null}
+                {reset ? <div className="text-2xs text-muted-foreground/70">{reset}</div> : null}
               </div>
             );
           })}

@@ -140,9 +140,11 @@ export function applyUsageLimitsUpdate(input: {
       changed = true;
     }
   }
-  if (!changed && previous !== undefined && previous.unavailable === undefined) {
+  if (!changed && previous !== undefined) {
     return previous;
   }
+  const unavailable =
+    previous === undefined ? { reason: "probeFailed" as const } : previous.unavailable;
   return {
     ...makeUsageLimits({
       checkedAt: input.checkedAt,
@@ -150,6 +152,7 @@ export function applyUsageLimitsUpdate(input: {
       planType: previous?.planType,
     }),
     ...(previous?.resetCredits !== undefined ? { resetCredits: previous.resetCredits } : {}),
+    ...(unavailable !== undefined ? { unavailable } : {}),
   };
 }
 
@@ -165,17 +168,6 @@ function usageWindowEquals(a: ServerProviderUsageWindow, b: ServerProviderUsageW
   );
 }
 
-/**
- * Choose what to publish after a status probe finishes. A probe that failed
- * this time must not wipe bars a previous probe or a turn already
- * established, so the last good snapshot stays; `unsupported` is
- * authoritative and replaces them.
- *
- * A provider that does not include usage in its status probe leaves the last
- * good snapshot alone. This matters for Cursor, whose usage comes from a
- * separate best-effort dashboard read. A successful probe also cannot replace
- * a runtime update observed after that probe began.
- */
 export function resolveUsageLimitsAfterProbe(input: {
   readonly published: ServerProviderUsageLimits | undefined;
   readonly probed: ServerProviderUsageLimits | undefined;
@@ -184,16 +176,15 @@ export function resolveUsageLimitsAfterProbe(input: {
   if (probed?.unavailable?.reason === "probeFailed" && published && !published.unavailable) {
     return published;
   }
-  if (probed === undefined) {
-    return published;
-  }
+  if (probed === undefined) return published;
   if (
-    published !== undefined &&
-    published.unavailable === undefined &&
-    probed.unavailable === undefined &&
-    published.checkedAt > probed.checkedAt
+    published &&
+    probed &&
+    !published.unavailable &&
+    !probed.unavailable &&
+    Date.parse(published.checkedAt) > Date.parse(probed.checkedAt)
   ) {
-    return published;
+    return { ...probed, checkedAt: published.checkedAt, windows: published.windows };
   }
   return probed;
 }

@@ -4,18 +4,24 @@ import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeI
 
 import {
   T3_CODE_BROWSER_TOOL_INSTRUCTIONS,
-  T3_CODE_ORCHESTRATION_INSTRUCTIONS,
+  T3_CODE_ORCHESTRATION_SECTIONS,
 } from "@t3tools/provider-core/server/orchestrationInstructions";
 
 const T3_CODE_THREAD_HISTORY_INSTRUCTIONS = `## T3 Code conversation history
 
-The \`t3-code\` MCP server exposes \`thread_search\` and \`thread_read\` over this project's earlier threads. Earlier threads are where prior decisions, previous attempts, and known dead ends live, and the user will not always remember to point you at them.
+The \`t3-code\` MCP server exposes \`t3_thread_search\` and \`t3_thread_read\` over this project's earlier threads. Earlier threads are where prior decisions, previous attempts, and known dead ends live, and the user will not always remember to point you at them.
 
 Search before deep repo exploration when the request refers to earlier work, past decisions, a previous attempt, or a convention the repo does not explain on its own. Skip it for self-contained requests: a one-line edit, a direct question about code in front of you, or anything where prior context cannot change the answer.
 
-Keep the lookup light. Search with a few concrete terms, and open at most one or two promising threads with \`thread_read\`, which writes a transcript to disk and returns its path for you to read. If nothing relevant surfaces, stop searching and continue with the task rather than trying more phrasings.
+Keep the lookup light. Search with a few concrete terms, and open at most one or two promising threads with \`t3_thread_read\`, which returns paginated conversation history. If nothing relevant surfaces, stop searching and continue with the task rather than trying more phrasings.
 
 Treat what you find as history, not as current truth: it describes work as it was, and the repository may have moved on. Verify anything load-bearing against the current state before relying on it, and say when a conclusion came from an earlier thread.`;
+/**
+ * Codex cuts the middle out of any `additionalContext` value over 1,000 tokens,
+ * which it counts as UTF-8 bytes divided by four. It does this silently, so
+ * every value built here has to fit.
+ */
+export const CODEX_ADDITIONAL_CONTEXT_VALUE_MAX_BYTES = 4_000;
 
 const T3_CODE_DEVICE_TOOL_INSTRUCTIONS = `## T3 Code devices
 
@@ -36,11 +42,10 @@ const normalizeAvailability = (
     : availability;
 
 /**
- * Each block is omitted entirely when its tools aren't attached. Describing
- * `preview_*` or `device_*` tools that aren't in the turn's tool list would be
- * worse than saying nothing: the instructions actively steer the model away
- * from Playwright, agent-browser, and raw simctl/adb, so leaving them in would
- * talk it out of the only automation it still has.
+ * Describing `preview_*` or `device_*` tools that aren't in the turn's tool list would be worse
+ * than saying nothing: the instructions actively steer the model away from Playwright,
+ * agent-browser, and raw simctl/adb, so leaving them in would talk it out of the only automation
+ * it still has.
  */
 const toolInstructions = (availability: boolean | T3CodeToolAvailability): string => {
   const tools = normalizeAvailability(availability);
@@ -198,10 +203,9 @@ In Default mode, strongly prefer making reasonable assumptions and executing the
 export interface CodexRuntimeInfo {
   readonly model: string;
   readonly modelName?: string | undefined;
-  readonly reasoningEffort: string;
+  readonly reasoningEffort?: string | undefined;
 }
 
-/** Mode prompt for `turn/start.collaborationMode.settings.developer_instructions`. */
 export function buildCodexDeveloperInstructions(interactionMode: ProviderInteractionMode): string {
   return interactionMode === "plan"
     ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
@@ -209,28 +213,25 @@ export function buildCodexDeveloperInstructions(interactionMode: ProviderInterac
 }
 
 /**
- * T3 Code context for `turn/start.additionalContext`. Codex renders each entry
- * as a `<key>value</key>` developer message and resends it only when the value
- * changes.
- *
  * This must stay out of the collaboration mode: when the model catalog ships
  * its own text for a mode, as newer models do, Codex uses that text and drops
  * the client's `developer_instructions` entirely.
  */
 export function buildCodexAdditionalContext(
   runtime: CodexRuntimeInfo,
-  /**
-   * Whether the `t3-code` MCP server is attached to this turn. Callers derive
-   * it from the session's actual MCP configuration rather than re-reading the
-   * setting, so the prompt cannot claim tools the turn doesn't have.
-   */
   toolsAvailable: boolean | T3CodeToolAvailability = true,
 ): Record<string, V2TurnStartParams__AdditionalContextEntry> {
   const tools = toolInstructions(toolsAvailable);
   const threadHistory = normalizeAvailability(toolsAvailable).threads === true;
-  // Separate keys keep each value under Codex's per-entry token cap.
+  // Separate keys keep each value under Codex's per-entry cap. Codex emits
+  // entries in key order, so the numbering preserves the authored order.
   return {
-    t3_code_orchestration: { kind: "application", value: T3_CODE_ORCHESTRATION_INSTRUCTIONS },
+    ...Object.fromEntries(
+      T3_CODE_ORCHESTRATION_SECTIONS.map((section, index) => [
+        `t3_code_orchestration_${String(index + 1).padStart(2, "0")}`,
+        { kind: "application" as const, value: section },
+      ]),
+    ),
     t3_code_runtime: {
       kind: "application",
       value: buildRuntimeInstructions({ harness: "Codex", ...runtime }),

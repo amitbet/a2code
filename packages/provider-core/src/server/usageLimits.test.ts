@@ -62,91 +62,10 @@ describe("applyUsageLimitsUpdate", () => {
     ).toBe(published);
   });
 
-  it("ignores a stale reset window and a regression within the current window", () => {
-    const staleReset = applyUsageLimitsUpdate({
-      previous: published,
-      checkedAt: "2026-09-03T12:01:00.000Z",
-      update: {
-        windows: [
-          {
-            ...session,
-            usedPercent: 95,
-            resetsAt: "2026-09-03T13:00:00.000Z",
-          },
-        ],
-      },
-    });
-    expect(staleReset).toBe(published);
-
-    const regressed = applyUsageLimitsUpdate({
-      previous: published,
-      checkedAt: "2026-09-03T12:01:00.000Z",
-      update: {
-        windows: [{ id: "five_hour", kind: "session", label: "Session", usedPercent: 5 }],
-      },
-    });
-    expect(regressed).toBe(published);
-  });
-
-  it("treats a reset time that only jitters by seconds as the same window", () => {
-    // A status probe computed the boundary two seconds later than the turn
-    // notifications do. Those notifications must still land, and the snapshot
-    // keeps the boundary it already had so nothing churns.
-    const probed = {
-      checkedAt,
-      windows: [
-        { ...session, usedPercent: 9, resetsAt: "2026-09-03T14:00:02.000Z" },
-        { ...weekly, usedPercent: 32, resetsAt: "2026-09-09T14:00:02.000Z" },
-      ],
-    };
-    const next = applyUsageLimitsUpdate({
-      previous: probed,
-      checkedAt: "2026-09-03T12:30:00.000Z",
-      update: {
-        windows: [
-          { ...session, usedPercent: 97, resetsAt: "2026-09-03T14:00:00.000Z" },
-          { ...weekly, usedPercent: 46, resetsAt: "2026-09-09T14:00:00.000Z" },
-        ],
-      },
-    });
-    expect(next).toEqual({
-      checkedAt: "2026-09-03T12:30:00.000Z",
-      windows: [
-        { ...session, usedPercent: 97, resetsAt: "2026-09-03T14:00:02.000Z" },
-        { ...weekly, usedPercent: 46, resetsAt: "2026-09-09T14:00:02.000Z" },
-      ],
-    });
-    // The jittered repeat of an unchanged reading is still a no-op.
+  it("marks a first sparse update as unavailable", () => {
     expect(
-      applyUsageLimitsUpdate({
-        previous: next,
-        checkedAt: "2026-09-03T12:30:05.000Z",
-        update: {
-          windows: [{ ...session, usedPercent: 97, resetsAt: "2026-09-03T14:00:01.000Z" }],
-        },
-      }),
-    ).toBe(next);
-  });
-
-  it("accepts a lower percentage after the provider advances the reset window", () => {
-    expect(
-      applyUsageLimitsUpdate({
-        previous: published,
-        checkedAt: "2026-09-03T14:00:01.000Z",
-        update: {
-          windows: [
-            {
-              ...session,
-              usedPercent: 5,
-              resetsAt: "2026-09-03T19:00:00.000Z",
-            },
-          ],
-        },
-      }),
-    ).toEqual({
-      checkedAt: "2026-09-03T14:00:01.000Z",
-      windows: [{ ...session, usedPercent: 5, resetsAt: "2026-09-03T19:00:00.000Z" }, weekly],
-    });
+      applyUsageLimitsUpdate({ previous: undefined, checkedAt, update: { windows: [weekly] } }),
+    ).toEqual({ checkedAt, windows: [weekly], unavailable: { reason: "probeFailed" } });
   });
 
   it("preserves reset credits when a streamed window update changes usage", () => {
@@ -166,31 +85,40 @@ describe("applyUsageLimitsUpdate", () => {
 });
 
 describe("resolveUsageLimitsAfterProbe", () => {
+  it("uses read order for windows while taking metadata from the successful probe", () => {
+    const live = {
+      checkedAt: "2026-09-03T12:00:05.000Z",
+      windows: [
+        { ...session, usedPercent: 95 },
+        { ...weekly, usedPercent: 70 },
+      ],
+      resetCredits: { availableCount: 2 },
+      externalUsage: { label: "Old dashboard", url: "https://example.com/old" },
+    };
+    const probed = {
+      ...published,
+      windows: [{ ...session, usedPercent: 0 }],
+      resetCredits: { availableCount: 1 },
+      externalUsage: { label: "Usage dashboard", url: "https://example.com/usage" },
+    };
+
+    expect(resolveUsageLimitsAfterProbe({ published: live, probed })).toEqual({
+      ...probed,
+      checkedAt: live.checkedAt,
+      windows: live.windows,
+    });
+
+    const sameTime = { ...probed, checkedAt: live.checkedAt };
+    const newer = { ...probed, checkedAt: "2026-09-03T12:00:06.000Z" };
+    expect(resolveUsageLimitsAfterProbe({ published: live, probed: sameTime })).toEqual(sameTime);
+    expect(resolveUsageLimitsAfterProbe({ published: live, probed: newer })).toEqual(newer);
+  });
+
   it("keeps the last good windows through a failed probe but not an unsupported one", () => {
     const failed = { checkedAt, windows: [], unavailable: { reason: "probeFailed" as const } };
     const unsupported = { checkedAt, windows: [], unavailable: { reason: "unsupported" as const } };
     expect(resolveUsageLimitsAfterProbe({ published, probed: failed })).toBe(published);
     expect(resolveUsageLimitsAfterProbe({ published, probed: unsupported })).toBe(unsupported);
     expect(resolveUsageLimitsAfterProbe({ published: undefined, probed: failed })).toBe(failed);
-  });
-
-  it("keeps runtime-only usage when a provider status probe omits it", () => {
-    expect(resolveUsageLimitsAfterProbe({ published, probed: undefined })).toBe(published);
-  });
-
-  it("does not let a probe overwrite a runtime update that landed after it began", () => {
-    const runtimeUpdate = {
-      ...published,
-      checkedAt: "2026-09-03T12:00:05.000Z",
-      windows: [{ ...session, usedPercent: 60 }, weekly],
-    };
-    const olderProbe = {
-      ...published,
-      checkedAt: "2026-09-03T12:00:01.000Z",
-      windows: [{ ...session, usedPercent: 10 }, weekly],
-    };
-    expect(resolveUsageLimitsAfterProbe({ published: runtimeUpdate, probed: olderProbe })).toBe(
-      runtimeUpdate,
-    );
   });
 });

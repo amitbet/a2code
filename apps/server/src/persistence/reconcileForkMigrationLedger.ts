@@ -3,7 +3,7 @@ import * as Migrator from "effect/sql/Migrator";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import { FORK_MIGRATIONS_TABLE } from "./ForkMigrations.ts";
-import { migrationEntries } from "./Migrations.ts";
+import { migrationManifest } from "./Migrations.ts";
 
 /**
  * Ledger names the fork recorded in `effect_sql_migrations` before fork schema
@@ -52,7 +52,7 @@ export const reconcileForkMigrationLedger = Effect.fn("reconcileForkMigrationLed
       if (!isForkLedger) return false;
 
       const upstreamIdByName = new Map<string, number>(
-        migrationEntries.map(([id, name]) => [name, id]),
+        migrationManifest.map(([id, name]) => [name, id]),
       );
       const upstreamIds: Array<readonly [number, string]> = [];
       const forkIds: Array<readonly [number, string]> = [];

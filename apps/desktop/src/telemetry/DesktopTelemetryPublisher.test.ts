@@ -1,18 +1,18 @@
+import * as Option from "effect/Option";
+import * as Fiber from "effect/Fiber";
+import * as Ref from "effect/Ref";
 import { DesktopHostTelemetryMessage } from "@t3tools/contracts";
+import * as Stream from "effect/Stream";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
-import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
-import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
-import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import type * as Electron from "electron";
@@ -39,6 +39,7 @@ function layerElectronApp(
     name: Effect.succeed("T3 Code"),
     systemLocale: Effect.succeed("en-US"),
     whenReady: Effect.void,
+    requestSingleInstanceLock: Effect.succeed(true),
     quit: Effect.void,
     exit: () => Effect.void,
     relaunch: () => Effect.void,
@@ -660,7 +661,6 @@ describe("DesktopRendererHistory", () => {
           assert.equal(crash.rendererPidSource, "last-known");
           assert.equal(crash.reason, "oom");
           assert.equal(crash.exitCode, -7);
-          // A restarted renderer can reuse the same numeric PID.
           const restarted = yield* Deferred.make<Record>();
           milestone = { matches: (row) => row.event === "dom-ready", written: restarted };
           previewPid = 7_003;
@@ -686,7 +686,6 @@ describe("DesktopRendererHistory", () => {
           yield* history.recordMetrics(metrics);
           assert.equal((yield* Deferred.await(afterDestroy)).webContentsId, 1);
           assert.isFalse(persisted.slice(previousCount).some((row) => row.webContentsId === 2));
-          // The app quit handshake drains before the history layer closes.
           for (let index = 0; index < 12; index++) main.emit("dom-ready");
           yield* history.shutdown;
           assert.equal(

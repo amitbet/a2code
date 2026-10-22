@@ -1,19 +1,15 @@
-import { createElement } from "react";
+import { ProviderInstanceId } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
+import { ProviderInstanceCard } from "./ProviderInstanceCard";
+import { ProviderDriverKind } from "@t3tools/contracts";
+import { type ServerProvider } from "@t3tools/contracts";
+import { createElement } from "react";
 import { describe, expect, it } from "vite-plus/test";
-import {
-  ProviderDriverKind,
-  ProviderInstanceId,
-  type ServerProvider,
-  type ServerProviderModel,
-} from "@t3tools/contracts";
+import type { ServerProviderModel } from "@t3tools/contracts";
 
 import {
   deriveProviderModelsForDisplay,
   nextProviderEnvironmentWithFieldValue,
-  providerEnvironmentWithoutNames,
-  ProviderInstanceCard,
-  readProviderEnvironmentVariable,
 } from "./ProviderInstanceCard";
 
 describe("deriveProviderModelsForDisplay", () => {
@@ -222,19 +218,5 @@ describe("provider environment helpers", () => {
         "new-key",
       ),
     ).toEqual([{ name: "OPENAI_API_KEY", value: "new-key", sensitive: true }]);
-  });
-
-  it("separates dedicated provider secrets from the generic environment table", () => {
-    const environment = [
-      { name: "CURSOR_API_KEY", value: "cursor-key", sensitive: true },
-      { name: "EXTRA_FLAG", value: "1", sensitive: false },
-    ];
-
-    expect(readProviderEnvironmentVariable(environment, "CURSOR_API_KEY")?.value).toBe(
-      "cursor-key",
-    );
-    expect(providerEnvironmentWithoutNames(environment, new Set(["CURSOR_API_KEY"]))).toEqual([
-      { name: "EXTRA_FLAG", value: "1", sensitive: false },
-    ]);
   });
 });

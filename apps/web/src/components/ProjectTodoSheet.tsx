@@ -1,3 +1,5 @@
+import { settlePromise } from "@t3tools/client-runtime/state/runtime";
+import { useStableCallback } from "~/hooks/useStableCallback";
 import {
   useCallback,
   useEffect,
@@ -156,13 +158,13 @@ export function ProjectTodoSheet({ open, onOpenChange, project }: ProjectTodoShe
   const missingFile = isMissingFileError(fileQuery.error);
   const loadError = fileQuery.error && !missingFile ? fileQuery.error : null;
   const isDirty = draftHtml !== lastSavedHtml;
-  const isEmpty = useMemo(() => isHtmlEffectivelyEmpty(draftHtml), [draftHtml]);
+  const isEmpty = (() => isHtmlEffectivelyEmpty(draftHtml))();
 
   useEffect(() => {
     latestDraftHtmlRef.current = draftHtml;
   }, [draftHtml]);
 
-  const syncToolbarState = useCallback(() => {
+  const syncToolbarState = useStableCallback(() => {
     const editor = editorRef.current;
     const selection = document.getSelection();
     if (!editor || !selection || !editor.contains(selection.anchorNode)) return;
@@ -186,7 +188,7 @@ export function ProjectTodoSheet({ open, onOpenChange, project }: ProjectTodoShe
         HIGHLIGHT_CHOICES,
       ),
     );
-  }, []);
+  });
 
   useEffect(() => {
     document.addEventListener("selectionchange", syncToolbarState);
@@ -236,113 +238,106 @@ export function ProjectTodoSheet({ open, onOpenChange, project }: ProjectTodoShe
     })();
   }, [fileQuery.isPending, missingFile, open, project, projectKey, writeProjectFile]);
 
-  useEffect(() => {
-    if (!open || !project || fileQuery.isPending) return;
-    const nextHtml = missingFile ? "" : (fileQuery.data?.contents ?? "");
-    if (loadError) {
-      setSaveError(loadError);
-      return;
-    }
-    setSaveError(null);
-    if (initializedProjectKey === projectKey && isDirty) {
-      return;
-    }
-    setDraftHtml(nextHtml);
-    setLastSavedHtml(nextHtml);
-    latestDraftHtmlRef.current = nextHtml;
-    persistedDraftHtmlRef.current = nextHtml;
+  const loadedHtml = missingFile ? "" : (fileQuery.data?.contents ?? "");
+  const shouldLoadDraft =
+    open &&
+    project !== null &&
+    !fileQuery.isPending &&
+    !loadError &&
+    !(initializedProjectKey === projectKey && isDirty);
+  if (
+    shouldLoadDraft &&
+    (initializedProjectKey !== projectKey ||
+      draftHtml !== loadedHtml ||
+      lastSavedHtml !== loadedHtml)
+  ) {
+    setDraftHtml(loadedHtml);
+    setLastSavedHtml(loadedHtml);
     setInitializedProjectKey(projectKey);
-    if (editorRef.current && editorRef.current.innerHTML !== nextHtml) {
-      editorRef.current.innerHTML = nextHtml;
+    setSaveError(null);
+  }
+  useEffect(() => {
+    if (!shouldLoadDraft) return;
+    latestDraftHtmlRef.current = loadedHtml;
+    persistedDraftHtmlRef.current = loadedHtml;
+    if (editorRef.current && editorRef.current.innerHTML !== loadedHtml) {
+      editorRef.current.innerHTML = loadedHtml;
     }
-  }, [
-    fileQuery.data?.contents,
-    fileQuery.isPending,
-    initializedProjectKey,
-    isDirty,
-    loadError,
-    missingFile,
-    open,
-    project,
-    projectKey,
-  ]);
+  }, [shouldLoadDraft, loadedHtml]);
 
-  const persistDraft = useCallback(
-    async (initialHtml: string): Promise<boolean> => {
-      if (!project || initializedProjectKey !== projectKey) return false;
+  const persistDraft = useStableCallback(async (initialHtml: string): Promise<boolean> => {
+    if (!project || initializedProjectKey !== projectKey) return false;
 
-      let nextHtml = initialHtml;
-      while (true) {
-        const existingSave = saveInFlightRef.current;
-        if (existingSave) {
-          const existingSaveSucceeded = await existingSave;
-          nextHtml = latestDraftHtmlRef.current;
-          if (!existingSaveSucceeded) return false;
-          if (nextHtml === persistedDraftHtmlRef.current) return true;
-          continue;
-        }
-
-        if (nextHtml === persistedDraftHtmlRef.current) return true;
-
-        let didSave = false;
-        const saveOperation = (async () => {
-          setIsSaving(true);
-          setSaveError(null);
-          setProjectFileQueryData(
-            project.environmentId,
-            project.workspaceRoot,
-            TODO_FILE_PATH,
-            nextHtml,
-          );
-          try {
-            const result = await writeProjectFile({
-              environmentId: project.environmentId,
-              input: {
-                cwd: project.workspaceRoot,
-                relativePath: TODO_FILE_PATH,
-                contents: nextHtml,
-              },
-            });
-            setIsSaving(false);
-            if (result._tag === "Success") {
-              didSave = true;
-              persistedDraftHtmlRef.current = nextHtml;
-              setLastSavedHtml(nextHtml);
-              confirmProjectFileQueryData(
-                project.environmentId,
-                project.workspaceRoot,
-                TODO_FILE_PATH,
-                nextHtml,
-              );
-              return true;
-            }
-            clearProjectFileQueryData(project.environmentId, project.workspaceRoot, TODO_FILE_PATH);
-            const error = squashAtomCommandFailure(result);
-            setSaveError(error instanceof Error ? error.message : "Could not save todo.");
-            return false;
-          } catch (error) {
-            setIsSaving(false);
-            clearProjectFileQueryData(project.environmentId, project.workspaceRoot, TODO_FILE_PATH);
-            setSaveError(error instanceof Error ? error.message : "Could not save todo.");
-            return false;
-          }
-        })();
-        saveInFlightRef.current = saveOperation;
-        try {
-          await saveOperation;
-        } finally {
-          if (saveInFlightRef.current === saveOperation) {
-            saveInFlightRef.current = null;
-          }
-        }
-
-        if (!didSave) return false;
-        if (latestDraftHtmlRef.current === nextHtml) return true;
+    let nextHtml = initialHtml;
+    while (true) {
+      const existingSave = saveInFlightRef.current;
+      if (existingSave) {
+        const existingSaveSucceeded = await existingSave;
         nextHtml = latestDraftHtmlRef.current;
+        if (!existingSaveSucceeded) return false;
+        if (nextHtml === persistedDraftHtmlRef.current) return true;
+        continue;
       }
-    },
-    [initializedProjectKey, project, projectKey, writeProjectFile],
-  );
+
+      if (nextHtml === persistedDraftHtmlRef.current) return true;
+
+      let didSave = false;
+      const saveOperation = (async () => {
+        setIsSaving(true);
+        setSaveError(null);
+        setProjectFileQueryData(
+          project.environmentId,
+          project.workspaceRoot,
+          TODO_FILE_PATH,
+          nextHtml,
+        );
+        try {
+          const result = await writeProjectFile({
+            environmentId: project.environmentId,
+            input: {
+              cwd: project.workspaceRoot,
+              relativePath: TODO_FILE_PATH,
+              contents: nextHtml,
+            },
+          });
+          setIsSaving(false);
+          if (result._tag === "Success") {
+            didSave = true;
+            persistedDraftHtmlRef.current = nextHtml;
+            setLastSavedHtml(nextHtml);
+            confirmProjectFileQueryData(
+              project.environmentId,
+              project.workspaceRoot,
+              TODO_FILE_PATH,
+              nextHtml,
+            );
+            return true;
+          }
+          clearProjectFileQueryData(project.environmentId, project.workspaceRoot, TODO_FILE_PATH);
+          const error = squashAtomCommandFailure(result);
+          setSaveError(error instanceof Error ? error.message : "Could not save todo.");
+          return false;
+        } catch (error) {
+          setIsSaving(false);
+          clearProjectFileQueryData(project.environmentId, project.workspaceRoot, TODO_FILE_PATH);
+          setSaveError(error instanceof Error ? error.message : "Could not save todo.");
+          return false;
+        }
+      })();
+      saveInFlightRef.current = saveOperation;
+      const cleanupResult0 = await settlePromise(async () => {
+        await saveOperation;
+      });
+      if (saveInFlightRef.current === saveOperation) {
+        saveInFlightRef.current = null;
+      }
+      if (cleanupResult0._tag === "Failure") throw squashAtomCommandFailure(cleanupResult0);
+
+      if (!didSave) return false;
+      if (latestDraftHtmlRef.current === nextHtml) return true;
+      nextHtml = latestDraftHtmlRef.current;
+    }
+  });
 
   useEffect(() => {
     if (!open || !project || initializedProjectKey !== projectKey || !isDirty) return;
@@ -359,96 +354,79 @@ export function ProjectTodoSheet({ open, onOpenChange, project }: ProjectTodoShe
     };
   }, [draftHtml, initializedProjectKey, isDirty, open, persistDraft, project, projectKey]);
 
-  const handleInput = useCallback(() => {
+  const handleInput = useStableCallback(() => {
     const nextHtml = normalizeEditorHtml(editorRef.current?.innerHTML ?? "");
     setDraftHtml(nextHtml);
     if (editorRef.current && nextHtml.length === 0 && editorRef.current.innerHTML !== "") {
       editorRef.current.innerHTML = "";
     }
-  }, []);
+  });
 
-  const handleEditorKeyDown = useCallback(
-    (event: ReactKeyboardEvent<HTMLDivElement>) => {
-      if (event.key !== "Tab") return;
+  const handleEditorKeyDown = useStableCallback((event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Tab") return;
 
-      const editor = editorRef.current;
-      const selection = document.getSelection();
-      const anchorNode = selection?.anchorNode;
-      if (!editor || !selection || !anchorNode || !editor.contains(anchorNode)) return;
+    const editor = editorRef.current;
+    const selection = document.getSelection();
+    const anchorNode = selection?.anchorNode;
+    if (!editor || !selection || !anchorNode || !editor.contains(anchorNode)) return;
 
-      const anchorElement = anchorNode instanceof Element ? anchorNode : anchorNode.parentElement;
-      const listItem = anchorElement?.closest("li");
-      if (!listItem || !editor.contains(listItem)) return;
+    const anchorElement = anchorNode instanceof Element ? anchorNode : anchorNode.parentElement;
+    const listItem = anchorElement?.closest("li");
+    if (!listItem || !editor.contains(listItem)) return;
 
-      event.preventDefault();
-      document.execCommand(event.shiftKey ? "outdent" : "indent", false);
-      handleInput();
-      syncToolbarState();
-    },
-    [handleInput, syncToolbarState],
-  );
+    event.preventDefault();
+    document.execCommand(event.shiftKey ? "outdent" : "indent", false);
+    handleInput();
+    syncToolbarState();
+  });
 
-  const runEditorCommand = useCallback(
-    (command: string, value?: string) => {
-      const editor = editorRef.current;
-      editor?.focus();
-      const savedSelection = savedSelectionRef.current;
-      const selection = document.getSelection();
-      if (editor && savedSelection && editor.contains(savedSelection.commonAncestorContainer)) {
-        selection?.removeAllRanges();
-        selection?.addRange(savedSelection);
-      }
-      document.execCommand(command, false, value);
-      handleInput();
-      syncToolbarState();
-    },
-    [handleInput, syncToolbarState],
-  );
+  const runEditorCommand = useStableCallback((command: string, value?: string) => {
+    const editor = editorRef.current;
+    editor?.focus();
+    const savedSelection = savedSelectionRef.current;
+    const selection = document.getSelection();
+    if (editor && savedSelection && editor.contains(savedSelection.commonAncestorContainer)) {
+      selection?.removeAllRanges();
+      selection?.addRange(savedSelection);
+    }
+    document.execCommand(command, false, value);
+    handleInput();
+    syncToolbarState();
+  });
 
-  const handleSheetOpenChange = useCallback(
-    (nextOpen: boolean) => {
-      if (nextOpen) {
-        onOpenChange(true);
-        return;
-      }
-      if (closeRequestInFlightRef.current) return;
+  const handleSheetOpenChange = useStableCallback((nextOpen: boolean) => {
+    if (nextOpen) {
+      onOpenChange(true);
+      return;
+    }
+    if (closeRequestInFlightRef.current) return;
 
-      closeRequestInFlightRef.current = true;
-      if (saveTimeoutRef.current !== null) {
-        window.clearTimeout(saveTimeoutRef.current);
-        saveTimeoutRef.current = null;
-      }
+    closeRequestInFlightRef.current = true;
+    if (saveTimeoutRef.current !== null) {
+      window.clearTimeout(saveTimeoutRef.current);
+      saveTimeoutRef.current = null;
+    }
 
-      void (async () => {
-        try {
-          const currentHtml = normalizeEditorHtml(
-            editorRef.current?.innerHTML ?? latestDraftHtmlRef.current,
-          );
-          latestDraftHtmlRef.current = currentHtml;
-          if (currentHtml !== draftHtml) setDraftHtml(currentHtml);
-          if (
-            project &&
-            initializedProjectKey === projectKey &&
-            (currentHtml !== lastSavedHtml || saveInFlightRef.current)
-          ) {
-            await persistDraft(currentHtml);
-          }
-        } finally {
-          closeRequestInFlightRef.current = false;
-          onOpenChange(false);
+    void (async () => {
+      const cleanupResult1 = await settlePromise(async () => {
+        const currentHtml = normalizeEditorHtml(
+          editorRef.current?.innerHTML ?? latestDraftHtmlRef.current,
+        );
+        latestDraftHtmlRef.current = currentHtml;
+        if (currentHtml !== draftHtml) setDraftHtml(currentHtml);
+        if (
+          project &&
+          initializedProjectKey === projectKey &&
+          (currentHtml !== lastSavedHtml || saveInFlightRef.current)
+        ) {
+          await persistDraft(currentHtml);
         }
-      })();
-    },
-    [
-      draftHtml,
-      initializedProjectKey,
-      lastSavedHtml,
-      onOpenChange,
-      persistDraft,
-      project,
-      projectKey,
-    ],
-  );
+      });
+      closeRequestInFlightRef.current = false;
+      onOpenChange(false);
+      if (cleanupResult1._tag === "Failure") throw squashAtomCommandFailure(cleanupResult1);
+    })();
+  });
 
   const saveStateLabel = loadError
     ? "Load failed"
@@ -467,12 +445,12 @@ export function ProjectTodoSheet({ open, onOpenChange, project }: ProjectTodoShe
       <SheetPopup
         side="right"
         showCloseButton={false}
-        className="h-dvh! w-[min(42rem,100vw)]! max-w-[42rem]! rounded-none border-s border-sidebar-border bg-sidebar surface-grain text-sidebar-foreground shadow-2xl"
+        className="h-dvh! w-[min(42rem,100vw)]! max-w-[42rem]!"
       >
-        <SheetHeader className="gap-3 border-b border-sidebar-border/70 pb-4">
+        <SheetHeader className="">
           <div className="flex items-start justify-between gap-3 pr-1">
             <div className="min-w-0">
-              <SheetTitle className="text-base">Project Todo</SheetTitle>
+              <SheetTitle className="">Project Todo</SheetTitle>
               <SheetDescription className="mt-1">
                 {project
                   ? `${project.displayName} • saved as ${TODO_FILE_PATH}`
@@ -485,7 +463,7 @@ export function ProjectTodoSheet({ open, onOpenChange, project }: ProjectTodoShe
                 type="button"
                 size="icon-sm"
                 variant="ghost"
-                className="-me-1 -mt-1 size-8 rounded-lg text-muted-foreground hover:bg-background hover:text-foreground"
+                className="-me-1 -mt-1 size-8"
                 aria-label="Close project todo"
                 title="Close project todo"
                 onClick={() => handleSheetOpenChange(false)}
@@ -556,7 +534,7 @@ export function ProjectTodoSheet({ open, onOpenChange, project }: ProjectTodoShe
             </div>
           </div>
         </SheetHeader>
-        <SheetPopup className="h-full min-h-0 p-4">
+        <SheetPopup className="h-full min-h-0">
           {loadError ? (
             <div className="rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2 text-sm text-destructive">
               {loadError}
@@ -582,7 +560,7 @@ export function ProjectTodoSheet({ open, onOpenChange, project }: ProjectTodoShe
             ) : null}
             <div
               ref={editorRef}
-              className="min-h-[24rem] px-5 py-4 text-[15px] leading-7 outline-none [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_font]:inherit [&_li]:my-1 [&_ol]:ml-5 [&_ol]:list-decimal [&_p]:my-2 [&_strong]:font-semibold [&_u]:underline [&_ul]:ml-5 [&_ul]:list-disc"
+              className="min-h-[24rem] px-5 py-4 text-sm leading-7 outline-none [&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_li]:my-1 [&_ol]:ml-5 [&_ol]:list-decimal [&_p]:my-2 [&_strong]:font-semibold [&_u]:underline [&_ul]:ml-5 [&_ul]:list-disc"
               contentEditable
               onFocus={() => setIsFocused(true)}
               onBlur={() => setIsFocused(false)}
@@ -604,7 +582,7 @@ function ToolbarIconButton(props: { label: string; onClick: () => void; icon: Re
       type="button"
       size="icon-sm"
       variant="ghost"
-      className="size-9 rounded-lg text-muted-foreground hover:bg-background hover:text-foreground"
+      className="size-9"
       onClick={props.onClick}
       title={props.label}
       aria-label={props.label}
@@ -635,7 +613,7 @@ function ToolbarSelect(props: {
       <PopoverTrigger
         type="button"
         aria-label={props.ariaLabel}
-        className="inline-flex h-9 min-w-0 max-w-full cursor-pointer items-center gap-2 rounded-lg border border-sidebar-border/80 bg-background/85 px-3 text-sm text-foreground outline-none transition-colors hover:bg-background focus-visible:ring-2 focus-visible:ring-ring"
+        className="inline-flex h-9 min-w-0 max-w-full cursor-pointer items-center"
       >
         {props.icon}
         {selectedOption.swatch !== undefined ? (

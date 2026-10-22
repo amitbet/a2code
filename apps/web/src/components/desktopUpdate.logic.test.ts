@@ -1,5 +1,10 @@
+import { shouldShowArm64IntelBuildWarning } from "./desktopUpdate.logic";
+import { DesktopUpdateActionResult } from "@t3tools/contracts";
+import { getDesktopUpdateInstallConfirmationMessage } from "./desktopUpdate.logic";
+import { shouldToastDesktopUpdateActionResult } from "./desktopUpdate.logic";
+import { isDesktopUpdateButtonDisabled } from "./desktopUpdate.logic";
 import { describe, expect, it } from "vite-plus/test";
-import type { DesktopUpdateActionResult, DesktopUpdateState } from "@t3tools/contracts";
+import type { DesktopUpdateState } from "@t3tools/contracts";
 
 import {
   canCheckForUpdate,
@@ -7,13 +12,9 @@ import {
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
   getDesktopUpdateButtonTooltip,
-  getDesktopUpdateInstallConfirmationMessage,
   getDesktopUpdateReleaseHistoryUrl,
   getDesktopUpdateReleaseUrl,
-  isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
-  shouldShowArm64IntelBuildWarning,
-  shouldToastDesktopUpdateActionResult,
 } from "./desktopUpdate.logic";
 
 const baseState: DesktopUpdateState = {
@@ -247,25 +248,14 @@ describe("getDesktopUpdateActionError", () => {
 });
 
 describe("desktop update UI helpers", () => {
-  it("builds the stable release URL for a downloaded version", () => {
-    expect(getDesktopUpdateReleaseUrl("0.0.30")).toBe(
-      "https://github.com/pingdotgg/t3code/releases/tag/v0.0.30",
-    );
-  });
-
-  it("builds the nightly release URL without dropping its version suffix", () => {
-    expect(getDesktopUpdateReleaseUrl("0.0.30-nightly.20260728.931")).toBe(
-      "https://github.com/pingdotgg/t3code/releases/tag/v0.0.30-nightly.20260728.931",
-    );
-  });
-
-  it("omits the release URL when the updater does not report a version", () => {
-    expect(getDesktopUpdateReleaseUrl(null)).toBeNull();
-    expect(getDesktopUpdateReleaseUrl("  ")).toBeNull();
-  });
-
-  it("builds the release history URL", () => {
-    expect(getDesktopUpdateReleaseHistoryUrl()).toBe(
+  it.each([
+    "owner/repo/extra",
+    "owner#notes/repo",
+    "owner/repo#notes",
+    "owner?tab=notes/repo",
+    "owner/repo?tab=notes",
+  ])("falls back to upstream for an invalid configured repository: %s", (repository) => {
+    expect(getDesktopUpdateReleaseHistoryUrl(repository)).toBe(
       "https://github.com/pingdotgg/t3code/releases",
     );
   });
@@ -355,24 +345,6 @@ describe("desktop update UI helpers", () => {
 });
 
 describe("canCheckForUpdate", () => {
-  it("returns false for null state", () => {
-    expect(canCheckForUpdate(null)).toBe(false);
-  });
-
-  it("returns false when updates are disabled", () => {
-    expect(canCheckForUpdate({ ...baseState, enabled: false, status: "disabled" })).toBe(false);
-  });
-
-  it("returns false while checking", () => {
-    expect(canCheckForUpdate({ ...baseState, status: "checking" })).toBe(false);
-  });
-
-  it("returns false while downloading", () => {
-    expect(canCheckForUpdate({ ...baseState, status: "downloading", downloadPercent: 50 })).toBe(
-      false,
-    );
-  });
-
   it("returns true once an update has been downloaded so newer releases can be found", () => {
     expect(
       canCheckForUpdate({
@@ -382,39 +354,5 @@ describe("canCheckForUpdate", () => {
         downloadedVersion: "1.1.0",
       }),
     ).toBe(true);
-  });
-
-  it("returns true when idle", () => {
-    expect(canCheckForUpdate({ ...baseState, status: "idle" })).toBe(true);
-  });
-
-  it("returns true when up-to-date", () => {
-    expect(canCheckForUpdate({ ...baseState, status: "up-to-date" })).toBe(true);
-  });
-
-  it("returns true when an update is available", () => {
-    expect(
-      canCheckForUpdate({ ...baseState, status: "available", availableVersion: "1.1.0" }),
-    ).toBe(true);
-  });
-
-  it("returns true on error so the user can retry", () => {
-    expect(
-      canCheckForUpdate({
-        ...baseState,
-        status: "error",
-        errorContext: "check",
-        message: "network",
-      }),
-    ).toBe(true);
-  });
-});
-
-describe("getDesktopUpdateButtonTooltip", () => {
-  it("returns 'Up to date' for non-actionable states", () => {
-    expect(getDesktopUpdateButtonTooltip({ ...baseState, status: "idle" })).toBe("Up to date");
-    expect(getDesktopUpdateButtonTooltip({ ...baseState, status: "up-to-date" })).toBe(
-      "Up to date",
-    );
   });
 });

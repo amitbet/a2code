@@ -96,7 +96,7 @@ function runChecked(command, args) {
   throw new Error(`Failed to run ${command} ${args.join(" ")}: ${details}`.trim());
 }
 
-export function resolveMacCodeSignArguments(appBundlePath) {
+function resolveMacCodeSignArguments(appBundlePath) {
   return ["--force", "--deep", "--sign", "-", "--timestamp=none", appBundlePath];
 }
 
@@ -138,7 +138,7 @@ export function makeDevelopmentLauncherScript({
   return [
     "#!/bin/sh",
     `if [ -f ${shellSingleQuote(environmentFilePath)} ]; then . ${shellSingleQuote(environmentFilePath)}; fi`,
-    `exec ${shellSingleQuote(electronBinaryPath)} --t3code-dev-root=${shellSingleQuote(desktopRoot)} ${shellSingleQuote(mainEntryPath)} "$@"`,
+    `exec ${shellSingleQuote(electronBinaryPath)} --a2code-dev-root=${shellSingleQuote(desktopRoot)} ${shellSingleQuote(mainEntryPath)} "$@"`,
     "",
   ].join("\n");
 }
@@ -203,7 +203,7 @@ function registerMacLauncherBundle(appBundlePath) {
 }
 
 // Bundle-internal paths are macOS paths whatever host builds them.
-export function resolveMacLauncherIconPaths(runtimeDir, development = isDevelopment) {
+function resolveMacLauncherIconPaths(runtimeDir, development = isDevelopment) {
   return {
     sourceIconPath: development ? developmentMacIconPngPath : productionMacIconPngPath,
     generatedIconPath: NodePath.posix.join(
@@ -262,7 +262,7 @@ function ensureMacIconIcns(runtimeDir) {
   }
 }
 
-export function resolveMacBundleInfoPlistStrings(executableName) {
+function resolveMacBundleInfoPlistStrings(executableName) {
   return {
     CFBundleDisplayName: APP_DISPLAY_NAME,
     CFBundleName: APP_DISPLAY_NAME,
@@ -402,11 +402,10 @@ function buildMacLauncher(electronBinaryPath) {
   );
   patchHelperBundleInfoPlists(targetAppBundlePath);
   if (isDevelopment) {
-    // Keep Electron's native executable inside the branded bundle. Launching the
-    // node_modules copy makes macOS associate the process (and Dock label) with
-    // Electron.app even though this bundle's Info.plist has the T3 Code name.
-    // Its conventional executable name also keeps Electron's default-app runtime
-    // in development mode instead of making app.isPackaged report true.
+    // Launching the node_modules copy makes macOS associate the process (and Dock label) with
+    // Electron.app even though this bundle's Info.plist has the T3 Code name. Its conventional
+    // executable name also keeps Electron's default-app runtime in development mode instead of
+    // making app.isPackaged report true.
     writeDevelopmentEnvironmentScript();
     writeDevelopmentLauncherScript(launcherBinaryPath, runtimeElectronBinaryPath);
   }

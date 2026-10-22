@@ -1,15 +1,3 @@
-/**
- * Claude Code subscription usage. Both sources produce windows with the same
- * ids so a turn-driven `rate_limit_event` lands on the row the SDK's
- * `get_usage` read established:
- *
- * - `get_usage` (on demand, during the capabilities probe) reports every
- *   window at once as 0–100 percentages with ISO reset times.
- * - `rate_limit_event` (streamed during a turn) names one window at a time
- *   with a 0–1 utilization fraction and an epoch-seconds reset.
- *
- * @module provider/claudeUsageLimits
- */
 import type { SDKControlGetUsageResponse, SDKRateLimitInfo } from "@anthropic-ai/claude-agent-sdk";
 import type {
   ProviderUsageLimitsUpdate,
@@ -20,6 +8,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 
 import {
   clampPercent,
@@ -30,12 +19,6 @@ import {
 const SESSION_MINS = 5 * 60;
 const WEEK_MINS = 7 * 24 * 60;
 
-/**
- * The account-wide windows, keyed by the SDK's `rateLimitType`. Model-scoped
- * weeklies are additive on top of these: the CLI reports them under
- * `rate_limits.model_scoped[]` on `get_usage` and streams the overage-included
- * model bucket (Fable today) as `seven_day_overage_included`.
- */
 const WINDOWS: Readonly<
   Record<string, Pick<ServerProviderUsageWindow, "kind" | "label" | "windowDurationMins">>
 > = {
@@ -51,6 +34,16 @@ const WINDOWS: Readonly<
  * lands on the row the probe drew instead of opening a second one.
  */
 const OVERAGE_INCLUDED_EVENT_TYPE = "seven_day_overage_included";
+
+// The SDK does not yet type the spend budget returned by `get_usage`.
+const SpendMoney = Schema.Struct({
+  amount_minor: Schema.Natural,
+  currency: Schema.NonEmptyString,
+  exponent: Schema.Natural,
+});
+const decodeSpendBudget = Schema.decodeUnknownOption(
+  Schema.Struct({ enabled: Schema.Boolean, used: SpendMoney, limit: SpendMoney }),
+);
 
 export interface ClaudeScopedLimitNames {
   readonly overageIncluded: string | undefined;
@@ -113,6 +106,44 @@ function spendWindow(
     usedPercent: clampPercent(extra.utilization),
     ...(detail ? { detail } : {}),
   };
+}
+
+function percentFromAmounts(used: number | null | undefined, limit: number | null | undefined) {
+  if (
+    typeof used !== "number" ||
+    typeof limit !== "number" ||
+    !Number.isFinite(used) ||
+    !Number.isFinite(limit) ||
+    used < 0 ||
+    limit <= 0
+  ) {
+    return undefined;
+  }
+  const percent = (used / limit) * 100;
+  return Number.isFinite(percent) ? clampPercent(percent) : undefined;
+}
+
+function readSpendPercent(rateLimits: NonNullable<SDKControlGetUsageResponse["rate_limits"]>) {
+  const spend = Option.getOrUndefined(
+    decodeSpendBudget((rateLimits as { readonly spend?: unknown }).spend),
+  );
+  // Minor-unit ratios require matching currency and scale; spend.percent is rounded.
+  if (
+    spend?.enabled &&
+    spend.used.currency.trim().length > 0 &&
+    spend.used.currency.trim() === spend.limit.currency.trim() &&
+    spend.used.exponent === spend.limit.exponent
+  ) {
+    const percent = percentFromAmounts(spend.used.amount_minor, spend.limit.amount_minor);
+    if (percent !== undefined) return percent;
+  }
+
+  const extra = rateLimits.extra_usage;
+  if (extra?.is_enabled !== true) return undefined;
+  const percent = percentFromAmounts(extra.used_credits, extra.monthly_limit) ?? extra.utilization;
+  return typeof percent === "number" && Number.isFinite(percent) && percent >= 0
+    ? clampPercent(percent)
+    : undefined;
 }
 
 /**
@@ -187,8 +218,7 @@ export function claudeRateLimitEventToUpdate(
 }
 
 /**
- * Percentages on the `get_usage` response are already 0–100. Also yields the
- * scoped-bucket names the response carried, for the event mapper to reuse.
+ * Percentages on the `get_usage` response are already 0–100.
  */
 export function claudeUsageResponseToLimits(input: {
   readonly response: Pick<SDKControlGetUsageResponse, "rate_limits_available" | "rate_limits">;
@@ -205,7 +235,7 @@ export function claudeUsageResponseToLimits(input: {
     return {
       limits: makeUnavailableUsageLimits({
         checkedAt,
-        reason: input.planType ? "probeFailed" : "unsupported",
+        reason: response.rate_limits_available ? "probeFailed" : "unsupported",
       }),
       names: { overageIncluded: undefined },
     };
@@ -224,13 +254,19 @@ export function claudeUsageResponseToLimits(input: {
     windows.push(
       scopedWindow(entry.display_name, entry.utilization, isoFromString(entry.resets_at)),
     );
-    // Only a bucket that drew a row may receive events; naming one that was
-    // skipped would let a mid-turn event open a row the probe never showed.
     overageIncluded ??= entry.display_name;
   }
-  const spend = spendWindow(response.rate_limits.extra_usage);
-  if (spend) {
-    windows.push(spend);
+  const spendPercent = readSpendPercent(response.rate_limits);
+  if (spendPercent !== undefined) {
+    windows.push({
+      id: "monthly_spend",
+      kind: "monthly",
+      label: "Monthly spend",
+      usedPercent: spendPercent,
+      ...(spendWindow(response.rate_limits.extra_usage)?.detail
+        ? { detail: spendWindow(response.rate_limits.extra_usage)!.detail }
+        : {}),
+    });
   }
   return {
     limits: makeUsageLimits({ checkedAt, windows, planType: input.planType }),
@@ -238,7 +274,6 @@ export function claudeUsageResponseToLimits(input: {
   };
 }
 
-/** Probe-side helper: map the response and remember the scoped names for events. */
 export const recordClaudeUsageResponse = (
   namesRef: Ref.Ref<ClaudeScopedLimitNames>,
   input: Parameters<typeof claudeUsageResponseToLimits>[0],

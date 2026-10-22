@@ -4,7 +4,7 @@ import type { ThreadId } from "@t3tools/contracts";
 import { memo } from "react";
 import { Pressable, ScrollView, View } from "react-native";
 
-import { AppText as Text } from "../../components/AppText";
+import { AppText as Text } from "../../components/ui/AppText";
 
 /**
  * The `/btw` side questions asked from a thread, as a row of chips above its

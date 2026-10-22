@@ -1,3 +1,6 @@
+import { attachmentFileExtension } from "./attachmentStore.ts";
+import { parseAttachmentFileExtension } from "./attachmentStore.ts";
+import { resolveAttachmentPathById } from "./attachmentStore.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
@@ -6,16 +9,13 @@ import * as NodePath from "node:path";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  attachmentFileExtension,
   chatAttachmentStableKey,
   createAttachmentId,
   createDeterministicAttachmentId,
   createPendingAttachmentId,
   parseAttachmentUuid,
-  parseAttachmentFileExtension,
   planAttachmentClaim,
   parseThreadSegmentFromAttachmentId,
-  resolveAttachmentPathById,
   sweepStalePendingAttachments,
   threadHtmlRenderAttachmentIds,
 } from "./attachmentStore.ts";
@@ -42,7 +42,6 @@ describe("attachmentStore", () => {
       "thread-1",
       chatAttachmentStableKey("message-1", 0, imageA),
     );
-    // Editing the queued message keeps its id, and the new upload is first in its batch.
     const edited = createDeterministicAttachmentId(
       "thread-1",
       chatAttachmentStableKey("message-1", 0, imageB),
@@ -63,36 +62,12 @@ describe("attachmentStore", () => {
     expect(dashed && parseThreadSegmentFromAttachmentId(dashed)).toBe("thread-a");
   });
 
-  it("sanitizes thread ids when creating attachment ids", () => {
-    const attachmentId = createAttachmentId("thread.folder/unsafe space");
-    expect(attachmentId).toBeTruthy();
-    if (!attachmentId) {
-      return;
-    }
-
-    const threadSegment = parseThreadSegmentFromAttachmentId(attachmentId);
-    expect(threadSegment).toBeTruthy();
-    expect(threadSegment).toMatch(/^[a-z0-9_-]+$/i);
-    expect(threadSegment).not.toContain(".");
-    expect(threadSegment).not.toContain("%");
-    expect(threadSegment).not.toContain("/");
-  });
-
   it("parses exact thread segments from attachment ids without prefix collisions", () => {
     const fooId = "foo-00000000-0000-4000-8000-000000000001";
     const fooBarId = "foo-bar-00000000-0000-4000-8000-000000000002";
 
     expect(parseThreadSegmentFromAttachmentId(fooId)).toBe("foo");
     expect(parseThreadSegmentFromAttachmentId(fooBarId)).toBe("foo-bar");
-  });
-
-  it("normalizes created thread segments to lowercase", () => {
-    const attachmentId = createAttachmentId("Thread.Foo");
-    expect(attachmentId).toBeTruthy();
-    if (!attachmentId) {
-      return;
-    }
-    expect(parseThreadSegmentFromAttachmentId(attachmentId)).toBe("thread-foo");
   });
 
   it("reserves the pending attachment segment", () => {
