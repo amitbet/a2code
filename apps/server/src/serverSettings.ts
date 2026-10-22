@@ -1069,7 +1069,12 @@ const make = Effect.gen(function* () {
     writeSemaphore.withPermits(1)(
       Effect.gen(function* () {
         const current = yield* getSettingsFromCache;
-        const updated = yield* update(current);
+        const updated = yield* update(current).pipe(Effect.flatMap(normalizeServerSettings));
+        // Compare before redacting secrets: a replacement credential can leave the
+        // persisted settings unchanged while still requiring a secret-store write.
+        if (Equal.equals(current, updated)) {
+          return resolveTextGenerationProvider(yield* materializeSettingsSecrets(current));
+        }
         const persisted = yield* persistSettingsSecrets(current, updated);
         const next = yield* normalizeServerSettings(persisted.settings);
         const materialized = yield* Effect.uninterruptibleMask(() =>
@@ -1105,9 +1110,14 @@ const make = Effect.gen(function* () {
 
   const revalidateAndEmit = writeSemaphore.withPermits(1)(
     Effect.gen(function* () {
+      const current = yield* getSettingsFromCache;
       yield* Cache.invalidate(settingsCache, cacheKey);
       const settings = yield* getSettingsFromCache;
-      yield* emitChange(settings);
+      // Atomic writes also reach the watcher. Only external value changes need
+      // another notification; formatting-only saves and our own writes do not.
+      if (!Equal.equals(current, settings)) {
+        yield* emitChange(settings);
+      }
     }),
   );
 

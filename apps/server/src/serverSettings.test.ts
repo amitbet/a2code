@@ -99,6 +99,153 @@ const recordProviderUsage = (provider: string, instanceId: string | null = provi
   });
 
 it.layer(NodeServices.layer)("server settings", (it) => {
+  it.effect("does not write or broadcast unchanged patches and provider mutations", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        let writes = 0;
+        const countingFs = FileSystem.FileSystem.of({
+          ...fs,
+          rename: (from, to) =>
+            fs.rename(from, to).pipe(Effect.tap(() => Effect.sync(() => writes++))),
+        });
+        yield* Effect.gen(function* () {
+          const service = yield* ServerSettingsModule.ServerSettingsService;
+          const instanceId = ProviderInstanceId.make("codex_work");
+          const instance = { driver: ProviderDriverKind.make("codex"), config: {} };
+          const initial = yield* service.updateProviderInstance(
+            {
+              operation: "upsert",
+              instanceId,
+              instance,
+            },
+            { favorites: [{ provider: instanceId, model: "sol" }] },
+          );
+          const writesBefore = writes;
+          const changes = yield* service.subscribeChanges;
+
+          assert.deepEqual(yield* service.updateSettings({}), initial);
+          yield* service.updateSettings({ responseStreamingMode: initial.responseStreamingMode });
+          yield* service.updateSettings({ favorites: [{ model: "sol", provider: instanceId }] });
+          yield* service.updateSettings({
+            setModelFavorites: [{ provider: instanceId, model: "sol", favorite: true }],
+          });
+          yield* service.updateProviderInstance({ operation: "upsert", instanceId, instance });
+          assert.equal(writes, writesBefore);
+
+          yield* service.updateSettings({ addProjectBaseDirectory: "~/changed" });
+          const firstChange = Option.getOrThrow(yield* Stream.runHead(changes));
+          assert.equal(firstChange.addProjectBaseDirectory, "~/changed");
+          assert.equal(writes, writesBefore + 1);
+        }).pipe(
+          Effect.provide(
+            layerServerSettings().pipe(
+              Layer.provideMerge(Layer.succeed(FileSystem.FileSystem, countingFs)),
+            ),
+          ),
+        );
+      }),
+    ),
+  );
+
+  it.effect("ignores redacted credential echoes but broadcasts credential replacements", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsModule.ServerSettingsService;
+        const config = yield* ServerConfig.ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        const instanceId = ProviderInstanceId.make("antigravity_secret");
+        const saved = yield* service.updateProviderInstance({
+          operation: "upsert",
+          instanceId,
+          instance: {
+            driver: ProviderDriverKind.make("antigravity"),
+            config: { apiKey: "original-secret" },
+          },
+        });
+        const instance =
+          ServerSettingsModule.redactServerSettingsForClient(saved).providerInstances[instanceId]!;
+        const raw = yield* fs.readFileString(config.settingsPath);
+        const changes = yield* service.subscribeChanges;
+        const echoed = yield* service.updateProviderInstance({
+          operation: "upsert",
+          instanceId,
+          instance,
+        });
+        assert.propertyVal(
+          echoed.providerInstances[instanceId]?.config,
+          "apiKey",
+          "original-secret",
+        );
+
+        yield* service.updateProviderInstance({
+          operation: "upsert",
+          instanceId,
+          instance: { ...instance, config: { apiKey: "replacement-secret" } },
+        });
+        const firstChange = Option.getOrThrow(yield* Stream.runHead(changes));
+        assert.propertyVal(
+          firstChange.providerInstances[instanceId]?.config,
+          "apiKey",
+          "replacement-secret",
+        );
+        assert.equal(yield* fs.readFileString(config.settingsPath), raw);
+      }),
+    ).pipe(Effect.provide(layerServerSettings())),
+  );
+
+  it.effect("ignores watcher echoes and formatting-only saves while keeping real changes", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const trigger = yield* Deferred.make<void>();
+        const reloaded = yield* Deferred.make<void>();
+        let observeReload = false;
+        const watchedFs = FileSystem.FileSystem.of({
+          ...fs,
+          watch: () =>
+            Stream.fromEffect(Deferred.await(trigger)).pipe(
+              Stream.map(() => ({ _tag: "Update" as const, path: "settings.json" })),
+              Stream.concat(Stream.never),
+            ),
+          readFileString: (path, options) =>
+            fs
+              .readFileString(path, options)
+              .pipe(
+                Effect.tap(() =>
+                  observeReload ? Deferred.succeed(reloaded, undefined) : Effect.void,
+                ),
+              ),
+        });
+        yield* Effect.gen(function* () {
+          const service = yield* ServerSettingsModule.ServerSettingsService;
+          const config = yield* ServerConfig.ServerConfig;
+          yield* service.start;
+          yield* service.updateSettings({ responseStreamingMode: "turn" });
+          const changes = yield* service.subscribeChanges;
+          const raw = yield* fs.readFileString(config.settingsPath);
+          yield* fs.writeFileString(config.settingsPath, `\n${raw}\n`);
+          observeReload = true;
+          yield* Deferred.succeed(trigger, undefined);
+          yield* TestClock.adjust("100 millis");
+          yield* Deferred.await(reloaded);
+
+          // The update waits for watcher revalidation's write permit, so the
+          // first queued notification must belong to this real change.
+          yield* service.updateSettings({ responseStreamingMode: "paragraph" });
+          const firstChange = Option.getOrThrow(yield* Stream.runHead(changes));
+          assert.equal(firstChange.responseStreamingMode, "paragraph");
+        }).pipe(
+          Effect.provide(
+            layerServerSettings().pipe(
+              Layer.provideMerge(Layer.succeed(FileSystem.FileSystem, watchedFs)),
+            ),
+          ),
+        );
+      }),
+    ),
+  );
+
   it.effect("serializes concurrent model preference edits without cancelling duplicate adds", () =>
     Effect.gen(function* () {
       const service = yield* ServerSettingsModule.ServerSettingsService;
@@ -316,11 +463,11 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
         yield* writeFileStringAtomically({
           filePath: linkedSettingsPath,
-          contents: `{ "responseStreamingMode": "paragraph" }`,
+          contents: `{ "responseStreamingMode": "turn" }`,
         });
 
         const change = yield* changes.pipe(Stream.runHead, Effect.timeout("2 seconds"));
-        assert.equal(Option.getOrUndefined(change)?.responseStreamingMode, "paragraph");
+        assert.equal(Option.getOrUndefined(change)?.responseStreamingMode, "turn");
       }),
     ).pipe(TestClock.withLive, Effect.provide(layerServerSettings())),
   );
