@@ -153,6 +153,7 @@ describe("claudeUsageResponseToLimits", () => {
     id: "monthly_spend",
     kind: "monthly",
     label: "Monthly spend",
+    detail: "$46.31 / $500.00",
     usedPercent: expect.closeTo(9.262, 10),
   };
 
@@ -217,7 +218,30 @@ describe("claudeUsageResponseToLimits", () => {
     };
     expect(
       claudeUsageResponseToLimits({ checkedAt, response: utilizationOnly }).limits.windows,
-    ).toEqual([monthlyWindow]);
+    ).toEqual([{ ...monthlyWindow, detail: undefined }]);
+  });
+
+  it("keeps spend labels and percentages on the same currency and minor-unit scale", () => {
+    const response = {
+      ...enterpriseResponse,
+      rate_limits: {
+        ...enterpriseResponse.rate_limits,
+        spend: {
+          enabled: true,
+          used: { amount_minor: 1_234, currency: "EUR", exponent: 3 },
+          limit: { amount_minor: 10_000, currency: "EUR", exponent: 3 },
+        },
+      },
+    };
+    expect(claudeUsageResponseToLimits({ checkedAt, response }).limits.windows).toEqual([
+      {
+        id: "monthly_spend",
+        kind: "monthly",
+        label: "Monthly spend",
+        usedPercent: expect.closeTo(12.34, 10),
+        detail: "€1.234 / €10.000",
+      },
+    ]);
   });
 
   it("omits disabled budgets and refuses invalid money without an enabled fallback", () => {

@@ -31,6 +31,8 @@ upstream refactors when merging again; fork behavior now belongs at these new se
 - Quota display now lives in `ComposerFooterControls`. Keep Claude spend details and the
   five-minute usage refresh alongside upstream's provider identity and cache invalidation.
   Effect 4.0.5 returns the refreshed cache value directly; do not keep the old refresh/get pair.
+  Spend labels must use the same budget, currency and minor-unit scale as upstream's percentage
+  calculation; use legacy extra-usage amounts only when the new spend budget is unusable.
 - `RightPanelSurfaceContent` and `RightPanelTab` own side-question content/titles. Answered
   requests remain separate timeline rows in `TimelineUserInputAnswerRow`; contextual citation
   uses the context menu, with selection-safe highlighting in `MarkdownCodeBlock`.
@@ -55,7 +57,15 @@ unit suites, shared packages, web production build, targeted desktop/payload tes
 workspace typechecks were exercised. Linux icon-case tests and Claude's organization-change
 fallback test fail identically in a pristine upstream checkout; the latter is not caused by the
 fork's usage refresher. VS Code Insiders discovery also reproduces upstream on this host.
-Kotlin native lint runs; SwiftLint needs Xcode/SourceKit, unavailable on this machine.
+Final `vp check` reports zero errors; all 32 workspace typechecks pass. Web unit tests: 3,976;
+mobile: 2,132; shared packages: 2,729. The initial full server run passed 4,592 tests and skipped
+19; its 14 failed tests comprise the now-fixed quota mapping/directory-mount expectations,
+macOS realpath failures that pass with a real `TMPDIR`, and the two confirmed upstream failures
+above. The server browser suite cannot start without the matching Playwright Chromium binary;
+no browser verification was performed. Desktop has 766 passing / 38 skipped tests outside the
+known Firefox Snap timeouts and upstream Linux icon-case failures. The existing cross-architecture
+Windows packaging assertion still fails on this macOS host. Kotlin native lint runs; SwiftLint
+needs Xcode/SourceKit, unavailable on this machine.
 
 ## Pairing-link session lifetime (fork feature) — fork migration 1
 
@@ -445,8 +455,7 @@ leaf components.
 
 ### Known failures on this host (not merge fallout)
 
-**The symlinked macOS tmpdir explains every server failure on this host — the suite is fully
-green without it.** `/var` is a symlink to `private/var` and `TMPDIR` lives under it, so any test
+**Use a real macOS tmpdir before investigating path-related server failures.** `/var` is a symlink to `private/var` and `TMPDIR` lives under it, so any test
 comparing a path it created under `TMPDIR` against a realpath fails. Point `TMPDIR` at a real
 directory and `apps/server` goes from 50 failures to **344 files / 5281 tests, zero failures**:
 
@@ -455,7 +464,7 @@ mkdir -p ~/t3-tmp-nosymlink
 TMPDIR=~/t3-tmp-nosymlink bunx vp test run   # from apps/server
 ```
 
-**Do this before investigating any server test failure on macOS.** All nine previously-recorded
+**Do this before investigating any path-related server test failure on macOS.** All nine previously-recorded
 "environment-only" suites are this one root cause, not separate quirks: `entrypoint`,
 `AgentSessionScanner`, `AntigravityInstallation`, `AntigravityAdapter`, `CodexDriver`,
 `providerMaintenance`, `CursorProvider`, `UsageService`, and `ThreadSettlementReactor` (whose 37

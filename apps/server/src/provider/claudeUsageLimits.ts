@@ -72,40 +72,24 @@ function scopedWindow(
   };
 }
 
-const MONTH_MINS = 30 * 24 * 60;
-
-/** `used_credits` and `monthly_limit` are cents. */
-function formatDollars(cents: number): string {
-  return `$${(cents / 100).toLocaleString("en-US", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  })}`;
-}
-
-/**
- * The extra-usage (spend) allowance Team/Enterprise accounts buy on top of the
- * rolling windows. `utilization` is already 0-100 like the other windows; the
- * dollar figures only reach the UI through `detail`, since a percentage alone
- * does not say how much of a $1,000 limit is left.
- */
-function spendWindow(
-  extra: NonNullable<SDKControlGetUsageResponse["rate_limits"]>["extra_usage"],
-): ServerProviderUsageWindow | undefined {
-  if (!extra || extra.is_enabled === false || typeof extra.utilization !== "number") {
+function formatMoney(amountMinor: number, currency: string, exponent: number) {
+  if (exponent > 20) return undefined;
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency,
+      minimumFractionDigits: exponent,
+      maximumFractionDigits: exponent,
+    }).format(amountMinor / 10 ** exponent);
+  } catch {
     return undefined;
   }
-  const detail =
-    typeof extra.used_credits === "number" && typeof extra.monthly_limit === "number"
-      ? `${formatDollars(extra.used_credits)} / ${formatDollars(extra.monthly_limit)}`
-      : undefined;
-  return {
-    id: "extra_usage",
-    kind: "monthly",
-    label: "Spend",
-    windowDurationMins: MONTH_MINS,
-    usedPercent: clampPercent(extra.utilization),
-    ...(detail ? { detail } : {}),
-  };
+}
+
+function spendDetail(used: number, limit: number, currency: string, exponent: number) {
+  const usedLabel = formatMoney(used, currency, exponent);
+  const limitLabel = formatMoney(limit, currency, exponent);
+  return usedLabel && limitLabel ? `${usedLabel} / ${limitLabel}` : undefined;
 }
 
 function percentFromAmounts(used: number | null | undefined, limit: number | null | undefined) {
@@ -123,7 +107,7 @@ function percentFromAmounts(used: number | null | undefined, limit: number | nul
   return Number.isFinite(percent) ? clampPercent(percent) : undefined;
 }
 
-function readSpendPercent(rateLimits: NonNullable<SDKControlGetUsageResponse["rate_limits"]>) {
+function readSpendBudget(rateLimits: NonNullable<SDKControlGetUsageResponse["rate_limits"]>) {
   const spend = Option.getOrUndefined(
     decodeSpendBudget((rateLimits as { readonly spend?: unknown }).spend),
   );
@@ -135,14 +119,30 @@ function readSpendPercent(rateLimits: NonNullable<SDKControlGetUsageResponse["ra
     spend.used.exponent === spend.limit.exponent
   ) {
     const percent = percentFromAmounts(spend.used.amount_minor, spend.limit.amount_minor);
-    if (percent !== undefined) return percent;
+    if (percent !== undefined)
+      return {
+        usedPercent: percent,
+        detail: spendDetail(
+          spend.used.amount_minor,
+          spend.limit.amount_minor,
+          spend.used.currency.trim(),
+          spend.used.exponent,
+        ),
+      };
   }
 
   const extra = rateLimits.extra_usage;
   if (extra?.is_enabled !== true) return undefined;
-  const percent = percentFromAmounts(extra.used_credits, extra.monthly_limit) ?? extra.utilization;
+  const amountPercent = percentFromAmounts(extra.used_credits, extra.monthly_limit);
+  const percent = amountPercent ?? extra.utilization;
   return typeof percent === "number" && Number.isFinite(percent) && percent >= 0
-    ? clampPercent(percent)
+    ? {
+        usedPercent: clampPercent(percent),
+        detail:
+          amountPercent !== undefined
+            ? spendDetail(extra.used_credits!, extra.monthly_limit!, "USD", 2)
+            : undefined,
+      }
     : undefined;
 }
 
@@ -235,7 +235,7 @@ export function claudeUsageResponseToLimits(input: {
     return {
       limits: makeUnavailableUsageLimits({
         checkedAt,
-        reason: response.rate_limits_available ? "probeFailed" : "unsupported",
+        reason: response.rate_limits_available || input.planType ? "probeFailed" : "unsupported",
       }),
       names: { overageIncluded: undefined },
     };
@@ -256,16 +256,14 @@ export function claudeUsageResponseToLimits(input: {
     );
     overageIncluded ??= entry.display_name;
   }
-  const spendPercent = readSpendPercent(response.rate_limits);
-  if (spendPercent !== undefined) {
+  const spend = readSpendBudget(response.rate_limits);
+  if (spend !== undefined) {
     windows.push({
       id: "monthly_spend",
       kind: "monthly",
       label: "Monthly spend",
-      usedPercent: spendPercent,
-      ...(spendWindow(response.rate_limits.extra_usage)?.detail
-        ? { detail: spendWindow(response.rate_limits.extra_usage)!.detail }
-        : {}),
+      usedPercent: spend.usedPercent,
+      ...(spend.detail ? { detail: spend.detail } : {}),
     });
   }
   return {
