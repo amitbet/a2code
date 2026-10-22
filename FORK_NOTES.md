@@ -3,6 +3,19 @@
 This file tracks fork-specific divergences that are likely to conflict when
 merging `upstream/main`.
 
+## Unchanged settings updates (2026-10-22)
+
+`apps/server/src/serverSettings.ts` compares normalized settings before secret redaction and
+skips persistence and notifications for unchanged patches or provider mutations. Credential
+replacements must still reach the secret store even when their redacted file contents are
+identical. The file watcher reloads settings but emits only when their values change, avoiding
+duplicate notifications from our own writes and formatting-only external saves. Regression
+coverage is in `apps/server/src/serverSettings.test.ts` (fork commit `7b3fc81cc5`).
+
+Keep these guards on top of upstream's settings reload/concurrency changes. They complement
+upstream's model-preference migration retry guard, unchanged device-host reconciliation, and
+disabled snapshot processing; those fixes do not replace server-side no-op suppression.
+
 ## Pairing-link session lifetime (fork feature) — fork migration 1
 
 Settings → Connections → Create link has a session expiry picker (1 month, 1 year, 10 years,
