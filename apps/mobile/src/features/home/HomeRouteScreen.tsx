@@ -68,15 +68,14 @@ export function HomeRouteScreen() {
     else setLocalSearchQuery(query);
   };
   const handleSelectThread = useHomeThreadSelection();
-  const handleNewThreadOnBranch = useCallback(
-    (thread: EnvironmentThreadShell) => {
+  const handleNewThreadFromThread = useCallback(
+    (thread: EnvironmentThreadShell, sameBranch: boolean) => {
       navigation.navigate("NewTaskSheet", {
         screen: "NewTaskDraft",
         params: {
           environmentId: String(thread.environmentId),
           projectId: String(thread.projectId),
-          branch: thread.branch,
-          worktreePath: thread.worktreePath,
+          ...(sameBranch ? { branch: thread.branch, worktreePath: thread.worktreePath } : {}),
         },
       });
     },
@@ -290,7 +289,7 @@ export function HomeRouteScreen() {
           onSelectThread={handleSelectThread}
           onSelectPendingTask={openPendingTask}
           onDeletePendingTask={confirmDeletePendingTask}
-          onNewThreadOnBranch={handleNewThreadOnBranch}
+          onNewThreadFromThread={handleNewThreadFromThread}
           onNewThreadInProject={(project) => {
             navigation.navigate("NewTaskSheet", {
               screen: "NewTaskDraft",

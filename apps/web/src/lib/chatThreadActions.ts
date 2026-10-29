@@ -93,3 +93,24 @@ export async function startNewThreadFromContext(
   await context.handleNewThread(projectRef);
   return true;
 }
+
+/**
+ * Opens a new draft beside an existing thread: same project on the same machine. With
+ * `sameBranch` it also reuses the thread's branch and worktree; without it the draft starts
+ * from the project's default workspace mode, like any new thread.
+ */
+export function startNewThreadFromThread(
+  handleNewThread: NewThreadHandler,
+  thread: ThreadContextLike & { branch: string | null; worktreePath: string | null },
+  sameBranch: boolean,
+): Promise<unknown> {
+  const projectRef = scopeProjectRef(thread.environmentId, thread.projectId);
+  return sameBranch
+    ? handleNewThread(projectRef, {
+        branch: thread.branch,
+        worktreePath: thread.worktreePath,
+        envMode: thread.worktreePath ? "worktree" : "local",
+        startFromOrigin: false,
+      })
+    : handleNewThread(projectRef);
+}

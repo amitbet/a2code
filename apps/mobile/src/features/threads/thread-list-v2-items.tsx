@@ -555,7 +555,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     pr: ThreadPrPresentation,
   ) => void;
   readonly onDeleteThread: (thread: EnvironmentThreadShell) => void;
-  readonly onNewThreadOnBranch: (thread: EnvironmentThreadShell) => void;
+  readonly onNewThreadFromThread: (thread: EnvironmentThreadShell, sameBranch: boolean) => void;
   readonly onRenameThread: (thread: EnvironmentThreadShell) => void;
   readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => void;
   readonly onSettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
@@ -594,7 +594,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
     onDeleteThread,
     onRenameThread,
     onRegenerateThreadTitle,
-    onNewThreadOnBranch,
+    onNewThreadFromThread,
     onSettleThread,
     onSnoozeThread,
     onUnsnoozeThread,
@@ -869,7 +869,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   );
   const handleMenuAction = useCallback(
     ({ nativeEvent }: { readonly nativeEvent: { readonly event: string } }) => {
-      if (nativeEvent.event === "new-thread-on-branch") onNewThreadOnBranch(thread);
+      if (nativeEvent.event === "new-thread-in-project") onNewThreadFromThread(thread, false);
+      if (nativeEvent.event === "new-thread-on-branch") onNewThreadFromThread(thread, true);
       if (nativeEvent.event === "settle") handleSettle();
       if (nativeEvent.event === "unsettle") handleUnsettle();
       if (nativeEvent.event === "unsnooze") handleUnsnooze();
@@ -906,7 +907,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       }
     },
     [
-      onNewThreadOnBranch,
+      onNewThreadFromThread,
       thread,
       handleArchive,
       handleDelete,
@@ -1385,6 +1386,11 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         {(close) => (
           <Menu
             actions={[
+              {
+                id: "new-thread-in-project",
+                title: "New thread in this project",
+                image: "plus.bubble",
+              },
               ...(thread.branch
                 ? [
                     {

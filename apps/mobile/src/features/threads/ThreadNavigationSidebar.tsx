@@ -96,7 +96,8 @@ interface ThreadNavigationSidebarProps {
   readonly selectedThreadKey: string | null;
   readonly onOpenSettings: () => void;
   readonly onOpenEnvironmentSettings: () => void;
-  readonly onNewThreadOnBranch: (thread: EnvironmentThreadShell) => void;
+  /** `sameBranch` reuses the thread's branch and worktree; otherwise it is a fresh draft beside it. */
+  readonly onNewThreadFromThread: (thread: EnvironmentThreadShell, sameBranch: boolean) => void;
   readonly onNewThreadInProject: (project: EnvironmentProject) => void;
   readonly onOpenPendingTask: (pendingTask: PendingNewTask) => void;
   readonly onSearchQueryChange: (query: string) => void;
@@ -582,7 +583,7 @@ function ThreadNavigationSidebarPane(
         const scopeKey = scopedProjectKey(thread.environmentId, thread.projectId);
         return (
           <ThreadListV2Row
-            onNewThreadOnBranch={props.onNewThreadOnBranch}
+            onNewThreadFromThread={props.onNewThreadFromThread}
             thread={thread}
             variant={item.item.variant}
             hasQueuedMessages={item.hasQueuedMessages}

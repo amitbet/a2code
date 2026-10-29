@@ -2,6 +2,7 @@ import type { ContextMenuItem } from "@t3tools/contracts";
 import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled";
 
 export type ThreadActionMenuId =
+  | "new-thread-in-project"
   | "new-thread-on-branch"
   | "filter-by-project"
   | "project-settings"
@@ -94,6 +95,7 @@ export interface ThreadActionMenuState {
 /** Local navigation, read markers, and copying remain available to read-only clients. */
 export function threadActionRequiresOperate(action: ThreadActionMenuId): boolean {
   return ![
+    "new-thread-in-project",
     "new-thread-on-branch",
     "project-settings",
     "mark-unread",
@@ -111,6 +113,11 @@ export function buildThreadActionMenuItems(
   state: ThreadActionMenuState,
 ): ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> {
   const items: ReadonlyArray<ContextMenuItem<ThreadActionMenuId>> = [
+    {
+      id: "new-thread-in-project",
+      label: "New thread in this project",
+      icon: "message-square-plus",
+    },
     ...(state.branch
       ? [
           {

@@ -512,14 +512,13 @@ function AdaptiveWorkspaceLayoutContent(
   const handleOpenThreadPullRequests = useOpenThreadPullRequests();
   const { openPendingTask: handleOpenPendingTask } = usePendingTaskListActions();
 
-  const handleNewThreadOnBranch = (thread: EnvironmentThreadShell) => {
+  const handleNewThreadFromThread = (thread: EnvironmentThreadShell, sameBranch: boolean) => {
     navigation.navigate("NewTaskSheet", {
       screen: "NewTaskDraft",
       params: {
         environmentId: String(thread.environmentId),
         projectId: String(thread.projectId),
-        branch: thread.branch,
-        worktreePath: thread.worktreePath,
+        ...(sameBranch ? { branch: thread.branch, worktreePath: thread.worktreePath } : {}),
       },
     });
   };
@@ -827,7 +826,7 @@ function AdaptiveWorkspaceLayoutContent(
                           onOpenSettings={handleOpenSettings}
                           onOpenEnvironmentSettings={handleOpenEnvironmentSettings}
                           onNewThreadInProject={handleNewThreadInProject}
-                          onNewThreadOnBranch={handleNewThreadOnBranch}
+                          onNewThreadFromThread={handleNewThreadFromThread}
                           onOpenPendingTask={handleOpenPendingTask}
                           onSelectThread={handleSelectThread}
                           onOpenThreadPullRequests={handleOpenThreadPullRequests}

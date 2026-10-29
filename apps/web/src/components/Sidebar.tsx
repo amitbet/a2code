@@ -108,7 +108,7 @@ import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
 import { useTerminalFocus } from "../hooks/useTerminalFocus";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { registerSettleAndAdvance } from "../settleAndAdvance";
-import { startNewThreadFromContext } from "../lib/chatThreadActions";
+import { startNewThreadFromContext, startNewThreadFromThread } from "../lib/chatThreadActions";
 import { useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
@@ -2355,14 +2355,14 @@ export default function Sidebar() {
                 projectId: thread.projectId,
               });
             return;
+          case "new-thread-in-project":
           case "new-thread-on-branch": {
             const result = await settlePromise(() =>
-              handleNewThreadRef.current(scopeProjectRef(thread.environmentId, thread.projectId), {
-                branch: thread.branch,
-                worktreePath: thread.worktreePath,
-                envMode: thread.worktreePath ? "worktree" : "local",
-                startFromOrigin: false,
-              }),
+              startNewThreadFromThread(
+                handleNewThreadRef.current,
+                thread,
+                clicked.value === "new-thread-on-branch",
+              ),
             );
             if (result._tag === "Failure") {
               const error = squashAtomCommandFailure(result);

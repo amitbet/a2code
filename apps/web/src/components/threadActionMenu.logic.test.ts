@@ -80,6 +80,7 @@ describe("buildThreadActionMenuItems", () => {
   it("preserves local actions and restores mutations after a grant", () => {
     const denied = buildThreadActionMenuItems({ ...baseState, canOperate: false, branch: "main" });
     expect(denied.filter((item) => !item.disabled).map((item) => item.id)).toEqual([
+      "new-thread-in-project",
       "new-thread-on-branch",
       "mark-unread",
       "copy",
@@ -103,6 +104,7 @@ describe("buildThreadActionMenuItems", () => {
         },
       }),
     ).toEqual([
+      "new-thread-in-project",
       "rename",
       "fork",
       "mark-unread",
@@ -145,6 +147,14 @@ describe("buildThreadActionMenuItems", () => {
     expect(items[filterIndex]).toMatchObject({ label: "Show all projects", icon: "folder-tree" });
     expect(items[filterIndex - 1]?.id).toBe("mark-unread");
     expect(items[filterIndex + 1]?.id).toBe("auto-settle");
+  });
+
+  it("offers a new thread in the same project with or without a branch", () => {
+    expect(allIds(baseState)[0]).toBe("new-thread-in-project");
+    expect(allIds({ ...baseState, branch: "feat/menu" }).slice(0, 2)).toEqual([
+      "new-thread-in-project",
+      "new-thread-on-branch",
+    ]);
   });
 
   it("includes branch items only for threads with a branch", () => {

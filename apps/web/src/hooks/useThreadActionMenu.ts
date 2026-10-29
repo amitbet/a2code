@@ -54,6 +54,7 @@ import { buildPhysicalToLogicalProjectKeyMap } from "../sidebarProjectGrouping";
 import { threadRuntimeCanArchive } from "@t3tools/client-runtime/state/models";
 import { useCopyToClipboard } from "./useCopyToClipboard";
 import { useNewThreadHandler } from "./useHandleNewThread";
+import { startNewThreadFromThread } from "../lib/chatThreadActions";
 import { useClientSettings } from "./useSettings";
 import { useThreadActions } from "./useThreadActions";
 
@@ -298,14 +299,19 @@ export function useThreadActionMenu(input: {
           });
           return;
         }
+        case "new-thread-in-project":
         case "new-thread-on-branch": {
           const result = await settlePromise(() =>
-            handleNewThread(scopeProjectRef(threadRef.environmentId, thread.projectId), {
-              branch: thread.branch,
-              worktreePath: thread.worktreePath,
-              envMode: thread.worktreePath ? "worktree" : "local",
-              startFromOrigin: false,
-            }),
+            startNewThreadFromThread(
+              handleNewThread,
+              {
+                environmentId: threadRef.environmentId,
+                projectId: thread.projectId,
+                branch: thread.branch ?? null,
+                worktreePath: thread.worktreePath ?? null,
+              },
+              action === "new-thread-on-branch",
+            ),
           );
           if (result._tag === "Failure") {
             failureToast("Could not create thread", squashAtomCommandFailure(result));

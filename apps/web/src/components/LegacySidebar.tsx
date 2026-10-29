@@ -103,6 +103,7 @@ import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { readPreparedConnection } from "../state/session";
 import { releaseProjectDraftUploads } from "../lib/composerDraftUploads";
 import { isTerminalFocused } from "../lib/terminalFocus";
+import { startNewThreadFromThread } from "../lib/chatThreadActions";
 import { cn, isMacPlatform } from "../lib/utils";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
@@ -2406,6 +2407,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       );
       const clicked = await api.contextMenu.show(
         [
+          { id: "new-thread-in-project", label: "New thread in this project" },
           ...(thread.branch
             ? [{ id: "new-thread-on-branch", label: `New thread on ${thread.branch}` }]
             : []),
@@ -2442,14 +2444,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         return;
       }
 
-      if (clicked === "new-thread-on-branch") {
+      if (clicked === "new-thread-in-project" || clicked === "new-thread-on-branch") {
         const result = await settlePromise(() =>
-          handleNewThread(scopeProjectRef(thread.environmentId, thread.projectId), {
-            branch: thread.branch,
-            worktreePath: thread.worktreePath,
-            envMode: thread.worktreePath ? "worktree" : "local",
-            startFromOrigin: false,
-          }),
+          startNewThreadFromThread(handleNewThread, thread, clicked === "new-thread-on-branch"),
         );
         if (result._tag === "Failure") {
           const error = squashAtomCommandFailure(result);

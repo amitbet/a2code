@@ -133,7 +133,8 @@ interface HomeScreenProps {
   readonly onRegenerateThreadTitle: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly onSelectPendingTask: (pendingTask: PendingNewTask) => void;
   readonly onDeletePendingTask: (pendingTask: PendingNewTask) => void;
-  readonly onNewThreadOnBranch: (thread: EnvironmentThreadShell) => void;
+  /** `sameBranch` reuses the thread's branch and worktree; otherwise it is a fresh draft beside it. */
+  readonly onNewThreadFromThread: (thread: EnvironmentThreadShell, sameBranch: boolean) => void;
   readonly onNewThreadInProject: (project: EnvironmentProject) => void;
 }
 
@@ -637,7 +638,7 @@ export function HomeScreen(props: HomeScreenProps) {
         pane={primaryColumn ? "sidebar" : "screen"}
         selected={scopedThreadKey(thread.environmentId, thread.id) === selectedThreadKey}
         fullSwipeWidth={fullSwipeWidth}
-        onNewThreadOnBranch={props.onNewThreadOnBranch}
+        onNewThreadFromThread={props.onNewThreadFromThread}
         thread={thread}
         variant={item.item.variant}
         hasQueuedMessages={item.hasQueuedMessages}
