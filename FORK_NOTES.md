@@ -187,6 +187,12 @@ project picker (`DraftHeroHeadline.tsx`) read machine-scoped projects and run th
 collapses a cross-machine group to its representative (usually the primary machine). Keep the split
 when upstream touches either picker.
 
+The machine must stay visible on narrow (laptop) windows. `SidebarChromeHeader` drops upstream's
+`flex-wrap` so the `MachineSwitcher` truncates instead of wrapping onto the clipped second line.
+While the thread details card is not open (a narrow window turns it into a popover that starts
+closed), `ChatView` passes `ThreadHeaderQuickActions` (machine, Open in, git actions) to
+`ChatHeader`'s `actions` slot.
+
 ### Desktop
 
 - The Electron profile stays `a2code` / `A2 Code` (legacy name preferred when it exists), not

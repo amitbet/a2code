@@ -63,11 +63,13 @@ export const SidebarChromeHeader = memo(function SidebarChromeHeader({
           aria-label="Toggle main sidebar"
         />
       </div>
-      <div className="relative z-10 flex h-8 min-w-0 flex-1 flex-wrap content-start items-center gap-x-2 overflow-hidden py-0.5">
+      {/* No wrapping: a wrapped item lands on the clipped second line, and the machine
+          switcher must truncate instead of vanishing on a narrow sidebar. */}
+      <div className="relative z-10 flex h-8 min-w-0 flex-1 items-center gap-x-2 overflow-hidden py-0.5">
         <SidebarBrand onBackdrop={backdropVariant !== null} />
         <MachineSwitcher onBackdrop={backdropVariant !== null} />
         {pillLabel ? (
-          <div className="ml-1 flex h-7 items-center">
+          <div className="ml-1 flex h-7 min-w-0 shrink items-center overflow-hidden">
             <Badge data-environment-identification="pill" size="sm" variant="secondary">
               {pillLabel}
             </Badge>

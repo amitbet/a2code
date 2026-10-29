@@ -81,6 +81,7 @@ import {
   type ThreadId,
   type RunId,
   ProviderInteractionMode,
+  resolveEnvironmentMachineKind,
   resolveIdleCompaction,
   RuntimeMode,
 } from "@t3tools/contracts";
@@ -291,6 +292,7 @@ import {
 } from "./chat/PanelLayoutControls";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { ThreadDetailsPanel } from "./chat/ThreadDetailsPanel";
+import { ThreadHeaderQuickActions } from "./chat/ThreadHeaderQuickActions";
 import { NoActiveThreadState } from "./NoActiveThreadState";
 import {
   resolveEffectiveEnvMode,
@@ -3328,6 +3330,31 @@ export default function ChatView(props: ChatViewProps) {
             {...(activeDraftLogicalProjectKey
               ? { onOpenProjectSettings: handleOpenDraftProjectSettingsStable }
               : {})}
+            actions={
+              threadPanelOpen || !activeThreadRef ? null : (
+                <ThreadHeaderQuickActions
+                  environmentId={activeThread.environmentId}
+                  threadRef={activeThreadRef}
+                  draftId={draftId ?? undefined}
+                  machine={
+                    environments.length > 1 && activeEnvironment
+                      ? {
+                          label: activeEnvironment.label,
+                          kind: resolveEnvironmentMachineKind(activeEnvironment.serverConfig),
+                        }
+                      : null
+                  }
+                  keybindings={keybindings}
+                  availableEditors={availableEditors}
+                  showOpenInPicker={showOpenInPicker}
+                  gitCwd={gitCwd}
+                  showGitActions={gitCwd !== null && Boolean(activeProject?.title)}
+                  onOpenChanges={
+                    isServerThread && isGitRepo ? openChangesFromThreadPanelStable : undefined
+                  }
+                />
+              )
+            }
           />
         </header>
 
