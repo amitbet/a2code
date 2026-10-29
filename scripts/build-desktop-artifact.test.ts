@@ -545,6 +545,25 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }),
   );
 
+  it.effect(
+    "pins patched server dependencies for production installs without the repo lockfile",
+    () =>
+      Effect.gen(function* () {
+        const { patchedDependencies = {} } = yield* readWorkspaceConfig();
+        for (const [name, version] of Object.entries(serverPackageJson.dependencies)) {
+          const patches = Object.keys(patchedDependencies).filter((key) =>
+            key.startsWith(`${name}@`),
+          );
+          if (patches.length === 0) continue;
+          assert.include(
+            patches,
+            `${name}@${version}`,
+            `${name} must use an exact patched version in fresh desktop and Windows sidecar installs`,
+          );
+        }
+      }),
+  );
+
   it("stages only the externals of both bundles in merged packages", () => {
     assert.deepStrictEqual(
       resolveMergedStageDependencies({
