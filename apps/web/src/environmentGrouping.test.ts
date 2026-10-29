@@ -7,6 +7,7 @@ import {
   buildSidebarProjectSnapshots,
   resolveSidebarProjectScopeKey,
   getSidebarProjectSettingsKey,
+  splitSidebarProjectSnapshotsByEnvironment,
 } from "./sidebarProjectGrouping";
 import type { Project } from "./types";
 
@@ -274,5 +275,51 @@ describe("environment grouping", () => {
       environmentId: primaryEnvironmentId,
       id: fallbackPrimary.id,
     });
+  });
+
+  it("offers a picker row per machine for a project grouped across machines", () => {
+    const primary = makeProject({ repositoryIdentity });
+    const remote = makeProject({
+      id: ProjectId.make("project-remote"),
+      environmentId: remoteEnvironmentId,
+      workspaceRoot: "/remote/shared-repo",
+      repositoryIdentity,
+    });
+    const groups = splitSidebarProjectSnapshotsByEnvironment({
+      groups: buildSidebarProjectSnapshots({
+        projects: [remote, primary],
+        settings: defaultGroupingSettings,
+        primaryEnvironmentId,
+        resolveEnvironmentLabel: (environmentId) =>
+          environmentId === remoteEnvironmentId ? "remote" : "primary",
+      }),
+      primaryEnvironmentId,
+    });
+
+    expect(
+      groups.map((group) => ({
+        projectKey: group.projectKey,
+        environmentId: group.environmentId,
+        presence: group.environmentPresence,
+        members: group.memberProjectRefs,
+      })),
+    ).toEqual([
+      {
+        projectKey: repositoryIdentity.canonicalKey,
+        environmentId: primaryEnvironmentId,
+        presence: "local-only",
+        members: [{ environmentId: primaryEnvironmentId, projectId: primary.id }],
+      },
+      {
+        projectKey: repositoryIdentity.canonicalKey,
+        environmentId: remoteEnvironmentId,
+        presence: "remote-only",
+        members: [{ environmentId: remoteEnvironmentId, projectId: remote.id }],
+      },
+    ]);
+
+    // Without a current thread, the remote row still targets the remote copy.
+    const entries = buildSidebarProjectPickerEntries({ groups, preferredProjectRef: null });
+    expect(entries.map((entry) => entry.targetProject.id)).toEqual([primary.id, remote.id]);
   });
 });

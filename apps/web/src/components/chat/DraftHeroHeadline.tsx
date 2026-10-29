@@ -24,10 +24,11 @@ import {
   buildSidebarProjectPickerEntries,
   buildSidebarProjectSnapshots,
   projectGroupsSpanEnvironments,
+  splitSidebarProjectSnapshotsByEnvironment,
 } from "~/sidebarProjectGrouping";
-import { useProjects, useThreadShells } from "~/state/entities";
+import { useThreadShells } from "~/state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
-import { ProjectEnvironmentBadge } from "../ProjectEnvironmentBadge";
+import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { sortLogicalProjectsForSidebar } from "../Sidebar.logic";
 import {
@@ -51,6 +52,7 @@ const ADD_PROJECT_VALUE = "add-project";
 interface PickerItem {
   readonly value: string;
   readonly label: string;
+  readonly machineLabel?: string | undefined;
 }
 
 interface DraftHeroHeadlineProps {
@@ -88,16 +90,21 @@ export function DraftHeroHeadline({
   const environmentLabelById = new Map(
     environments.map((environment) => [environment.environmentId, environment.label] as const),
   );
-  const projectGroups = sortLogicalProjectsForSidebar(
-    buildSidebarProjectSnapshots({
-      projects,
-      settings: projectGroupingSettings,
-      primaryEnvironmentId,
-      resolveEnvironmentLabel: (environmentId) => environmentLabelById.get(environmentId) ?? null,
-    }),
-    threads,
-    projectSortOrder,
-  );
+  // One row per machine: the picker decides where the draft runs, and the composer offers no
+  // machine switch afterwards.
+  const projectGroups = splitSidebarProjectSnapshotsByEnvironment({
+    groups: sortLogicalProjectsForSidebar(
+      buildSidebarProjectSnapshots({
+        projects,
+        settings: projectGroupingSettings,
+        primaryEnvironmentId,
+        resolveEnvironmentLabel: (environmentId) => environmentLabelById.get(environmentId) ?? null,
+      }),
+      threads,
+      projectSortOrder,
+    ),
+    primaryEnvironmentId,
+  });
   const showProjectEnvironments = projectGroupsSpanEnvironments(projectGroups);
   const environmentMachineById = new Map(
     environments.map(
@@ -112,8 +119,10 @@ export function DraftHeroHeadline({
     groups: projectGroups,
     preferredProjectRef: activeProjectRef,
   });
+  const pickerValueOf = (entry: (typeof projectPickerEntries)[number]) =>
+    scopedProjectKey(scopeProjectRef(entry.targetProject.environmentId, entry.targetProject.id));
   const projectEntryByKey = new Map(
-    projectPickerEntries.map((entry) => [entry.group.projectKey, entry] as const),
+    projectPickerEntries.map((entry) => [pickerValueOf(entry), entry] as const),
   );
   const activeProjectGroup =
     activeProjectRef === null
@@ -124,6 +133,10 @@ export function DraftHeroHeadline({
           ),
         ) ?? null);
   const activeProjectKey = activeProjectGroup?.projectKey ?? "";
+  const activePickerEntry = projectPickerEntries.find(
+    (entry) => entry.group === activeProjectGroup,
+  );
+  const activePickerValue = activePickerEntry ? pickerValueOf(activePickerEntry) : "";
   const activeProjectDisplayName = activeProjectGroup?.displayName ?? activeProjectTitle;
   const hasResolvedProject = activeProjectTitle !== null;
   const canChooseProject = projectPickerEntries.length > 0;
@@ -148,7 +161,13 @@ export function DraftHeroHeadline({
     activeProject !== null && isScratchProject(activeProject, scratchWorkspaceRoot);
 
   const pickerItems: readonly PickerItem[] = [
-    ...menuEntries.map(({ group }) => ({ value: group.projectKey, label: group.displayName })),
+    ...menuEntries.map((entry) => ({
+      value: pickerValueOf(entry),
+      label: entry.group.displayName,
+      machineLabel: showProjectEnvironments
+        ? (entry.targetProject.environmentLabel ?? entry.targetProject.environmentId)
+        : undefined,
+    })),
     { value: ADD_PROJECT_VALUE, label: "Add project" },
   ];
   const pickerSearch = pickerQuery.trim();
@@ -158,9 +177,13 @@ export function DraftHeroHeadline({
       : pickerItems.filter(
           (item) =>
             item.value !== ADD_PROJECT_VALUE &&
-            pickerFilter.contains(item, pickerSearch, (candidate) => candidate.label),
+            pickerFilter.contains(item, pickerSearch, (candidate) =>
+              candidate.machineLabel
+                ? `${candidate.label} ${candidate.machineLabel}`
+                : candidate.label,
+            ),
         );
-  const selectedPickerItem = pickerItems.find((item) => item.value === activeProjectKey) ?? null;
+  const selectedPickerItem = pickerItems.find((item) => item.value === activePickerValue) ?? null;
 
   // The picker can change the draft's target while the no-project home is
   // still being opened; a stale continuation must not retarget it again.
@@ -246,7 +269,7 @@ export function DraftHeroHeadline({
           return;
         }
         const entry = projectEntryByKey.get(item.value);
-        if (!entry || item.value === activeProjectKey) {
+        if (!entry || item.value === activePickerValue) {
           return;
         }
         selectProject(entry.targetProject, entry.group.projectKey);
@@ -295,12 +318,17 @@ export function DraftHeroHeadline({
                   </TooltipTrigger>
                   <TooltipPopup side="top">{item.label}</TooltipPopup>
                 </Tooltip>
-                {entry && showProjectEnvironments ? (
-                  <ProjectEnvironmentBadge
-                    group={entry.group}
-                    primaryEnvironmentId={primaryEnvironmentId}
-                    machineByEnvironmentId={environmentMachineById}
-                  />
+                {entry && item.machineLabel ? (
+                  <span className="ml-auto inline-flex min-w-0 max-w-[45%] shrink-0 items-center gap-1 text-muted-foreground text-xs">
+                    <EnvironmentMachineIcon
+                      aria-hidden
+                      kind={
+                        environmentMachineById.get(entry.targetProject.environmentId) ?? "server"
+                      }
+                      className="size-3 shrink-0"
+                    />
+                    <span className="truncate">{item.machineLabel}</span>
+                  </span>
                 ) : null}
               </ComboboxItem>
             );

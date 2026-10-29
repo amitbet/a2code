@@ -180,6 +180,13 @@ balancing and per-draft machine stepping stay out. `composer.cycleHost` steps th
 scope (`components/sidebar/machineItems.ts`, shared with `MachineSwitcher`). `BranchToolbar` /
 `ThreadDetailsPanel` never receive `onEnvironmentChange`.
 
+Because the draft cannot switch machines, the pickers that start work choose the machine up front.
+The command palette (`useSortedProjectGroups` in `CommandPaletteLookups.ts`) and the draft hero
+project picker (`DraftHeroHeadline.tsx`) read machine-scoped projects and run their groups through
+`splitSidebarProjectSnapshotsByEnvironment`, so the Overview lists one row per machine. Upstream
+collapses a cross-machine group to its representative (usually the primary machine). Keep the split
+when upstream touches either picker.
+
 ### Desktop
 
 - The Electron profile stays `a2code` / `A2 Code` (legacy name preferred when it exists), not

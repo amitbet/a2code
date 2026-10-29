@@ -8,9 +8,16 @@ import {
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useClientSettings } from "../hooks/useSettings";
 import { getProjectOrderKey } from "../logicalProject";
-import { useProjects, useThreadShells } from "../state/entities";
-import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
-import { buildSidebarProjectSnapshots } from "../sidebarProjectGrouping";
+import { useEnvironmentProjects, useProjects, useThreadShells } from "../state/entities";
+import {
+  useEnvironments,
+  useMachineEnvironmentId,
+  usePrimaryEnvironmentId,
+} from "../state/environments";
+import {
+  buildSidebarProjectSnapshots,
+  splitSidebarProjectSnapshotsByEnvironment,
+} from "../sidebarProjectGrouping";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
 import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sidebar.logic";
 
@@ -60,8 +67,13 @@ export const selectCommandPaletteClientSettings = (settings: ClientSettings) => 
   sidebarThreadSortOrder: settings.sidebarThreadSortOrder,
 });
 
+/**
+ * The palette's project targets: the selected machine's projects, or one row per machine in the
+ * Overview, so starting work always names the machine it runs on.
+ */
 export function useSortedProjectGroups(environmentLabelById: ReadonlyMap<EnvironmentId, string>) {
-  const projects = useProjects();
+  const machineEnvironmentId = useMachineEnvironmentId();
+  const projects = useEnvironmentProjects(machineEnvironmentId);
   const threads = useThreadShells();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const clientSettings = useClientSettings(selectCommandPaletteClientSettings);
@@ -85,9 +97,12 @@ export function useSortedProjectGroups(environmentLabelById: ReadonlyMap<Environ
     primaryEnvironmentId,
     resolveEnvironmentLabel: (environmentId) => environmentLabelById.get(environmentId) ?? null,
   });
-  return sortLogicalProjectsForSidebar(
-    unsortedProjectGroups,
-    threads,
-    clientSettings.sidebarProjectSortOrder,
-  );
+  return splitSidebarProjectSnapshotsByEnvironment({
+    groups: sortLogicalProjectsForSidebar(
+      unsortedProjectGroups,
+      threads,
+      clientSettings.sidebarProjectSortOrder,
+    ),
+    primaryEnvironmentId,
+  });
 }

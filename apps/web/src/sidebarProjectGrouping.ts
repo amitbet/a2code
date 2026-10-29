@@ -170,6 +170,55 @@ export function buildSidebarProjectSnapshots(input: {
   });
 }
 
+/**
+ * Splits cross-machine groups into one snapshot per machine, keeping the groups' order. Pickers
+ * that start work use this: a machine is chosen for its role, so a project row must name one
+ * machine instead of silently landing on the group's representative.
+ */
+export function splitSidebarProjectSnapshotsByEnvironment(input: {
+  groups: ReadonlyArray<SidebarProjectSnapshot>;
+  primaryEnvironmentId: EnvironmentId | null;
+}): SidebarProjectSnapshot[] {
+  return input.groups.flatMap((group) => {
+    const environmentIds = [...new Set(group.memberProjects.map((member) => member.environmentId))];
+    if (environmentIds.length <= 1) return [group];
+    const labelOf = (environmentId: EnvironmentId) =>
+      group.memberProjects.find((member) => member.environmentId === environmentId)
+        ?.environmentLabel ?? environmentId;
+    environmentIds.sort((left, right) => {
+      const leftPrimary = left === input.primaryEnvironmentId;
+      if (leftPrimary !== (right === input.primaryEnvironmentId)) return leftPrimary ? -1 : 1;
+      return labelOf(left).localeCompare(labelOf(right));
+    });
+    return environmentIds.map((environmentId): SidebarProjectSnapshot => {
+      const members = group.memberProjects.filter(
+        (member) => member.environmentId === environmentId,
+      );
+      const representative =
+        members.find((member) => member.id === group.id && environmentId === group.environmentId) ??
+        members[0]!;
+      const isRemote =
+        input.primaryEnvironmentId !== null && environmentId !== input.primaryEnvironmentId;
+      return {
+        ...group,
+        ...representative,
+        projectKey: group.projectKey,
+        displayName: group.displayName,
+        groupedProjectCount: members.length,
+        environmentPresence: isRemote ? "remote-only" : "local-only",
+        allRemoteMembersAreDesktopLocal: isRemote && group.allRemoteMembersAreDesktopLocal,
+        allRemoteMembersAreWsl: isRemote && group.allRemoteMembersAreWsl,
+        memberProjects: members,
+        memberProjectRefs: group.memberProjectRefs.filter(
+          (projectRef) => projectRef.environmentId === environmentId,
+        ),
+        remoteEnvironmentLabels:
+          isRemote && representative.environmentLabel ? [representative.environmentLabel] : [],
+      };
+    });
+  });
+}
+
 export function buildSidebarProjectPickerEntries(input: {
   groups: ReadonlyArray<SidebarProjectSnapshot>;
   preferredProjectRef: ScopedProjectRef | null;

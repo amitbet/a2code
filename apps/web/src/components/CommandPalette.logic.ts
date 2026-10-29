@@ -302,20 +302,15 @@ export type CommandPaletteMode = "root" | "root-browse" | "submenu" | "submenu-b
 
 export type CommandPaletteProject = Project & { readonly displayName: string };
 
-export function buildCommandPaletteProjectMetadata(input: {
+export function buildCommandPaletteProjectSearchTerms(input: {
   readonly projects: ReadonlyArray<Pick<Project, "environmentId" | "title" | "workspaceRoot">>;
   readonly locationByEnvironmentId: ReadonlyMap<EnvironmentId, { readonly label: string }>;
-}) {
-  const searchTerms: string[] = [];
-  const environmentLabels = new Set<string>();
-
-  for (const project of input.projects) {
-    const label = input.locationByEnvironmentId.get(project.environmentId)?.label ?? "Remote";
-    searchTerms.push(project.title, project.workspaceRoot, label);
-    environmentLabels.add(label);
-  }
-
-  return { searchTerms, environmentLabels: [...environmentLabels] };
+}): string[] {
+  return input.projects.flatMap((project) => [
+    project.title,
+    project.workspaceRoot,
+    input.locationByEnvironmentId.get(project.environmentId)?.label ?? "Remote",
+  ]);
 }
 
 export function buildProjectActionItems(input: {

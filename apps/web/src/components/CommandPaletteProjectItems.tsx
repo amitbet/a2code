@@ -3,7 +3,7 @@ import type { EnvironmentId, EnvironmentMachineKind } from "@t3tools/contracts";
 import type { SidebarProjectSnapshot } from "../sidebarProjectGrouping";
 import type { Project } from "../types";
 import {
-  buildCommandPaletteProjectMetadata,
+  buildCommandPaletteProjectSearchTerms,
   buildProjectActionItems,
   type CommandPaletteProject,
   ITEM_ICON_CLASS,
@@ -35,7 +35,7 @@ function projectFaviconIcon(project: Project) {
   return <ProjectFavicon project={project} className={ITEM_ICON_CLASS} />;
 }
 
-/** Projects as root search results; a grouped project matches on every member. */
+/** Projects as root search results, one row per machine; a grouped project matches on every member. */
 export function buildProjectSearchItems(input: ProjectItemsInput) {
   const membersOf = (project: CommandPaletteProject) =>
     input.projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`)?.memberProjects ?? [
@@ -45,25 +45,16 @@ export function buildProjectSearchItems(input: ProjectItemsInput) {
     projects: input.projects,
     valuePrefix: "project",
     searchTerms: (project) =>
-      buildCommandPaletteProjectMetadata({
+      buildCommandPaletteProjectSearchTerms({
         projects: membersOf(project),
         locationByEnvironmentId: input.locationByEnvironmentId,
-      }).searchTerms,
-    renderDescription: (project) => {
-      const members = membersOf(project);
-      const metadata = buildCommandPaletteProjectMetadata({
-        projects: members,
-        locationByEnvironmentId: input.locationByEnvironmentId,
-      });
-      return members.length > 1 ? (
-        <span className="truncate">{metadata.environmentLabels.join(" · ")}</span>
-      ) : (
-        <ProjectLocationDescription
-          location={input.locationByEnvironmentId.get(project.environmentId)}
-          workspaceRoot={project.workspaceRoot}
-        />
-      );
-    },
+      }),
+    renderDescription: (project) => (
+      <ProjectLocationDescription
+        location={input.locationByEnvironmentId.get(project.environmentId)}
+        workspaceRoot={project.workspaceRoot}
+      />
+    ),
     icon: projectFaviconIcon,
     runProject: input.runProject,
   });
